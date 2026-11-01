@@ -1,0 +1,161 @@
+# ============================================================================
+# Fastfile — generic macOS app distribution pipeline
+# ============================================================================
+# Run:  fastlane distrib
+#
+# Per-app config (change these, everything else is automatic):
+#
+#   APP_NAME       = "Pulse"            ← app name
+#   BUILD_SCRIPT   = ".../app/build.sh" ← your build script (produces the .app)
+#   BINARY_PATH    = ".../Contents/MacOS/Pulse"  ← compiled binary to sign
+#
+# The version is read automatically from the built app's Info.plist
+# (CFBundleShortVersionString) and used in the DMG filename.
+#
+# What it reads from your machine (set up ONCE, see docs/distribution-guide.md):
+#   Certs    → your Xcode Developer ID certificate (auto-detected)
+#   Notarize → keychain profile "notary-profile"
+#             (xcrun notarytool store-credentials "notary-profile" ...)
+# ============================================================================
+
+default_platform(:mac)
+
+# ── Per-app config (absolute paths — Fastlane changes directories) ──
+PROJECT_DIR    = File.expand_path("..")          # parent of fastlane/ dir
+APP_NAME       = "Pulse"
+BUILD_SCRIPT   = "#{PROJECT_DIR}/app/build.sh"
+APP_BUNDLE     = "#{PROJECT_DIR}/dist/#{APP_NAME}.app"
+BINARY_PATH    = "#{APP_BUNDLE}/Contents/MacOS/Pulse"
+OUTPUT_DIR     = "#{PROJECT_DIR}/dist"
+# ───────────────────────────────────────────────────────────────────────
+
+# Read the marketing version (e.g. "1.0") from the built app's Info.plist.
+# Bump it by editing app/Info.plist → CFBundleShortVersionString.
+def app_version
+  v = `plutil -extract CFBundleShortVersionString raw '#{APP_BUNDLE}/Contents/Info.plist' 2>/dev/null`.strip
+  v.empty? ? "0.1" : v
+end
+
+# ── Shared step: build + sign + notarize + staple ─────────────────
+# Returns true if the app is signed AND notarized (ticket stapled).
+def build_sign_notarize
+  # 1. Build
+  UI.message "--- Building ---"
+  sh(BUILD_SCRIPT)
+  UI.success "Built successfully"
+
+  # 2. Sign (inside-out: helper app first, then the whole app)
+  UI.message "--- Signing ---"
+  cert_line = `security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID" | head -1`
+  cert_id = cert_line.scan(/"[^"]+"/).first&.gsub(/"/, "")
+  if cert_id.nil? || cert_id.empty?
+    UI.error "No Developer ID certificate found in keychain."
+    UI.error "Run: security find-identity -v -p codesigning"
+    UI.error "Make sure Xcode is signed in with your Developer Account."
+    return false
+  end
+  UI.important "Using certificate: #{cert_id}"
+  updater_app = "#{APP_BUNDLE}/Contents/Library/Updater.app"
+  sh("codesign --sign '#{cert_id}' --force --timestamp '#{updater_app}'") if File.exist?(updater_app)
+  # --options=runtime enables Hardened Runtime (required for notarization).
+  sh("codesign --sign '#{cert_id}' --force --deep --timestamp --options=runtime '#{APP_BUNDLE}'")
+  UI.success "Signed ✅"
+
+  # 3. Notarize + staple
+  UI.message "--- Notarizing ---"
+  NOTARY_PROFILE = "notary-profile"
+  zip_path = "#{OUTPUT_DIR}/notarize.zip"
+  sh("ditto -c -k --keepParent '#{APP_BUNDLE}' '#{zip_path}'")
+  notarized = system("xcrun notarytool submit '#{zip_path}' --keychain-profile '#{NOTARY_PROFILE}' --wait")
+  File.delete(zip_path) if File.exist?(zip_path)
+  if notarized
+    sh("xcrun stapler staple '#{APP_BUNDLE}'")
+    UI.success "Notarized ✅"
+    return true
+  else
+    UI.warn "⚠️  Notarization failed — app is signed but NOT notarized."
+    UI.warn "    Users will see a Gatekeeper warning. Check: xcrun notarytool history --keychain-profile '#{NOTARY_PROFILE}'"
+    return false
+  end
+end
+
+# ── Shared step: create the DMG (initial download) ────────────────
+def make_dmg
+  UI.message "--- Packaging DMG ---"
+  version = app_version
+  dmg_path = "#{OUTPUT_DIR}/#{APP_NAME}-#{version}.dmg"
+  dmg(
+    dmg_path:    dmg_path,
+    volume_name: APP_NAME,
+    format:      :UDZO,
+    contents: [
+      { x: 150, y: 180, type: :file, path: APP_BUNDLE },
+      { x: 400, y: 180, type: :link, path: "/Applications" }
+    ]
+  )
+  UI.success "Created #{dmg_path} (v#{version})"
+  dmg_path
+end
+
+desc "Build, sign, notarize, and create a DMG"
+lane :distrib do
+  build_sign_notarize
+  make_dmg
+  UI.success "🎉 Distribution complete!"
+end
+
+desc "Full release: distrib + Sparkle update zip + appcast + GitHub Release"
+lane :release do
+  build_sign_notarize
+  make_dmg
+
+  version = app_version
+  tag     = "v#{version}"
+
+  # ── Sparkle update zip (from the stapled app) ───────────────────
+  UI.message "--- Creating Sparkle update zip ---"
+  zip_path = "#{OUTPUT_DIR}/#{APP_NAME}-#{version}.zip"
+  sh("ditto -c -k --keepParent '#{APP_BUNDLE}' '#{zip_path}'")
+  UI.success "Created #{zip_path}"
+
+  # ── GitHub Release (upload DMG + zip) ───────────────────────────
+  UI.message "--- Publishing GitHub Release #{tag} ---"
+  if system("gh auth status >/dev/null 2>&1")
+    sh("gh release create '#{tag}' " +
+       "'#{OUTPUT_DIR}/#{APP_NAME}-#{version}.dmg' " +
+       "'#{zip_path}' " +
+       "--title 'Pulse #{version}' " +
+       "--notes 'Download the .dmg to install, or let Sparkle auto-update.' " +
+       "--verify-tag")
+    UI.success "Published #{tag}"
+  else
+    UI.warn "⚠️  Not authenticated to GitHub (run: gh auth login)."
+    UI.warn "    Skipping the release. The DMG + zip are in dist/."
+  end
+
+  # ── Generate the appcast (for Sparkle auto-updates) ─────────────
+  UI.message "--- Generating appcast ---"
+  # The appcast lives in releases/ (committed) and is served via raw GitHub
+  # (see SUFeedURL in Info.plist). Download URLs point at the Release assets.
+  Dir.mkdir("releases") unless Dir.exist?("releases")
+  # Only the NEW zip belongs in releases/ (old ones are gitignored + pruned).
+  Dir.glob("releases/*.zip").each { |z| File.delete(z) }
+  cp(zip_path, "releases/")
+  base_url = "https://github.com/ssa17/pulse/releases/download/#{tag}/"
+  sh("vendor/sparkle/bin/generate_appcast --download-url-prefix '#{base_url}' releases/")
+  UI.success "Generated releases/appcast.xml"
+
+  # ── Commit + push the appcast (so installed users auto-update) ──
+  UI.message "--- Publishing appcast ---"
+  if system("git remote get-url origin >/dev/null 2>&1") && system("gh auth status >/dev/null 2>&1")
+    sh("git add releases/appcast.xml")
+    sh("git commit -m 'Release #{tag}: update appcast'")
+    sh("git push")
+    UI.success "Pushed the appcast — installed users will be offered the update."
+  else
+    UI.warn "⚠️  No git remote / not authenticated. Commit + push manually:"
+    UI.warn "      git add releases/appcast.xml && git commit -m 'Release #{tag}' && git push"
+  end
+
+  UI.success "🎉 Release complete!"
+end

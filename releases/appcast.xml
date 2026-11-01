@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Pulse</title>
+        <item>
+            <title>1.0</title>
+            <pubDate>Sun, 01 Nov 2026 22:13:02 +0000</pubDate>
+            <sparkle:version>1.0</sparkle:version>
+            <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.0/Pulse-1.0.zip" length="1319899" type="application/octet-stream" sparkle:edSignature="ZNm0f3D/Ct7wJZuoEHQ8uM/oq7y8A0RUagR+QMvecx8djRj0mIaWbX5+/i74XRgaB5NPGJ+oa9NWlFyJ977hDw=="/>
+        </item>
+    </channel>
+</rss>

@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse — Mac Resource Monitor</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151d;
+    --panel2: #171b25;
+    --border: #232a38;
+    --text: #e8ecf4;
+    --dim: #8b94a7;
+    --faint: #5a6375;
+    --cpu: #ff9f43;
+    --mem: #4d9fff;
+    --net: #2dd4a7;
+    --disk: #b07cff;
+    --wired: #ff6b6b;
+    --comp: #b07cff;
+    --cache: #2dd4a7;
+    --free: #2a3342;
+    --danger: #ff5f57;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; padding: 14px 18px; gap: 12px; }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .logo { font-size: 15px; font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
+  .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cpu); box-shadow: 0 0 10px var(--cpu); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .machine { color: var(--dim); font-size: 12.5px; }
+  .machine b { color: var(--text); font-weight: 600; }
+  .hmeta { margin-left: auto; display: flex; gap: 16px; color: var(--dim); font-size: 12px; }
+  .hmeta b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .hmeta .batt-charging { color: var(--net); }
+
+  /* ---------- stat cards ---------- */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 108px;
+  }
+  .card .top { display: flex; align-items: baseline; justify-content: space-between; }
+  .card .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .card .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .sub { color: var(--dim); font-size: 11.5px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .card .sub b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card canvas.spark { width: 100%; height: 30px; margin-top: auto; }
+  .card.cpu .big, .card.cpu .label { color: var(--cpu); }
+  .card.mem .big, .card.mem .label { color: var(--mem); }
+  .card.net .big, .card.net .label { color: var(--net); }
+  .card.disk .big, .card.disk .label { color: var(--disk); }
+  .card .big { color: var(--text); }
+
+  .membar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--free); margin-top: 2px; }
+  .membar .seg { height: 100%; transition: width .6s ease; }
+  .seg.apps { background: var(--mem); } .seg.wired { background: var(--wired); }
+  .seg.comp { background: var(--comp); } .seg.cache { background: var(--cache); } .seg.free { background: var(--free); }
+  .memlegend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--dim); }
+  .memlegend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+  .memlegend b { color: var(--text); font-weight: 600; }
+
+  /* ---------- toolbar ---------- */
+  .toolbar { display: flex; align-items: center; gap: 12px; }
+  .toolbar input {
+    flex: 0 1 320px; background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 8px 12px; font-size: 13px; outline: none;
+  }
+  .toolbar input:focus { border-color: #3a4560; }
+  .toolbar .hint { color: var(--faint); font-size: 12px; }
+  .toolbar .live { margin-left: auto; color: var(--faint); font-size: 11.5px; display: flex; align-items: center; gap: 6px; }
+  .toolbar .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--net); }
+  .toolbar .live.off .dot { background: var(--danger); }
+
+  /* ---------- panels ---------- */
+  .panels { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim);
+    padding: 11px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;
+  }
+  .panel h2 .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .panel h2 .note { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--faint); font-size: 11px; }
+  .rows { flex: 1; overflow-y: auto; min-height: 0; }
+  .rows::-webkit-scrollbar { width: 9px; }
+  .rows::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
+
+  .row {
+    display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 64px 74px;
+    gap: 10px; align-items: center; padding: 7px 14px; cursor: pointer;
+    border-bottom: 1px solid #1a1f2b;
+  }
+  .row:hover { background: var(--panel2); }
+  .row.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--cpu); }
+  .row .icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: #1d2330; }
+  .row .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--faint); }
+  .row .name { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .sub { color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { display: inline-block; font-size: 9.5px; padding: 1px 5px; border-radius: 4px; margin-left: 6px; vertical-align: 1px; letter-spacing: .4px; }
+  .badge.app { background: rgba(77,159,255,.15); color: var(--mem); }
+  .badge.system { background: rgba(139,148,167,.15); color: var(--dim); }
+  .badge.other { background: rgba(176,124,255,.15); color: var(--disk); }
+  .bar { height: 8px; background: #1c2230; border-radius: 4px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 4px; transition: width .5s ease; min-width: 1px; }
+  .row .val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12.5px; }
+  .row canvas.spark { width: 74px; height: 24px; }
+  .showall {
+    margin: 0; padding: 9px; background: none; border: none; border-top: 1px solid var(--border);
+    color: var(--dim); font-size: 12px; cursor: pointer; text-align: center;
+  }
+  .showall:hover { color: var(--text); background: var(--panel2); }
+  .empty { color: var(--faint); text-align: center; padding: 30px; font-size: 12.5px; }
+
+  /* ---------- drawer ---------- */
+  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; }
+  #scrim.on { opacity: 1; pointer-events: auto; }
+  #drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 50;
+    background: var(--panel); border-left: 1px solid var(--border);
+    transform: translateX(105%); transition: transform .22s ease;
+    display: flex; flex-direction: column;
+  }
+  #drawer.on { transform: translateX(0); }
+  .dhead { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+  .dhead .t1 { display: flex; align-items: center; gap: 10px; }
+  .dhead .icon { width: 34px; height: 34px; border-radius: 8px; object-fit: contain; background: #1d2330; }
+  .dhead .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 17px; color: var(--faint); }
+  .dhead h1 { font-size: 16px; font-weight: 700; }
+  .dhead .path { color: var(--faint); font-size: 11px; margin-top: 3px; word-break: break-all; }
+  .dhead .stats { display: flex; gap: 18px; margin-top: 12px; }
+  .dhead .stats div { color: var(--dim); font-size: 11.5px; }
+  .dhead .stats b { display: block; color: var(--text); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .dactions { display: flex; gap: 8px; margin-top: 12px; }
+  button.act {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  }
+  button.act:hover { border-color: #3a4560; }
+  button.act.danger { color: var(--danger); }
+  button.act.danger:hover { border-color: var(--danger); }
+  .dclose { margin-left: auto; background: none; border: none; color: var(--dim); font-size: 18px; cursor: pointer; line-height: 1; }
+  .dclose:hover { color: var(--text); }
+
+  .dtable { flex: 1; overflow-y: auto; min-height: 0; }
+  .dtable::-webkit-scrollbar { width: 9px; }
+  .dtable::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
+  .prow { padding: 9px 18px; border-bottom: 1px solid #1a1f2b; }
+  .prow .l1 { display: flex; align-items: center; gap: 8px; }
+  .prow .pname { font-weight: 600; font-size: 12.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prow .role { color: var(--faint); font-size: 10.5px; background: #1d2330; padding: 1px 6px; border-radius: 4px; }
+  .prow .pvals { display: flex; gap: 14px; margin-top: 4px; color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .prow .pvals b { color: var(--text); font-weight: 600; }
+  .prow .pvals .cpu { color: var(--cpu); } .prow .pvals .mem { color: var(--mem); }
+  .prow .cmd { color: var(--faint); font-size: 10.5px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .prow .desc { color: var(--dim); font-size: 11px; margin-top: 4px; font-style: italic; }
+  .prow .kill {
+    background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
+    font-size: 10.5px; padding: 2px 8px; cursor: pointer; flex: none;
+  }
+  .prow .kill:hover { color: var(--danger); border-color: var(--danger); }
+  .prow .kill.killed { color: var(--faint); border-color: var(--border); opacity: .5; }
+
+  @media (max-width: 1100px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .panels { grid-template-columns: 1fr; overflow-y: auto; }
+    body { overflow: auto; }
+    #app { height: auto; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo"><span class="dot"></span>Pulse</div>
+    <div class="machine" id="machine">reading system…</div>
+    <div class="hmeta">
+      <span>uptime <b id="h-uptime">—</b></span>
+      <span>load <b id="h-load">—</b></span>
+      <span id="h-batt-wrap">battery <b id="h-batt">—</b></span>
+    </div>
+  </header>
+
+  <section class="cards">
+    <div class="card cpu">
+      <div class="top"><span class="label">CPU</span><span class="sub" id="cpu-sub"></span></div>
+      <div class="big" id="cpu-big">—</div>
+      <canvas class="spark" id="spark-cpu"></canvas>
+    </div>
+    <div class="card mem">
+      <div class="top"><span class="label">Memory</span><span class="sub" id="mem-sub"></span></div>
+      <div class="big" id="mem-big">—</div>
+      <div class="membar" id="membar"></div>
+      <div class="memlegend" id="memlegend"></div>
+    </div>
+    <div class="card net">
+      <div class="top"><span class="label">Network</span><span class="sub" id="net-sub"></span></div>
+      <div class="big" id="net-big">—</div>
+      <canvas class="spark" id="spark-net"></canvas>
+    </div>
+    <div class="card disk">
+      <div class="top"><span class="label">Disk</span><span class="sub" id="disk-sub"></span></div>
+      <div class="big" id="disk-big">—</div>
+      <canvas class="spark" id="spark-disk"></canvas>
+    </div>
+  </section>
+
+  <section class="toolbar">
+    <input id="search" type="search" placeholder="Search apps or processes…" autocomplete="off" spellcheck="false">
+    <span class="hint" id="hint"></span>
+    <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
+  </section>
+
+  <section class="panels">
+    <div class="panel">
+      <h2><span class="swatch" style="background:var(--cpu)"></span>Top CPU <span class="note" id="note-cpu">share of all cores</span></h2>
+      <div class="rows" id="rows-cpu"></div>
+      <button class="showall" id="showall-cpu"></button>
+    </div>
+    <div class="panel">
+      <h2><span class="swatch" style="background:var(--mem)"></span>Top Memory <span class="note">share of total RAM</span></h2>
+      <div class="rows" id="rows-mem"></div>
+      <button class="showall" id="showall-mem"></button>
+    </div>
+  </section>
+</div>
+
+<div id="scrim"></div>
+<aside id="drawer">
+  <div class="dhead" id="dhead"></div>
+  <div class="dtable" id="dtable"></div>
+</aside>
+
+<script>
+/*
+ * Pulse UI — the entire dashboard in this one file (vanilla JS, no build step).
+ *
+ * Data flow:  /events (SSE) or /api/snapshot (polling fallback) → onTick()
+ *   → renderSys()          header + the 4 stat cards + sparklines
+ *   → renderPanel('cpu'|'mem')  top-app rows; DOM rows are cached in rowEls
+ *                              and reused across ticks (hidden, never rebuilt)
+ *   → renderDrawer()       per-app process list, re-rendered live while open
+ *
+ * The snapshot schema is the contract with server.js — see docs/contracts.md.
+ *
+ * DOM ids are a contract with app/Pulse.swift's self-test (PULSE_SELFTEST=1):
+ * #machine, #cpu-big, #mem-big, #live-text, #rows-cpu .row, #dtable .prow,
+ * #dclose. Renaming them silently breaks the self-test.
+ */
+'use strict';
+
+/* ================= state ================= */
+const S = {
+  sys: null,
+  apps: new Map(),          // key → { data, cpuHist: [], memHist: [] }
+  sysHist: { cpu: [], mem: [], net: [], disk: [] },
+  search: '',
+  showAll: { cpu: false, mem: false },
+  drawerKey: null,
+};
+const HIST = 90;
+const TOP_N = 20;
+const $ = (s) => document.querySelector(s);
+
+/* ================= formatters ================= */
+function fmtBytes(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + u[i];
+}
+function fmtPct(n) {
+  if (n == null || !isFinite(n)) return '—';
+  return (n >= 10 ? n.toFixed(0) : n.toFixed(1)) + '%';
+}
+function fmtRate(bps) {
+  if (bps == null || !isFinite(bps)) return '—';
+  return fmtBytes(bps) + '/s';
+}
+function fmtDur(sec) {
+  if (!sec) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  if (d) return d + 'd ' + h + 'h';
+  if (h) return h + 'h ' + m + 'm';
+  if (m) return m + 'm';
+  return Math.floor(sec) + 's';
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ================= sparklines ================= */
+function drawSpark(canvas, data, color) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (data.length < 2) return;
+  const max = Math.max(...data, 1e-9);
+  const step = w / (HIST - 1);
+  const x0 = w - (data.length - 1) * step;
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = x0 + i * step;
+    const y = h - 2 - (v / max) * (h - 5);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  // fill
+  ctx.lineTo(w, h); ctx.lineTo(x0, h); ctx.closePath();
+  ctx.globalAlpha = .13;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/* ================= rows ================= */
+// One row element per (panel, app): the same app appears in both panels with
+// different metrics, so the DOM nodes must not be shared between panels.
+const rowEls = new Map(); // `${panel}:${key}` → { el, icon, name, sub, fill, val, spark }
+
+function makeRow(panel, key) {
+  const el = document.createElement('div');
+  el.className = 'row';
+  el.dataset.key = key;
+  el.innerHTML = `
+    <div class="icon placeholder">?</div>
+    <div><div class="name"></div><div class="sub"></div></div>
+    <div class="bar"><div class="fill"></div></div>
+    <div class="val"></div>
+    <canvas class="spark"></canvas>`;
+  el.addEventListener('click', () => openDrawer(key));
+  const r = {
+    panel, key,
+    el,
+    icon: el.querySelector('.icon'),
+    name: el.querySelector('.name'),
+    sub: el.querySelector('.sub'),
+    fill: el.querySelector('.fill'),
+    val: el.querySelector('.val'),
+    spark: el.querySelector('canvas'),
+  };
+  rowEls.set(panel + ':' + key, r);
+  return r;
+}
+
+function updateRow(panel, key, data, metric, total) {
+  let r = rowEls.get(panel + ':' + key);
+  if (!r) r = makeRow(panel, key);
+  const v = metric === 'cpu' ? data.cpu : data.mem;
+  // icon
+  if (data.icon) {
+    if (r.icon.tagName !== 'IMG') {
+      const img = document.createElement('img');
+      img.className = 'icon';
+      img.alt = '';
+      img.onerror = () => { img.remove(); if (!r.icon.isConnected) r.el.prepend(Object.assign(document.createElement('div'), { className: 'icon placeholder', textContent: '?' })); };
+      r.el.replaceChild(img, r.icon);
+      r.icon = img;
+    }
+    if (r.icon.src !== data.icon) r.icon.src = data.icon;
+  } else if (r.icon.tagName === 'IMG') {
+    const ph = document.createElement('div');
+    ph.className = 'icon placeholder';
+    ph.textContent = data.kind === 'app' ? 'A' : '⚙';
+    r.el.replaceChild(ph, r.icon);
+    r.icon = ph;
+  }
+  // name + badge + sub
+  const badge = { app: '<span class="badge app">app</span>', system: '<span class="badge system">system</span>', other: '<span class="badge other">user</span>' }[data.kind] || '';
+  r.name.innerHTML = esc(data.name) + badge;
+  r.sub.textContent = data.procs + (data.procs === 1 ? ' process' : ' processes') + (data.users.length ? ' · ' + data.users.join(', ') : '');
+  // bar + value
+  const share = total > 0 ? Math.min(100, (v / total) * 100) : 0;
+  r.fill.style.width = Math.max(share, v > 0 ? 0.8 : 0) + '%';
+  r.fill.style.background = metric === 'cpu' ? 'var(--cpu)' : 'var(--mem)';
+  r.val.textContent = metric === 'cpu' ? fmtPct(v) : fmtBytes(v);
+  return r;
+}
+
+/* ================= panels ================= */
+function matchesSearch(data) {
+  if (!S.search) return true;
+  const q = S.search.toLowerCase();
+  if (data.name.toLowerCase().includes(q)) return true;
+  if (data.bundle && data.bundle.toLowerCase().includes(q)) return true;
+  return data.processes.some((p) => p.name.toLowerCase().includes(q) || (p.args || '').toLowerCase().includes(q));
+}
+
+function renderPanel(which) {
+  const metric = which; // 'cpu' | 'mem'
+  const total = which === 'cpu' ? 100 : (S.sys ? S.sys.memTotal : 1);
+  const container = $(which === 'cpu' ? '#rows-cpu' : '#rows-mem');
+  const list = [...S.apps.values()].map((a) => a.data)
+    .filter(matchesSearch)
+    .sort((a, b) => (b[metric] - a[metric]) || (b.mem - a.mem));
+
+  const visible = S.showAll[which] || S.search ? list : list.slice(0, TOP_N);
+  const seen = new Set();
+  for (const d of visible) {
+    seen.add(d.key);
+    const r = updateRow(which, d.key, d, metric, total);
+    if (r.el.parentNode !== container) container.appendChild(r.el);
+    else r.el.style.display = '';
+    const a = S.apps.get(d.key);
+    drawSpark(r.spark, metric === 'cpu' ? a.cpuHist : a.memHist, metric === 'cpu' ? '#ff9f43' : '#4d9fff');
+  }
+  // hide this panel's rows that fell out of the visible set (keep DOM for reuse)
+  for (const r of rowEls.values()) {
+    if (r.panel !== which) continue;
+    if (!seen.has(r.key) && r.el.parentNode === container) r.el.style.display = 'none';
+  }
+  // empty state
+  let emptyEl = container.querySelector(':scope > .empty');
+  if (!visible.length) {
+    if (!emptyEl) {
+      emptyEl = document.createElement('div');
+      emptyEl.className = 'empty';
+      emptyEl.textContent = 'nothing matches';
+      container.appendChild(emptyEl);
+    }
+    emptyEl.style.display = '';
+  } else if (emptyEl) emptyEl.style.display = 'none';
+  const btn = $(which === 'cpu' ? '#showall-cpu' : '#showall-mem');
+  btn.textContent = S.showAll[which] ? 'show top ' + TOP_N : 'show all ' + list.length + (S.search ? ' matches' : '');
+  btn.style.display = list.length > TOP_N || S.search ? '' : 'none';
+}
+
+/* ================= drawer ================= */
+function openDrawer(key) {
+  S.drawerKey = key;
+  $('#scrim').classList.add('on');
+  $('#drawer').classList.add('on');
+  document.querySelectorAll('.row').forEach((r) => r.classList.toggle('active', r.dataset.key === key));
+  renderDrawer();
+}
+function closeDrawer() {
+  S.drawerKey = null;
+  $('#scrim').classList.remove('on');
+  $('#drawer').classList.remove('on');
+  document.querySelectorAll('.row.active').forEach((r) => r.classList.remove('active'));
+}
+function renderDrawer() {
+  const a = S.apps.get(S.drawerKey);
+  if (!a) { closeDrawer(); return; }
+  const d = a.data;
+  const iconHtml = d.icon
+    ? `<img class="icon" src="${esc(d.icon)}" onerror="this.outerHTML='<div class=\\'icon placeholder\\'>?</div>'">`
+    : `<div class="icon placeholder">${d.kind === 'app' ? 'A' : '⚙'}</div>`;
+  $('#dhead').innerHTML = `
+    <div class="t1">
+      ${iconHtml}
+      <div style="flex:1;min-width:0">
+        <h1>${esc(d.name)} <span class="badge ${d.kind}">${d.kind}</span></h1>
+        <div class="path">${esc(d.bundle || (d.processes[0] ? d.processes[0].args : ''))}</div>
+      </div>
+      <button class="dclose" id="dclose" title="close">✕</button>
+    </div>
+    <div class="stats">
+      <div>CPU<b style="color:var(--cpu)">${fmtPct(d.cpu)}</b></div>
+      <div>Memory<b style="color:var(--mem)">${fmtBytes(d.mem)}</b></div>
+      <div>Processes<b>${d.procs}</b></div>
+      <div>Users<b>${esc(d.users.join(', ') || '—')}</b></div>
+    </div>
+    <div class="dactions">
+      ${d.mainPid ? `<button class="act danger" id="dquit">Quit app (pid ${d.mainPid})</button>` : ''}
+    </div>`;
+  $('#dclose').addEventListener('click', closeDrawer);
+  const q = $('#dquit');
+  if (q) q.addEventListener('click', () => {
+    if (confirm(`Quit “${d.name}”?\nThis sends SIGTERM to pid ${d.mainPid}.`)) {
+      killProc(d.mainPid, 'TERM').then((ok) => { if (ok) closeDrawer(); });
+    }
+  });
+
+  const tb = $('#dtable');
+  const scroll = tb.scrollTop;
+  tb.innerHTML = d.processes.map((p) => `
+    <div class="prow" data-pid="${p.pid}">
+      <div class="l1">
+        <span class="pname" title="${esc(p.args)}">${esc(p.name)}</span>
+        ${p.role ? `<span class="role">${esc(p.role)}</span>` : ''}
+        <button class="kill" data-pid="${p.pid}" title="kill this process">⏏ kill</button>
+      </div>
+      <div class="pvals">
+        <span class="cpu">CPU <b>${fmtPct(p.cpu)}</b></span>
+        <span class="mem">MEM <b>${fmtBytes(p.mem)}</b></span>
+        <span>VSZ <b>${fmtBytes(p.vsz)}</b></span>
+        <span>state <b>${esc(p.stat)}</b></span>
+        <span>up <b>${esc(p.etime)}</b></span>
+        <span>pid <b>${p.pid}</b></span>
+      </div>
+      ${p.desc ? `<div class="desc">${esc(p.desc)}</div>` : ''}
+      <div class="cmd" title="${esc(p.args)}">${esc(p.args)}</div>
+    </div>`).join('');
+  tb.scrollTop = scroll;
+  tb.querySelectorAll('.kill').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pid = +b.dataset.pid;
+    if (confirm(`Kill pid ${pid}?\nSIGTERM first — the process may ignore it.`)) killProc(pid, 'TERM', b);
+  }));
+}
+async function killProc(pid, sig, btn) {
+  try {
+    const r = await fetch('/api/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, sig }) });
+    const j = await r.json();
+    if (!j.ok) { alert(j.error || 'kill failed'); return false; }
+    if (btn) { btn.textContent = 'killed ✓'; btn.classList.add('killed'); btn.disabled = true; }
+    return true;
+  } catch { alert('kill request failed'); return false; }
+}
+
+/* ================= system cards ================= */
+function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }
+
+function renderSys() {
+  const s = S.sys;
+  if (!s) return;
+  // header
+  $('#machine').innerHTML = `<b>${esc(s.model)}</b> · ${esc(s.chip || '')} · ${esc(s.memLabel || fmtBytes(s.memTotal))} · ${s.cores} cores`;
+  $('#h-uptime').textContent = fmtDur(s.uptime);
+  $('#h-load').textContent = s.load.map((x) => x.toFixed(2)).join(' ');
+  const bw = $('#h-batt-wrap');
+  if (s.batt && s.batt.pct != null) {
+    bw.style.display = '';
+    $('#h-batt').innerHTML = `${s.batt.pct}%${s.batt.charging ? ' ⚡' : ''}${s.batt.time ? ' · ' + s.batt.time : ''}`;
+    $('#h-batt').className = s.batt.charging ? 'batt-charging' : '';
+  } else bw.style.display = 'none';
+
+  // cpu card
+  $('#cpu-big').textContent = fmtPct(s.cpu.total);
+  $('#cpu-sub').innerHTML = `user <b>${s.cpu.user.toFixed(1)}%</b> sys <b>${s.cpu.sys.toFixed(1)}%</b> idle <b>${s.cpu.idle.toFixed(0)}%</b>`;
+  pushHist(S.sysHist.cpu, s.cpu.total);
+  drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
+
+  // memory card
+  const mt = s.memTotal || 1;
+  $('#mem-big').textContent = fmtPct((s.mem.used / mt) * 100);
+  $('#mem-sub').innerHTML = `<b>${fmtBytes(s.mem.used)}</b> of ${fmtBytes(s.memTotal)} used` +
+    (s.swap.total ? ` · swap <b>${fmtBytes(s.swap.used)}</b>/${fmtBytes(s.swap.total)}` : '');
+  const segs = [
+    ['apps', s.mem.apps, 'var(--mem)'], ['wired', s.mem.wired, 'var(--wired)'],
+    ['comp', s.mem.compressed, 'var(--comp)'], ['cache', s.mem.cache, 'var(--cache)'], ['free', s.mem.free, 'var(--free)'],
+  ];
+  $('#membar').innerHTML = segs.map(([c, v]) => `<div class="seg ${c}" style="width:${Math.max(0, (v / mt) * 100)}%"></div>`).join('');
+  $('#memlegend').innerHTML = [
+    ['apps', 'Apps', s.mem.apps, 'var(--mem)'], ['wired', 'Wired', s.mem.wired, 'var(--wired)'],
+    ['comp', 'Compressed', s.mem.compressed, 'var(--comp)'], ['cache', 'Cache', s.mem.cache, 'var(--cache)'],
+    ['free', 'Free', s.mem.free, 'var(--free)'],
+  ].map(([c, label, v, col]) => `<span><i style="background:${col}"></i>${label} <b>${fmtBytes(v)}</b></span>`).join('');
+  pushHist(S.sysHist.mem, (s.mem.used / mt) * 100);
+
+  // net card
+  $('#net-big').textContent = fmtRate(s.net.down);
+  $('#net-sub').innerHTML = `↓ <b>${fmtRate(s.net.down)}</b> &nbsp; ↑ <b>${fmtRate(s.net.up)}</b>`;
+  pushHist(S.sysHist.net, s.net.down + s.net.up);
+  drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');
+
+  // disk card
+  $('#disk-big').textContent = s.disk.mbps.toFixed(1) + ' MB/s';
+  $('#disk-sub').innerHTML = `read + write`;
+  pushHist(S.sysHist.disk, s.disk.mbps);
+  drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
+
+  $('#hint').textContent = `${s.procCount} processes · ${s.appCount} apps`;
+  $('#note-cpu').textContent = `share of ${s.cores} cores`;
+}
+
+/* ================= tick ================= */
+function onTick(p) {
+  S.sys = p.sys;
+  const seen = new Set();
+  for (const a of p.apps) {
+    seen.add(a.key);
+    let e = S.apps.get(a.key);
+    if (!e) { e = { cpuHist: [], memHist: [] }; S.apps.set(a.key, e); }
+    e.data = a;
+    pushHist(e.cpuHist, a.cpu);
+    pushHist(e.memHist, a.mem);
+  }
+  for (const key of [...S.apps.keys()]) if (!seen.has(key)) S.apps.delete(key);
+
+  renderSys();
+  renderPanel('cpu');
+  renderPanel('mem');
+  if (S.drawerKey) renderDrawer();
+  setLive(true);
+}
+
+function setLive(on) {
+  $('#live').classList.toggle('off', !on);
+  $('#live-text').textContent = on ? 'live' : 'reconnecting…';
+}
+
+/* ================= live data (SSE, with polling fallback) ================= */
+let pollTimer = null;
+let sseFails = 0;
+
+async function pollOnce() {
+  try {
+    const r = await fetch('/api/snapshot');
+    if (r.ok) { onTick(await r.json()); setLive(true); }
+    else setLive(false);
+  } catch { setLive(false); }
+}
+
+function connect() {
+  if (pollTimer) return;
+  if (typeof EventSource === 'undefined') {
+    // some webviews lack EventSource → poll instead
+    setLive(false);
+    pollOnce();
+    pollTimer = setInterval(pollOnce, 1500);
+    return;
+  }
+  const es = new EventSource('/events');
+  es.onopen = () => { sseFails = 0; setLive(true); };
+  es.onmessage = (e) => { try { onTick(JSON.parse(e.data)); } catch { /* skip */ } };
+  es.onerror = () => {
+    es.close();
+    setLive(false);
+    if (++sseFails >= 3) {
+      // EventSource keeps failing in this environment → fall back to polling
+      pollOnce();
+      pollTimer = setInterval(pollOnce, 1500);
+    } else {
+      setTimeout(connect, 1500);
+    }
+  };
+}
+
+/* ================= init ================= */
+$('#search').addEventListener('input', (e) => {
+  S.search = e.target.value.trim();
+  renderPanel('cpu');
+  renderPanel('mem');
+});
+$('#showall-cpu').addEventListener('click', () => { S.showAll.cpu = !S.showAll.cpu; renderPanel('cpu'); });
+$('#showall-mem').addEventListener('click', () => { S.showAll.mem = !S.showAll.mem; renderPanel('mem'); });
+$('#scrim').addEventListener('click', closeDrawer);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+window.addEventListener('resize', () => {
+  drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
+  drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');
+  drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
+});
+connect();
+</script>
+</body>
+</html>
