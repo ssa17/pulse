@@ -2,61 +2,77 @@
 
 See, in real time, exactly which apps are eating your CPU and memory — and manage them.
 
-## Native app (recommended)
+**[Download for macOS](https://github.com/ssa17/pulse/releases/latest)** · [All releases](https://github.com/ssa17/pulse/releases)
+
+## Install
+
+1. Download the latest **Pulse.dmg** from the [releases page](https://github.com/ssa17/pulse/releases)
+2. Open it and drag **Pulse** into your **Applications** folder
+3. Launch Pulse from Applications
+
+Pulse checks for updates automatically and installs them — you never need to re-download.
+
+> **Private by design.** Pulse runs entirely on your machine: it samples local system
+> data and serves the dashboard over `127.0.0.1`. Nothing is sent anywhere, and it
+> works fully offline.
+
+## What you get
+
+- **Top CPU / Top Memory panels** — every process grouped into its app (Chrome's 30
+  helper processes become one "Google Chrome" row), with real app icons, a bar showing
+  the share of your *total* resources, live values, and sparklines.
+- **System cards** — CPU (user/sys/idle), memory breakdown (apps / wired / compressed /
+  cache / free + swap), network, disk, battery, load, uptime.
+- **Detail drawer** — click any app to see every process behind it: its role (web page /
+  GPU / helper…), full command line, CPU, memory, state, start time — plus **kill** and
+  **Quit app** buttons.
+- **Search** — filter by app name, bundle path, or any process/command.
+
+Updates every second; the menu-bar item shows live CPU + memory at a glance.
+
+## Requirements
+
+- macOS 13 (Ventura) or later — Intel or Apple Silicon
+- No dependencies to install. Pulse uses your system tools, and (for the web UI) your
+  system Node if you use web mode.
+
+---
+
+## For developers
+
+### Build from source
 
 ```bash
-./app/build.sh          # builds dist/Pulse.app (needs Xcode CLT: swiftc)
-open dist/Pulse.app     # or double-click it
+./app/build.sh          # builds dist/Pulse.app (needs Xcode CLT: swiftc, + Node)
+open dist/Pulse.app
 ```
 
 `Pulse.app` is a small native Swift shell (WKWebView) that:
 - is **single-instance**: launching it again focuses the existing window instead of
   spawning a duplicate
 - **reuses a running backend** via `~/.pulse/port` (works across app ↔ web mode),
-  otherwise spawns one on a **dynamic free port** (no fixed port, no conflicts;
-  the backend announces its port on stdout and in `~/.pulse/port`)
+  otherwise spawns one on a **dynamic free port** (no fixed port, no conflicts)
 - kills its backend on quit (plus a watchdog in the backend for abnormal exits)
-- shows a **live menu-bar status item** (CPU + memory graphs, like oMLX's) with a menu:
-  current CPU/memory, top consumers, Open Pulse, Quit Pulse
-- shows up in Activity Monitor as **Pulse** (the backend process is also titled "Pulse";
-  the web content runs in WebKit's own "Web Content" process, as with any webview app)
+- shows a **live menu-bar status item** (CPU + memory graphs) with a menu
 - renders native dialogs for the in-app confirm() prompts (kill / quit-app buttons)
+- checks for updates via [Sparkle](https://sparkle-project.org)
 
 In-app: **Cmd-R** reloads, **Cmd-Q** quits. `PULSE_SELFTEST=1` runs a render +
 interaction self-test (with `PULSE_AUTOCONFIRM=1` to auto-approve dialogs) and exits.
 
-**Footprint:** the `.app` is ~350KB on disk (no bundled runtime — it uses your system
-Node). At runtime it uses ~300–400MB, most of it WebKit's own processes (the webview
-UI); the Node backend is heap-capped to stay lean. Shared state (port file, icon
-cache) lives in `~/.pulse/`, never inside the bundle.
+**Footprint:** the `.app` is ~3.6 MB on disk (mostly the bundled Sparkle update
+framework; the app itself is tiny and uses your system Node, not a bundled runtime).
+At runtime it uses ~300–400 MB, most of it WebKit's own processes (the webview UI);
+the Node backend is heap-capped to stay lean. Shared state (port file, icon cache)
+lives in `~/.pulse/`, never inside the bundle.
 
-**Using it on another Mac** (e.g. a work laptop): copy the `pulse` source folder over
-and run `./app/build.sh` there — it compiles for that machine (Intel or Apple Silicon),
-needs Xcode Command Line Tools + Node. Copying the built `.app` directly also works,
-but as an unsigned app macOS may ask you to right-click → Open the first time.
-All data sources (ps, vm_stat, sysctl, top, netstat, iostat, pmset) are standard on
-every macOS, so the dashboard works identically on Intel and Apple Silicon.
-
-## Web mode
+### Web mode
 
 ```bash
 node server.js          # → http://127.0.0.1:8787
 ```
 
-## What you get
-
-- **Top CPU / Top Memory panels** — every process on the machine grouped into its app
-  (Chrome's 30 helper processes become one "Google Chrome" row), with real app icons,
-  a bar showing the share of your *total* resources, live values, and sparklines.
-- **System cards** — CPU (user/sys/idle), memory breakdown (apps / wired / compressed /
-  cache / free + swap), network, disk, battery, load, uptime.
-- **Detail drawer** — click any app to see every process behind it: what it is,
-  its role (web page / GPU / helper…), full command line, CPU, memory, state,
-  start time — plus **kill** and **Quit app** buttons.
-- **Search** — filter by app name, bundle path, or any process/command.
-- Updates every second over Server-Sent Events (auto-falls back to polling), auto-reconnects.
-
-## How it reads your Mac
+### How it reads your Mac
 
 | Source | Data |
 |---|---|
@@ -75,7 +91,7 @@ VS Code shows up under VS Code. Everything else is grouped by executable name an
 tagged `system` or `user`. Common daemons (WindowServer, mdworker, kernel_task, …)
 carry a one-line explanation in the detail view.
 
-## Notes
+### Notes
 
 - CPU % is expressed as a share of **all** cores (16 cores fully busy = 100%).
 - Memory per app is the sum of process RSS (shared pages can be counted more than once).
@@ -89,7 +105,7 @@ carry a one-line explanation in the detail view.
 - The first sample skips the 1-second-window commands (top, iostat) so the UI gets
   real data almost instantly; they fill in on the next tick.
 
-## Environment variables
+### Environment variables
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -101,17 +117,22 @@ carry a one-line explanation in the detail view.
 | `PULSE_PORT` | — | force a specific port (app mode) |
 | `PULSE_SELFTEST=1` | — | app prints a render + interaction self-test and exits |
 
-## Layout
+### Project layout
 
 ```
-AGENTS.md            short entry point for agents: orientation, invariants, run/test
-                     (points to docs/ for the deep material — read this first)
-docs/contracts.md    the data contracts between components (schemas + protocols)
-docs/gotchas.md      non-obvious macOS tool output formats the parsers rely on
 server.js            zero-dependency Node backend (sampling, grouping, SSE)
 public/index.html    the dashboard UI (single file, no build step)
-app/Pulse.swift      native app shell (WKWebView + backend lifecycle)
-app/Info.plist       app metadata (local networking, icon, category)
+app/Pulse.swift      native app shell (WKWebView + backend lifecycle + Sparkle)
+app/Info.plist       app metadata (local networking, icon, Sparkle keys)
 app/make-icon.mjs    generates the app icon (pure Node PNG writer)
-app/build.sh         builds dist/Pulse.app
+app/build.sh         builds dist/Pulse.app (bundles the Sparkle framework)
+vendor/fetch-sparkle.sh  downloads the pre-built Sparkle framework (gitignored)
+fastlane/Fastfile    distrib + release lanes (sign, notarize, DMG, appcast, GitHub)
+releases/appcast.xml Sparkle update feed (served via raw GitHub)
+docs/                contracts, gotchas, and the distribution guide
 ```
+
+### Distribution
+
+Signing, notarization, and the release workflow (DMG + Sparkle auto-updates +
+GitHub Releases) are documented in [docs/distribution-guide.md](docs/distribution-guide.md).
