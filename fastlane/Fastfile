@@ -20,6 +20,9 @@
 
 default_platform(:mac)
 
+require 'tmpdir'
+require 'fileutils'
+
 # ── Per-app config (absolute paths — Fastlane changes directories) ──
 PROJECT_DIR    = File.expand_path("..")          # parent of fastlane/ dir
 APP_NAME       = "Pulse"
@@ -55,18 +58,20 @@ def build_sign_notarize
     return false
   end
   UI.important "Using certificate: #{cert_id}"
+  # Sign the Sparkle Updater helper app first (nested code, inside-out).
+  # --options=runtime (Hardened Runtime) is required for notarization.
   updater_app = "#{APP_BUNDLE}/Contents/Library/Updater.app"
-  sh("codesign --sign '#{cert_id}' --force --timestamp '#{updater_app}'") if File.exist?(updater_app)
-  # --options=runtime enables Hardened Runtime (required for notarization).
+  sh("codesign --sign '#{cert_id}' --force --timestamp --options=runtime '#{updater_app}'") if File.exist?(updater_app)
+  # Then deep-sign the whole app (Sparkle framework + main binary).
   sh("codesign --sign '#{cert_id}' --force --deep --timestamp --options=runtime '#{APP_BUNDLE}'")
   UI.success "Signed ✅"
 
   # 3. Notarize + staple
   UI.message "--- Notarizing ---"
-  NOTARY_PROFILE = "notary-profile"
+  notary_profile = "notary-profile"
   zip_path = "#{OUTPUT_DIR}/notarize.zip"
   sh("ditto -c -k --keepParent '#{APP_BUNDLE}' '#{zip_path}'")
-  notarized = system("xcrun notarytool submit '#{zip_path}' --keychain-profile '#{NOTARY_PROFILE}' --wait")
+  notarized = system("xcrun notarytool submit '#{zip_path}' --keychain-profile '#{notary_profile}' --wait")
   File.delete(zip_path) if File.exist?(zip_path)
   if notarized
     sh("xcrun stapler staple '#{APP_BUNDLE}'")
@@ -74,7 +79,7 @@ def build_sign_notarize
     return true
   else
     UI.warn "⚠️  Notarization failed — app is signed but NOT notarized."
-    UI.warn "    Users will see a Gatekeeper warning. Check: xcrun notarytool history --keychain-profile '#{NOTARY_PROFILE}'"
+    UI.warn "    Users will see a Gatekeeper warning. Check: xcrun notarytool history --keychain-profile '#{notary_profile}'"
     return false
   end
 end
@@ -82,17 +87,15 @@ end
 # ── Shared step: create the DMG (initial download) ────────────────
 def make_dmg
   UI.message "--- Packaging DMG ---"
-  version = app_version
+  version  = app_version
   dmg_path = "#{OUTPUT_DIR}/#{APP_NAME}-#{version}.dmg"
-  dmg(
-    dmg_path:    dmg_path,
-    volume_name: APP_NAME,
-    format:      :UDZO,
-    contents: [
-      { x: 150, y: 180, type: :file, path: APP_BUNDLE },
-      { x: 400, y: 180, type: :link, path: "/Applications" }
-    ]
-  )
+  File.delete(dmg_path) if File.exist?(dmg_path)
+  # Stage the app + an Applications symlink (the classic drag-to-install layout).
+  stage = Dir.mktmpdir("pulse-dmg")
+  system("cp -R '#{APP_BUNDLE}' '#{stage}/'")
+  system("ln -s /Applications '#{stage}/Applications'")
+  system("hdiutil create -volname '#{APP_NAME}' -srcfolder '#{stage}' -ov -format UDZO '#{dmg_path}'")
+  FileUtils.rm_rf(stage)
   UI.success "Created #{dmg_path} (v#{version})"
   dmg_path
 end
@@ -125,8 +128,7 @@ lane :release do
        "'#{OUTPUT_DIR}/#{APP_NAME}-#{version}.dmg' " +
        "'#{zip_path}' " +
        "--title 'Pulse #{version}' " +
-       "--notes 'Download the .dmg to install, or let Sparkle auto-update.' " +
-       "--verify-tag")
+       "--notes 'Download the .dmg to install, or let Sparkle auto-update.'")
     UI.success "Published #{tag}"
   else
     UI.warn "⚠️  Not authenticated to GitHub (run: gh auth login)."
@@ -148,10 +150,14 @@ lane :release do
   # ── Commit + push the appcast (so installed users auto-update) ──
   UI.message "--- Publishing appcast ---"
   if system("git remote get-url origin >/dev/null 2>&1") && system("gh auth status >/dev/null 2>&1")
-    sh("git add releases/appcast.xml")
-    sh("git commit -m 'Release #{tag}: update appcast'")
-    sh("git push")
-    UI.success "Pushed the appcast — installed users will be offered the update."
+    if `git status --porcelain releases/appcast.xml`.strip.empty?
+      UI.message "Appcast unchanged — nothing to commit."
+    else
+      sh("git add releases/appcast.xml")
+      sh("git commit -m 'Release #{tag}: update appcast'")
+      sh("git push")
+      UI.success "Pushed the appcast — installed users will be offered the update."
+    end
   else
     UI.warn "⚠️  No git remote / not authenticated. Commit + push manually:"
     UI.warn "      git add releases/appcast.xml && git commit -m 'Release #{tag}' && git push"
