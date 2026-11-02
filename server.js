@@ -20,18 +20,26 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 const HOST = process.env.HOST || '127.0.0.1';
 // App mode (PULSE=1) binds a dynamic port (0 → OS picks a free one) unless PORT
 // is set explicitly; plain web mode keeps a friendly fixed default.
 const PORT = process.env.PORT !== undefined ? +process.env.PORT : (process.env.PULSE === '1' ? 0 : 8787);
 const INTERVAL = +(process.env.INTERVAL || 1000);
-// App version for the UI: the app passes PULSE_VERSION when it spawns us;
-// plain web mode falls back to package.json (not bundled in the .app).
-const VERSION = process.env.PULSE_VERSION || (() => {
-  try { return require('./package.json').version; } catch { return null; }
-})();
+// App version for the UI. The single source of truth is app/Info.plist
+// (CFBundleShortVersionString) — macOS, Sparkle, and the About panel read it
+// too. App mode: the app passes it as PULSE_VERSION. Web mode: read the plist
+// (package.json is kept in sync by app/build.sh, but is not read here).
+function plistVersion(file) {
+  try {
+    return execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', file],
+                        { encoding: 'utf8' }).trim() || null;
+  } catch { return null; }
+}
+const VERSION = process.env.PULSE_VERSION
+  || plistVersion(path.join(__dirname, 'app', 'Info.plist'))   // web mode (repo root)
+  || plistVersion(path.join(__dirname, '..', 'Info.plist'));   // app mode (Contents/Resources)
 // Shared state lives in ~/.pulse (port file + icon cache) — never inside the app
 // bundle, which should stay immutable.
 const PULSE_DIR = path.join(os.homedir(), '.pulse');

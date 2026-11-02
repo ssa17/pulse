@@ -13,7 +13,8 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
 ```js
 {
   t: <ms epoch>,
-  version: <string|null>,   // app version (PULSE_VERSION env in app mode, package.json in web mode)
+  version: <string|null>,   // app version — source of truth is app/Info.plist
+                            // (PULSE_VERSION env in app mode, plist read in web mode)
   sys: {
     model, chip, memLabel,      // from system_profiler; null until it finishes loading
     hostname, cores, memTotal,  // memTotal in bytes

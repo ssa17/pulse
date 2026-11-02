@@ -28,8 +28,8 @@ covers what it does and what it needs.
 
 ## Releasing
 
-1. Bump the version in `app/Info.plist` and keep `package.json` in sync
-   (the build warns if they disagree):
+1. Bump the version in `app/Info.plist` — the **single source of truth**
+   (`package.json` is synced automatically by `app/build.sh`):
    - `CFBundleShortVersionString` — the marketing version users see
      (bump when users should notice)
    - `CFBundleVersion` — the build number (bump for *every* release; Sparkle

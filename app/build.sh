@@ -9,11 +9,13 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 
 cp app/Info.plist "$APP/Contents/Info.plist"
 
-# Sanity: package.json's version should match the app's (web mode displays it).
+# package.json's version is DERIVED from the app's — Info.plist is the single
+# source of truth. Sync it so the two never drift (only writes on change).
 APP_VERSION=$(plutil -extract CFBundleShortVersionString raw app/Info.plist)
 PKG_VERSION=$(node -p "require('./package.json').version")
 if [ "$APP_VERSION" != "$PKG_VERSION" ]; then
-  echo "⚠️  version mismatch: app=$APP_VERSION package.json=$PKG_VERSION — keep them in sync"
+  node -e "const fs=require('fs');const f='package.json';const p=JSON.parse(fs.readFileSync(f,'utf8'));p.version='$APP_VERSION';fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+  echo "→ synced package.json version: $PKG_VERSION → $APP_VERSION"
 fi
 
 # ── Sparkle (auto-update framework) ──────────────────────────────
