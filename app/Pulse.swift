@@ -87,6 +87,11 @@ final class StatusController {
     init() {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        let title = NSMenuItem(title: "Pulse \(ver)", action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        menu.addItem(.separator())
         menu.addItem(cpuItem)
         menu.addItem(memItem)
         menu.addItem(topCpuItem)
@@ -303,6 +308,9 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         env["PULSE"] = "1"
         env["PORT"] = portOverride.map(String.init) ?? "0" // 0 → OS assigns a free port
         env["NODE_OPTIONS"] = "--max-old-space-size=192"   // keep the backend lean
+        if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            env["PULSE_VERSION"] = v   // the dashboard shows it in the header
+        }
         p.environment = env
         let pipe = Pipe()
         p.standardOutput = pipe
@@ -350,7 +358,7 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // (__autoconfirm is injected in didFinish, once the real page context exists.)
         // NOTE: the JS below depends on DOM ids in public/index.html
         // (#rows-cpu .row, #dtable .prow, #dclose, #machine, #cpu-big,
-        // #mem-big, #live-text) — keep the two files in sync (see docs/contracts.md).
+        // #mem-big, #live-text, #ver) — keep the two files in sync (see docs/contracts.md).
         if ProcessInfo.processInfo.environment["PULSE_SELFTEST"] == "1" {
             Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
                 guard let self else { return }
@@ -365,6 +373,7 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                   document.querySelector('#dclose')?.click();
                   return JSON.stringify({
                     machine: document.querySelector('#machine')?.textContent,
+                    ver: document.querySelector('#ver')?.textContent,
                     cpu: document.querySelector('#cpu-big')?.textContent,
                     mem: document.querySelector('#mem-big')?.textContent,
                     rows: document.querySelectorAll('#rows-cpu .row').length,

@@ -13,6 +13,7 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
 ```js
 {
   t: <ms epoch>,
+  version: <string|null>,   // app version (PULSE_VERSION env in app mode, package.json in web mode)
   sys: {
     model, chip, memLabel,      // from system_profiler; null until it finishes loading
     hostname, cores, memTotal,  // memTotal in bytes
@@ -64,7 +65,7 @@ Note the confusing naming: `cpu` is the system CPU object; `topCpu` is an app.
   the app kills it on quit — three mechanisms, keep them in sync if you change one.
 - **Self-test DOM contract**: with `PULSE_SELFTEST=1`, Pulse.swift clicks
   `#rows-cpu .row`, counts `#dtable .prow`, and reads `#machine`, `#cpu-big`,
-  `#mem-big`, `#live-text` from index.html. Renaming those ids silently breaks the
+  `#mem-big`, `#live-text`, `#ver` from index.html. Renaming those ids silently breaks the
   self-test. `PULSE_AUTOCONFIRM=1` makes the WKUIDelegate auto-approve confirm()
   dialogs so the test can run unattended.
 - **confirm() dialogs**: WKWebView returns false for confirm() unless a

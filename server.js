@@ -27,6 +27,11 @@ const HOST = process.env.HOST || '127.0.0.1';
 // is set explicitly; plain web mode keeps a friendly fixed default.
 const PORT = process.env.PORT !== undefined ? +process.env.PORT : (process.env.PULSE === '1' ? 0 : 8787);
 const INTERVAL = +(process.env.INTERVAL || 1000);
+// App version for the UI: the app passes PULSE_VERSION when it spawns us;
+// plain web mode falls back to package.json (not bundled in the .app).
+const VERSION = process.env.PULSE_VERSION || (() => {
+  try { return require('./package.json').version; } catch { return null; }
+})();
 // Shared state lives in ~/.pulse (port file + icon cache) — never inside the app
 // bundle, which should stay immutable.
 const PULSE_DIR = path.join(os.homedir(), '.pulse');
@@ -544,6 +549,7 @@ async function sample() {
   // The UI reads exactly these fields; add/rename on both sides together.
   const payload = {
     t: t0,
+    version: VERSION,
     sys: {
       ...hardware,
       hostname: os.hostname(),

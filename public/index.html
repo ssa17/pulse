@@ -39,6 +39,7 @@
     padding: 10px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   }
   .logo { font-size: 15px; font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
+  .logo .ver { color: var(--dim); font-size: 11px; font-weight: 600; }
   .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cpu); box-shadow: 0 0 10px var(--cpu); animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
   .machine { color: var(--dim); font-size: 12.5px; }
@@ -187,7 +188,7 @@
 <body>
 <div id="app">
   <header>
-    <div class="logo"><span class="dot"></span>Pulse</div>
+    <div class="logo"><span class="dot"></span>Pulse <span class="ver" id="ver"></span></div>
     <div class="machine" id="machine">reading system…</div>
     <div class="hmeta">
       <span>uptime <b id="h-uptime">—</b></span>
@@ -591,6 +592,7 @@ function renderSys() {
 /* ================= tick ================= */
 function onTick(p) {
   S.sys = p.sys;
+  if (p.version) $('#ver').textContent = p.version;
   const seen = new Set();
   for (const a of p.apps) {
     seen.add(a.key);
