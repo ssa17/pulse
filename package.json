@@ -6,5 +6,5 @@
   "scripts": {
     "start": "node server.js"
   },
-  "license": "MIT"
+  "license": "SEE LICENSE IN LICENSE"
 }

@@ -19,7 +19,15 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 [bundle exec] fastlane distrib
 ```
 
-Full distribution: build → sign → notarize → DMG
+Build, sign, notarize, and create a DMG
+
+### release
+
+```sh
+[bundle exec] fastlane release
+```
+
+Full release: distrib + Sparkle update zip + appcast + GitHub Release
 
 ----
 

@@ -2,7 +2,7 @@
 
 See, in real time, exactly which apps are eating your CPU and memory — and manage them.
 
-**[Download for macOS](https://github.com/ssa17/pulse/releases/latest)** · [All releases](https://github.com/ssa17/pulse/releases)
+**[Download .dmg](https://github.com/ssa17/pulse/releases/latest)** · [All releases](https://github.com/ssa17/pulse/releases)
 
 ## Install
 
@@ -32,9 +32,19 @@ Updates every second; the menu-bar item shows live CPU + memory at a glance.
 
 ## Requirements
 
-- macOS 13 (Ventura) or later — Intel or Apple Silicon
-- No dependencies to install. Pulse uses your system tools, and (for the web UI) your
-  system Node if you use web mode.
+- macOS 13 (Ventura) or later — Apple Silicon
+- [Node.js](https://nodejs.org) — the dashboard backend runs on your system Node
+  (`brew install node` if you don't have it). No other dependencies.
+
+---
+
+## License
+
+**Pulse is free to use and free to modify — but not for sale.**
+
+You may use, study, and modify this software for personal or non-commercial purposes. You may distribute modified versions, provided you also distribute them for free and do not charge money for them or bundle them into a paid product.
+
+See [LICENSE](LICENSE) for the full text.
 
 ---
 

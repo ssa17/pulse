@@ -18,7 +18,7 @@ Your source code
 build.sh (compile Swift, bundle assets)
     │
     ▼
-Pulse.app  (350KB macOS bundle)
+Pulse.app  (~3.6 MB macOS bundle, mostly the Sparkle framework)
     │
     ▼
 codesign — "this was made by me" (your Developer ID certificate)
@@ -176,7 +176,7 @@ macOS apps carry **two** version numbers in `Info.plist`:
 | Key | Example | Meaning |
 |---|---|---|
 | `CFBundleShortVersionString` | `1.2.0` | The **marketing** version users see ("Version 1.2.0") |
-| `CFBundleVersion` | `14` | The **build** number — must increase with every release, even patch ones |
+| `CFBundleVersion` | `1.0` | The **build** number — must increase with every release, even patch ones |
 
 **How to release a new version:**
 1. Bump `CFBundleShortVersionString` (and `CFBundleVersion`) in `app/Info.plist`
@@ -186,8 +186,9 @@ The Fastfile reads `CFBundleShortVersionString` from the built app and names the
 DMG after it (`Pulse-1.2.0.dmg`), so the filename always matches the app.
 
 > **Rule of thumb:** bump the build number (`CFBundleVersion`) for *every* release
-> (1, 2, 3…), and the marketing version (`CFBundleShortVersionString`) when you want
-> users to notice (1.0 → 1.1 → 2.0). This matters for the update mechanism below.
+> (1.0 → 1.1 → 1.2 … or 2.0), and the marketing version (`CFBundleShortVersionString`)
+> when you want users to notice (1.0 → 1.1 → 2.0). This matters for the update
+> mechanism below.
 
 ---
 
@@ -261,12 +262,11 @@ Automatic updates, but requires App Store review + a different signing cert
 | **Pulse's core function** | ❌ No | It samples the local system + runs a server on `127.0.0.1` |
 | **Auto-updates (Sparkle)** | ✅ Yes | The app must reach your `appcast.xml` + download the update |
 
-So: **the DMG and the app work fully offline.** Internet is only needed *if* you add
-Sparkle (Option 2) — and only for the update check/download, not for the app's job.
+So: **the DMG and the app work fully offline.** Internet is only needed for
+Sparkle auto-updates — and only for the update check/download, not for the app's job.
 
-> Note: Pulse's `Info.plist` already has `NSAllowsLocalNetworking` (for the local
-> server). Sparkle's internet access is separate and allowed by default — but if you
-> add Sparkle, test that the update check actually fires.
+> Note: Pulse's `Info.plist` has `NSAllowsLocalNetworking` (for the local server).
+> Sparkle's internet access is separate and allowed by default.
 
 ---
 

@@ -1,7 +1,8 @@
 # ============================================================================
 # Fastfile — generic macOS app distribution pipeline
 # ============================================================================
-# Run:  fastlane distrib
+# Run:  fastlane distrib   (DMG only)
+#       fastlane release   (DMG + Sparkle zip + appcast + GitHub Release)
 #
 # Per-app config (change these, everything else is automatic):
 #
@@ -139,21 +140,24 @@ lane :release do
   UI.message "--- Generating appcast ---"
   # The appcast lives in releases/ (committed) and is served via raw GitHub
   # (see SUFeedURL in Info.plist). Download URLs point at the Release assets.
-  Dir.mkdir("releases") unless Dir.exist?("releases")
+  # NOTE: absolute paths — fastlane runs the Fastfile with the working
+  # directory set to fastlane/, so relative paths would land in the wrong place.
+  releases_dir = "#{PROJECT_DIR}/releases"
+  Dir.mkdir(releases_dir) unless Dir.exist?(releases_dir)
   # Only the NEW zip belongs in releases/ (old ones are gitignored + pruned).
-  Dir.glob("releases/*.zip").each { |z| File.delete(z) }
-  cp(zip_path, "releases/")
+  Dir.glob("#{releases_dir}/*.zip").each { |z| File.delete(z) }
+  cp(zip_path, releases_dir)
   base_url = "https://github.com/ssa17/pulse/releases/download/#{tag}/"
-  sh("vendor/sparkle/bin/generate_appcast --download-url-prefix '#{base_url}' releases/")
+  sh("#{PROJECT_DIR}/vendor/sparkle/bin/generate_appcast --download-url-prefix '#{base_url}' '#{releases_dir}/'")
   UI.success "Generated releases/appcast.xml"
 
   # ── Commit + push the appcast (so installed users auto-update) ──
   UI.message "--- Publishing appcast ---"
   if system("git remote get-url origin >/dev/null 2>&1") && system("gh auth status >/dev/null 2>&1")
-    if `git status --porcelain releases/appcast.xml`.strip.empty?
+    if `git status --porcelain '#{releases_dir}/appcast.xml'`.strip.empty?
       UI.message "Appcast unchanged — nothing to commit."
     else
-      sh("git add releases/appcast.xml")
+      sh("git add '#{releases_dir}/appcast.xml'")
       sh("git commit -m 'Release #{tag}: update appcast'")
       sh("git push")
       UI.success "Pushed the appcast — installed users will be offered the update."
