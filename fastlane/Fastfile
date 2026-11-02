@@ -147,7 +147,7 @@ lane :release do
   Dir.mkdir(releases_dir) unless Dir.exist?(releases_dir)
   # Only the NEW zip belongs in releases/ (old ones are gitignored + pruned).
   Dir.glob("#{releases_dir}/*.zip").each { |z| File.delete(z) }
-  cp(zip_path, releases_dir)
+  FileUtils.cp(zip_path, releases_dir)
   base_url = "https://github.com/ssa17/pulse/releases/download/#{tag}/"
   sh("#{PROJECT_DIR}/vendor/sparkle/bin/generate_appcast --download-url-prefix '#{base_url}' '#{releases_dir}/'")
   UI.success "Generated releases/appcast.xml"
