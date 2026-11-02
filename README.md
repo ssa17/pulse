@@ -2,11 +2,11 @@
 
 See, in real time, exactly which apps are eating your CPU and memory — and manage them.
 
-**[Download .dmg](https://github.com/ssa17/pulse/releases/latest)** · [All releases](https://github.com/ssa17/pulse/releases)
+**[Download .dmg](https://github.com/ssa17/pulse/releases/latest/download/Pulse.dmg)** · [All releases](https://github.com/ssa17/pulse/releases)
 
 ## Install
 
-1. Download the latest **Pulse.dmg** from the [releases page](https://github.com/ssa17/pulse/releases)
+1. Download the latest **Pulse.dmg** (the link above, or the [releases page](https://github.com/ssa17/pulse/releases))
 2. Open it and drag **Pulse** into your **Applications** folder
 3. Launch Pulse from Applications
 

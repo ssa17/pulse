@@ -17,7 +17,11 @@ cp -R vendor/sparkle/Sparkle.framework "$APP/Contents/Frameworks/"
 cp -R vendor/sparkle/Sparkle.framework/Versions/Current/Updater.app "$APP/Contents/Library/"
 
 echo "→ compiling Swift shell"
+# -target pins the deployment target to the supported floor (macOS 13) instead of
+# the build machine's OS version — without it the binary would only run on the
+# newest macOS (swiftc defaults minos to the host version).
 swiftc -O app/Pulse.swift -o "$APP/Contents/MacOS/Pulse" \
+  -target arm64-apple-macos13.0 \
   -framework Cocoa -framework WebKit \
   -F vendor/sparkle \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks

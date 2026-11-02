@@ -88,8 +88,9 @@ end
 # ── Shared step: create the DMG (initial download) ────────────────
 def make_dmg
   UI.message "--- Packaging DMG ---"
-  version  = app_version
-  dmg_path = "#{OUTPUT_DIR}/#{APP_NAME}-#{version}.dmg"
+  # Stable name (no version) so the README's "latest download" link
+  # (releases/latest/download/Pulse.dmg) keeps working across releases.
+  dmg_path = "#{OUTPUT_DIR}/#{APP_NAME}.dmg"
   File.delete(dmg_path) if File.exist?(dmg_path)
   # Stage the app + an Applications symlink (the classic drag-to-install layout).
   stage = Dir.mktmpdir("pulse-dmg")
@@ -97,7 +98,7 @@ def make_dmg
   system("ln -s /Applications '#{stage}/Applications'")
   system("hdiutil create -volname '#{APP_NAME}' -srcfolder '#{stage}' -ov -format UDZO '#{dmg_path}'")
   FileUtils.rm_rf(stage)
-  UI.success "Created #{dmg_path} (v#{version})"
+  UI.success "Created #{dmg_path} (v#{app_version})"
   dmg_path
 end
 
@@ -126,7 +127,7 @@ lane :release do
   UI.message "--- Publishing GitHub Release #{tag} ---"
   if system("gh auth status >/dev/null 2>&1")
     sh("gh release create '#{tag}' " +
-       "'#{OUTPUT_DIR}/#{APP_NAME}-#{version}.dmg' " +
+       "'#{OUTPUT_DIR}/#{APP_NAME}.dmg' " +
        "'#{zip_path}' " +
        "--title 'Pulse #{version}' " +
        "--notes 'Download the .dmg to install, or let Sparkle auto-update.'")

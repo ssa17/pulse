@@ -182,8 +182,12 @@ macOS apps carry **two** version numbers in `Info.plist`:
 1. Bump `CFBundleShortVersionString` (and `CFBundleVersion`) in `app/Info.plist`
 2. Run `fastlane distrib`
 
-The Fastfile reads `CFBundleShortVersionString` from the built app and names the
-DMG after it (`Pulse-1.2.0.dmg`), so the filename always matches the app.
+The Fastfile reads `CFBundleShortVersionString` from the built app for the release
+tag and appcast, but the DMG itself has a **stable name** (`Pulse.dmg`, no version)
+so the README's "latest download" link —
+`https://github.com/<owner>/<repo>/releases/latest/download/Pulse.dmg` — keeps
+working across releases without edits. (The Sparkle update zip stays versioned,
+since the appcast needs a unique URL per version.)
 
 > **Rule of thumb:** bump the build number (`CFBundleVersion`) for *every* release
 > (1.0 → 1.1 → 1.2 … or 2.0), and the marketing version (`CFBundleShortVersionString`)
@@ -198,7 +202,7 @@ This is the part most people miss. A DMG is a **one-shot install** — once a us
 has installed it, nothing tells them a new version exists. You have three options:
 
 ### Option 1 — Manual (no extra code)
-You publish `Pulse-1.1.dmg` to your website / GitHub Releases. Users who want the
+You publish `Pulse.dmg` to your website / GitHub Releases. Users who want the
 update must **manually** download and reinstall. Simple, but most users never will.
 
 ### Option 2 — Sparkle (the standard, recommended) — **Pulse uses this**
