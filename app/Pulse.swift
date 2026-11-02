@@ -88,7 +88,7 @@ final class StatusController {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-        let title = NSMenuItem(title: "Pulse \(ver)", action: nil, keyEquivalent: "")
+        let title = NSMenuItem(title: "Pulse v\(ver)", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
         menu.addItem(.separator())

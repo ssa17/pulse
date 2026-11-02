@@ -592,7 +592,7 @@ function renderSys() {
 /* ================= tick ================= */
 function onTick(p) {
   S.sys = p.sys;
-  if (p.version) $('#ver').textContent = p.version;
+  if (p.version) $('#ver').textContent = 'v' + p.version;
   const seen = new Set();
   for (const a of p.apps) {
     seen.add(a.key);
