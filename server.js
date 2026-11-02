@@ -102,7 +102,7 @@ function parseCpuTime(s) {
 function parsePsMain(out) {
   const map = new Map();
   if (!out) return map;
-  const re = /^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s(.*)$/;
+  const re = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s(.*)$/;
   for (const line of out.split('\n')) {
     const m = line.match(re);
     if (!m) continue;
