@@ -469,7 +469,27 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
+extension NSWindow {
+    @objc fileprivate func swizzled_needsTilingConstraintUpdate() -> Bool {
+        if String(describing: type(of: self)).contains("NSStatusBarWindow") {
+            return false
+        }
+        return self.swizzled_needsTilingConstraintUpdate()
+    }
+
+    static func disableStatusBarTilingConstraintSpam() {
+        let originalSelector = NSSelectorFromString("_needsTilingConstraintUpdate")
+        let swizzledSelector = #selector(NSWindow.swizzled_needsTilingConstraintUpdate)
+        guard let originalMethod = class_getInstanceMethod(NSWindow.self, originalSelector),
+              let swizzledMethod = class_getInstanceMethod(NSWindow.self, swizzledSelector) else {
+            return
+        }
+        method_exchangeImplementations(originalMethod, swizzledMethod)
+    }
+}
+
 let app = NSApplication.shared
+NSWindow.disableStatusBarTilingConstraintSpam()
 let shell = Shell()
 app.delegate = shell
 app.setActivationPolicy(.regular)
