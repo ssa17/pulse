@@ -145,7 +145,10 @@ lane :release do
   # directory set to fastlane/, so relative paths would land in the wrong place.
   releases_dir = "#{PROJECT_DIR}/releases"
   Dir.mkdir(releases_dir) unless Dir.exist?(releases_dir)
-  # Only the NEW zip belongs in releases/ (old ones are gitignored + pruned).
+  # Regenerate the appcast from scratch: drop the old feed + old zips, keep
+  # only the new one. (generate_appcast merges with an existing feed, which
+  # would leave stale entries for deleted releases.)
+  File.delete("#{releases_dir}/appcast.xml") if File.exist?("#{releases_dir}/appcast.xml")
   Dir.glob("#{releases_dir}/*.zip").each { |z| File.delete(z) }
   FileUtils.cp(zip_path, releases_dir)
   base_url = "https://github.com/ssa17/pulse/releases/download/#{tag}/"
