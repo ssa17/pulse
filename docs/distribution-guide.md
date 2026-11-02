@@ -41,6 +41,10 @@ covers what it does and what it needs.
 
 Installed apps then detect the new appcast entry and offer the update.
 
+> **Keep release history:** releases accumulate on GitHub — don't delete old
+> ones. The releases page is the public history. (The appcast only ever
+> carries the latest entry, which is all Sparkle needs — that's separate.)
+
 ## Where things live
 
 | File | Role |

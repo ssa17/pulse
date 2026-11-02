@@ -56,6 +56,9 @@ Never store state inside the .app bundle — it must stay immutable and rebuilda
    not removed. Don't "simplify" `renderPanel` to rebuild the DOM every tick.
 5. **Memory segments must sum to `used`** — they are normalized in `sample()`
    because RSS double-counts shared pages.
+6. **Keep release history** — `fastlane release` adds a GitHub release; never
+   delete old releases/tags (the releases page is the public history). The
+   appcast carrying only the latest entry is intentional and separate.
 
 ## Run & test
 
