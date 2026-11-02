@@ -50,6 +50,10 @@ See [LICENSE](LICENSE) for the full text.
 
 ## For developers
 
+**Tech stack:** Swift (native app shell: WKWebView, menu-bar item, Sparkle)
+· Node.js (zero-dependency backend: sampling, SSE) · vanilla JS (single-file
+UI, no build step). No npm packages anywhere.
+
 ### Build from source
 
 ```bash

@@ -17,6 +17,10 @@ vendor/sparkle/
 # Secrets — never commit signing keys
 secrets/
 
+# Maintainer-only distribution setup notes (the committed distribution-guide.md
+# is the streamlined version; this keeps the full one-time-setup walkthrough)
+docs/distribution-setup.md
+
 # macOS
 .DS_Store
 
