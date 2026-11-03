@@ -44,7 +44,22 @@ const VERSION = process.env.PULSE_VERSION
 // bundle, which should stay immutable.
 const PULSE_DIR = path.join(os.homedir(), '.pulse');
 const ICON_DIR = path.join(PULSE_DIR, 'icons');
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const _PUBLIC_DIR = path.join(__dirname, 'public');
+
+// When running from the app bundle, check if a source public/ exists in the
+// project tree (dist/Pulse.app/Contents/Resources/public → look upwards for
+// a Pulse checkout: a public/ whose parent also holds server.js).  That lets
+// UI edits show up on restart without a rebuild.  A released app (e.g. in
+// /Applications) never matches and keeps using the bundled copy.
+const PUBLIC_DIR = (() => {
+  let dir = path.dirname(_PUBLIC_DIR);
+  for (let i = 0; i < 5; i++) {
+    dir = path.dirname(dir);
+    const candidate = path.join(dir, 'public');
+    if (fs.existsSync(candidate) && fs.existsSync(path.join(dir, 'server.js'))) return candidate;
+  }
+  return _PUBLIC_DIR;
+})();
 
 fs.mkdirSync(ICON_DIR, { recursive: true });
 
@@ -626,7 +641,9 @@ const server = http.createServer((req, res) => {
   if (url === '/' || url === '/index.html') {
     fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err, buf) => {
       if (err) { res.writeHead(500); res.end('index.html missing'); return; }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      // no-store (not just no-cache): WKWebView keeps a persistent on-disk cache
+      // and can serve a stale page across app launches; never let it cache this.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(buf);
     });
   } else if (url === '/events') {

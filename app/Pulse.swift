@@ -11,6 +11,19 @@ import Sparkle
 
 let host = "127.0.0.1"
 let pulseDir = NSHomeDirectory() + "/.pulse"
+let settingsFile = pulseDir + "/settings.json"
+
+func readSettings() -> [String: Any] {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: settingsFile)),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+    return obj
+}
+
+func writeSettings(_ dict: [String: Any]) {
+    guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+    try? FileManager.default.createDirectory(atPath: pulseDir, withIntermediateDirectories: true)
+    try? data.write(to: URL(fileURLWithPath: settingsFile))
+}
 
 func urlForPort(_ port: Int, _ path: String) -> URL {
     URL(string: "http://\(host):\(port)\(path)")!
@@ -83,6 +96,7 @@ final class StatusController {
     let memItem = NSMenuItem(title: "Memory —", action: nil, keyEquivalent: "")
     let topCpuItem = NSMenuItem(title: "Top CPU —", action: nil, keyEquivalent: "")
     let topMemItem = NSMenuItem(title: "Top Memory —", action: nil, keyEquivalent: "")
+    let barModeItem = NSMenuItem(title: "▥ Vertical Bars", action: #selector(toggleBarMode(_:)), keyEquivalent: "")
 
     init() {
         let menu = NSMenu()
@@ -97,6 +111,8 @@ final class StatusController {
         menu.addItem(topCpuItem)
         menu.addItem(topMemItem)
         menu.addItem(.separator())
+        menu.addItem(barModeItem)
+        menu.addItem(.separator())
         let open = NSMenuItem(title: "Open Pulse", action: #selector(Shell.openApp), keyEquivalent: "")
         let quit = NSMenuItem(title: "Quit Pulse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         menu.addItem(open)
@@ -110,6 +126,16 @@ final class StatusController {
         self.port = port
         poll()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+    }
+
+    @objc func toggleBarMode(_ sender: NSMenuItem) {
+        let current = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
+        let next = current == "bars" ? "sparkline" : "bars"
+        var s = readSettings()
+        s["statusBarGraphType"] = next
+        writeSettings(s)
+        sender.title = next == "bars" ? "▥ Vertical Bars" : "◈ Sparklines"
+        item.button?.image = Self.render(cpu: cpuHist, mem: memHist)  // bars with no samples → empty tracks
     }
 
     func poll() {
@@ -152,8 +178,15 @@ final class StatusController {
         }
     }
 
-    /// Two stacked sparklines: CPU (orange) over Memory (blue).
+    /// Status bar rendering — sparkline or vertical bar mode.
     static func render(cpu: [Double], mem: [Double]) -> NSImage {
+        let style = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
+        if style == "bars" { return renderBars(cpu: cpu.last, mem: mem.last) }
+        return renderSparklines(cpu: cpu, mem: mem)
+    }
+
+    /// Two stacked sparklines: CPU (orange) over Memory (blue).
+    static func renderSparklines(cpu: [Double], mem: [Double]) -> NSImage {
         let w: CGFloat = 72, h: CGFloat = 22
         let img = NSImage(size: NSSize(width: w, height: h))
         img.lockFocus()
@@ -174,6 +207,53 @@ final class StatusController {
         }
         line(cpu, 100, 11, 9, NSColor(red: 1.0, green: 0.62, blue: 0.26, alpha: 1))
         line(mem, 100, 1, 9, NSColor(red: 0.30, green: 0.62, blue: 1.0, alpha: 1))
+        img.unlockFocus()
+        return img
+    }
+
+    /// Vertical capsule bars (oMLX-style): a stacked letter column beside a thin
+    /// rounded bar, filled from the bottom in the metric's colour.
+    static func renderBars(cpu: Double?, mem: Double?) -> NSImage {
+        let w: CGFloat = 54, h: CGFloat = 22
+        let img = NSImage(size: NSSize(width: w, height: h))
+        img.lockFocus()
+        guard let ctx = NSGraphicsContext.current?.cgContext else { img.unlockFocus(); return img }
+        let barW: CGFloat = 9, barH: CGFloat = 18
+        let barY: CGFloat = (h - barH) / 2
+        let letterAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 6.5, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.9),
+        ]
+        func metric(_ x: CGFloat, _ label: String, _ value: Double?, _ color: NSColor) {
+            // stacked letters, top-aligned with the bar, one per line
+            let lineH = barH / CGFloat(label.count)
+            for (j, ch) in label.enumerated() {
+                (String(ch) as NSString).draw(
+                    in: NSRect(x: x, y: barY + barH - lineH * CGFloat(j + 1), width: 7, height: lineH),
+                    withAttributes: letterAttrs)
+            }
+            // slightly-rounded track
+            let bx = x + 8
+            let cr: CGFloat = 2   // subtle corner rounding (was a full capsule, then 0)
+            ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.3).cgColor)
+            ctx.setLineWidth(1)
+            NSBezierPath(roundedRect: NSRect(x: bx, y: barY, width: barW, height: barH),
+                         xRadius: cr, yRadius: cr).stroke()
+            // fill from the bottom (slightly-rounded)
+            if let v = value, v > 0 {
+                let fh = CGFloat(min(v, 100) / 100) * barH
+                if fh > 0 {
+                    // keep the fill's corners in proportion so a short fill looks the same
+                    let fr = min(cr, fh / 2, barW / 2)
+                    let fill = NSBezierPath(roundedRect: NSRect(x: bx, y: barY, width: barW, height: fh),
+                                             xRadius: fr, yRadius: fr)
+                    ctx.setFillColor(color.cgColor)
+                    fill.fill()
+                }
+            }
+        }
+        metric(4, "CPU", cpu, NSColor(red: 1.0, green: 0.62, blue: 0.26, alpha: 1))
+        metric(32, "MEM", mem, NSColor(red: 0.30, green: 0.62, blue: 1.0, alpha: 1))
         img.unlockFocus()
         return img
     }
@@ -271,6 +351,13 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
         if let menu = status?.item.menu {
             for mi in menu.items where mi.title == "Open Pulse" { mi.target = self }
+            // Wire up bar mode toggle
+            if let mi = status?.barModeItem {
+                let cur = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
+                mi.title = cur == "bars" ? "▥ Vertical Bars" : "◈ Sparklines"
+                mi.target = status
+                mi.action = #selector(StatusController.toggleBarMode(_:))
+            }
         }
 
         startServer()
@@ -352,7 +439,11 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func beginService() {
         guard let port = serverPort, !loaded else { return }
         loaded = true
-        web.load(URLRequest(url: urlForPort(port, "/")))
+        // Cache-busting query: WKWebView's persistent cache keys on the full
+        // URL, so a fresh load must not be answerable from a previous launch.
+        // (The server splits on '?' — routing is unaffected.)
+        let path = "/?r=\(Int(Date().timeIntervalSince1970 * 1000))"
+        web.load(URLRequest(url: urlForPort(port, path)))
         status?.start(port: port)
         // PULSE_SELFTEST=1 → verify render + interactions, then exit.
         // (__autoconfirm is injected in didFinish, once the real page context exists.)
