@@ -10,13 +10,13 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ## [Unreleased]
 
 ### Added
-- Status bar: oMLX-style vertical bar mode (toggle from the item's menu; the
-  choice persists across launches)
+- Status bar: vertical bar mode alongside the sparklines (toggle from the
+  item's menu; the choice persists)
 
 ### Fixed
-- Menu-bar status item on macOS 26/27 (no more window-tiling constraint churn)
+- Status-bar item: fixed layout issues on macOS 26/27
 - Processes whose `ps` output has leading whitespace now parse correctly
-- Dashboard can no longer render a stale page after an update (WKWebView cache)
+- Dashboard no longer shows a stale interface after an update
 
 ## [1.1] - 2026-11-02
 
