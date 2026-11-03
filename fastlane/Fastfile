@@ -150,19 +150,55 @@ lane :release do
   # would leave stale entries for deleted releases.)
   File.delete("#{releases_dir}/appcast.xml") if File.exist?("#{releases_dir}/appcast.xml")
   Dir.glob("#{releases_dir}/*.zip").each { |z| File.delete(z) }
+  Dir.glob("#{releases_dir}/*.md").each { |m| File.delete(m) }
   FileUtils.cp(zip_path, releases_dir)
+
+  # ── Release notes ("what's new") from CHANGELOG.md ──────────────
+  # Everything under "## [Unreleased]" becomes the notes for THIS release:
+  # write it as <AppName>-<version>.md next to the zip (generate_appcast
+  # embeds it in the appcast), then reset the section for the next cycle.
+  # The consumed section stays in CHANGELOG.md as the permanent record.
+  changelog = "#{PROJECT_DIR}/CHANGELOG.md"
+  if File.exist?(changelog)
+    lines = File.read(changelog).lines
+    start = lines.index { |l| l =~ /^##\s+\[Unreleased\]/ }
+    if start
+      rest  = lines[(start + 1)..]
+      rel   = rest.index { |l| l =~ /^##\s+\[/ }
+      end_i = rel.nil? ? lines.size : start + 1 + rel
+      body  = lines[(start + 1)...end_i].join
+      if body.strip.empty?
+        UI.warn "No entries under [Unreleased] — the release will have no notes."
+      else
+        File.write("#{releases_dir}/#{APP_NAME}-#{version}.md", body)
+        UI.success "Release notes → #{APP_NAME}-#{version}.md"
+      end
+      # reset: the consumed section becomes the dated release entry, and a
+      # fresh empty [Unreleased] bucket goes back on top
+      lines[start] = "## [#{version}] - #{Time.now.utc.strftime('%Y-%m-%d')}\n"
+      lines.insert(start, "## [Unreleased]\n\n")
+      File.write(changelog, lines.join)
+    else
+      UI.warn "CHANGELOG.md has no [Unreleased] section — the release will have no notes."
+    end
+  else
+    UI.warn "No CHANGELOG.md — the release will have no notes."
+  end
+
   base_url = "https://github.com/ssa17/pulse/releases/download/#{tag}/"
-  sh("#{PROJECT_DIR}/vendor/sparkle/bin/generate_appcast --download-url-prefix '#{base_url}' '#{releases_dir}/'")
+  # --embed-release-notes: bake the .md notes into the appcast XML, so the
+  # feed (served from raw GitHub) is self-contained — no extra hosting needed.
+  sh("#{PROJECT_DIR}/vendor/sparkle/bin/generate_appcast --embed-release-notes --download-url-prefix '#{base_url}' '#{releases_dir}/'")
   UI.success "Generated releases/appcast.xml"
 
   # ── Commit + push the appcast (so installed users auto-update) ──
   UI.message "--- Publishing appcast ---"
   if system("git remote get-url origin >/dev/null 2>&1") && system("gh auth status >/dev/null 2>&1")
-    if `git status --porcelain '#{releases_dir}/appcast.xml'`.strip.empty?
-      UI.message "Appcast unchanged — nothing to commit."
+    if `git status --porcelain '#{releases_dir}/appcast.xml' #{changelog}`.strip.empty?
+      UI.message "Appcast + changelog unchanged — nothing to commit."
     else
-      sh("git add '#{releases_dir}/appcast.xml'")
-      sh("git commit -m 'Release #{tag}: update appcast'")
+      sh("git add '#{releases_dir}/appcast.xml' #{changelog}")
+      sh("git commit -m 'Release #{tag}: update appcast + changelog'")
       sh("git push")
       UI.success "Pushed the appcast — installed users will be offered the update."
     end

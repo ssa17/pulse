@@ -9,6 +9,7 @@ fastlane/report.xml
 
 # Sparkle update archives (the appcast.xml in releases/ IS committed; zips are not)
 releases/*.zip
+releases/*.md
 releases/old_updates/
 
 # Vendored third-party binaries (fetched by vendor/fetch-sparkle.sh)

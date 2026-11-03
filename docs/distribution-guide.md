@@ -37,13 +37,31 @@ covers what it does and what it needs.
 2. Commit + push your changes
 3. `fastlane release` — does everything else: builds, signs, notarizes,
    staples, makes the DMG + update zip, publishes the GitHub release,
-   regenerates `releases/appcast.xml`, commits + pushes it.
+   turns the changelog's Unreleased section into the release notes
+   (see below), regenerates `releases/appcast.xml`, commits + pushes it.
 
 Installed apps then detect the new appcast entry and offer the update.
 
 > **Keep release history:** releases accumulate on GitHub — don't delete old
 > ones. The releases page is the public history. (The appcast only ever
 > carries the latest entry, which is all Sparkle needs — that's separate.)
+
+## What's new (release notes)
+
+The "what's new" text comes from **`CHANGELOG.md`** — add a bullet under its
+`## [Unreleased]` section whenever you ship something user-visible.
+
+At release time the Fastfile:
+
+1. Turns the **Unreleased** section into `releases/Pulse-<version>.md` (gitignored;
+   `generate_appcast --embed-release-notes` bakes it into the appcast — installed
+   apps see it in the Sparkle update dialog).
+2. **Resets** the section: the consumed entries become the dated `## [x.y]` entry
+   and a fresh empty `[Unreleased]` bucket goes on top. Nothing is lost — the
+   per-version entries stay in the file as the permanent record.
+
+So tracking is: bullet into Unreleased as you go; nothing to maintain at release
+(bump the version, run `fastlane release` — the changelog resets itself).
 
 ## Where things live
 
@@ -52,6 +70,7 @@ Installed apps then detect the new appcast entry and offer the update.
 | `fastlane/Fastfile` | the pipeline (per-app config at the top) |
 | `app/build.sh` | builds the `.app` (bundles the Sparkle framework) |
 | `vendor/fetch-sparkle.sh` | fetches the pre-built Sparkle framework (gitignored) |
+| `CHANGELOG.md` | release notes source — `Unreleased` section becomes each release's "what's new" |
 | `releases/appcast.xml` | the Sparkle update feed (committed; served via raw GitHub) |
 | `secrets/` | key backups (gitignored — never commit signing keys) |
 
