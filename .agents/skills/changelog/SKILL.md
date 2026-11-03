@@ -1,6 +1,6 @@
 ---
 name: changelog
-description: Maintain CHANGELOG.md in the Pulse repo — add a bullet under [Unreleased] for every user-visible change, and condense the pending entries into a concise "what's new" before a release. Use after making any user-visible change, and whenever the user asks to release, bump the version, or prepare release notes.
+description: Maintain CHANGELOG.md in the Pulse repo — at commit time, add a bullet under [Unreleased] for anything user-visible in the change, and condense the pending entries into a concise "what's new" before a release. Use whenever committing changes in this repo, and when the user asks to release, bump the version, or prepare release notes.
 ---
 
 # Changelog
@@ -8,11 +8,13 @@ description: Maintain CHANGELOG.md in the Pulse repo — add a bullet under [Unr
 This repo drives each release's Sparkle "what's new" from `CHANGELOG.md`.
 Two jobs: keep the `[Unreleased]` bucket current, and summarize it before release.
 
-## 1. Log user-visible changes (do this automatically)
+## 1. Log user-visible changes (at commit time)
 
-After finishing a change, ask: **will a Pulse user notice this?**
+When changes are about to be committed, inspect what's actually in the diff
+and ask: **will a Pulse user notice this?**
 
-**Yes → add a bullet** under `## [Unreleased]` in `CHANGELOG.md`. No → skip.
+**Yes → add a bullet** under `## [Unreleased]` in `CHANGELOG.md`, included in
+**the same commit** as the change. No → commit as normal.
 
 Counts as user-visible:
 
@@ -50,7 +52,8 @@ When the user asks to release (or to run `fastlane release`), do this **first**:
    - aim for 5–8 bullets total; never more than ~12
    - keep the `### Added` / `### Changed` / `### Fixed` grouping; drop empty groups
    - user-facing language only — commit phrasing and code names don't belong here
-3. Save the summarized section back to `CHANGELOG.md` and commit it.
+3. Save the summarized section back to `CHANGELOG.md` (leave it uncommitted —
+   the release commit picks it up together with the appcast + the reset).
 4. Show the user the summary, then run `fastlane release`.
 
 The Fastfile step is mechanical — it consumes whatever is under `[Unreleased]`
