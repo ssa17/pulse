@@ -106,9 +106,11 @@
     display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 64px 74px;
     gap: 10px; align-items: center; padding: 7px 14px; cursor: pointer;
     border-bottom: 1px solid #1a1f2b;
+    transition: opacity .35s ease;
   }
   .row:hover { background: var(--panel2); }
   .row.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--cpu); }
+  .row.closing { opacity: .6; }
   .row .icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: #1d2330; }
   .row .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--faint); }
   .row .name { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -117,6 +119,7 @@
   .badge.app { background: rgba(77,159,255,.15); color: var(--mem); }
   .badge.system { background: rgba(139,148,167,.15); color: var(--dim); }
   .badge.other { background: rgba(176,124,255,.15); color: var(--disk); }
+  .badge.closing { background: rgba(255,159,67,.15); color: var(--cpu); }
   .bar { height: 8px; background: #1c2230; border-radius: 4px; overflow: hidden; }
   .bar .fill { height: 100%; border-radius: 4px; transition: width .5s ease; min-width: 1px; }
   .row .val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12.5px; }
@@ -176,6 +179,43 @@
   }
   .prow .kill:hover { color: var(--danger); border-color: var(--danger); }
   .prow .kill.killed { color: var(--faint); border-color: var(--border); opacity: .5; }
+
+  /* context menu (right-click dropdown) */
+  .ctx-menu {
+    position: fixed;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 0;
+    min-width: 190px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.96);
+    transition: opacity .12s ease, transform .12s ease;
+    user-select: none;
+  }
+  .ctx-menu.on {
+    opacity: 1;
+    pointer-events: auto;
+    transform: scale(1);
+  }
+  .ctx-menu .ci {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; font-size: 12px;
+    color: var(--text); cursor: pointer;
+    border: none; background: none; width: 100%; text-align: left;
+  }
+  .ctx-menu .ci:hover { background: var(--panel2); }
+  .ctx-menu .ci.danger { color: var(--danger); }
+  .ctx-menu .ci.danger:hover { background: rgba(255,95,87,.1); }
+  .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 8px; }
+  .ctx-menu .shortcut {
+    margin-left: auto; color: var(--faint); font-size: 10.5px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .ctx-menu .ci-label { flex: 1; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   @media (max-width: 1100px) {
     .cards { grid-template-columns: repeat(2, 1fr); }
@@ -246,6 +286,7 @@
   <div class="dhead" id="dhead"></div>
   <div class="dtable" id="dtable"></div>
 </aside>
+<div class="ctx-menu" id="ctx-menu"></div>
 
 <script>
 /*
@@ -256,6 +297,7 @@
  *   → renderPanel('cpu'|'mem')  top-app rows; DOM rows are cached in rowEls
  *                              and reused across ticks (hidden, never rebuilt)
  *   → renderDrawer()       per-app process list, re-rendered live while open
+ *   → context menu         right-click a row / process → shared #ctx-menu popup
  *
  * The snapshot schema is the contract with server.js — see docs/contracts.md.
  *
@@ -273,6 +315,8 @@ const S = {
   search: '',
   showAll: { cpu: false, mem: false },
   drawerKey: null,
+  closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
+  closingTimers: new Map(), // key → timeout that clears the mark if the app ignores SIGTERM
 };
 const HIST = 90;
 const TOP_N = 20;
@@ -353,6 +397,11 @@ function makeRow(panel, key) {
     <div class="val"></div>
     <canvas class="spark"></canvas>`;
   el.addEventListener('click', () => openDrawer(key));
+  // Right-click → context menu. `contextmenu` works in browsers; WKWebView
+  // (the .app) is flaky about dispatching it, so mousedown button 2 is a
+  // fallback trigger that covers both.
+  el.addEventListener('contextmenu', (e) => ctxForApp(e, key));
+  el.addEventListener('mousedown', (e) => { if (e.button === 2) ctxForApp(e, key); });
   const r = {
     panel, key,
     el,
@@ -391,7 +440,9 @@ function updateRow(panel, key, data, metric, total) {
   }
   // name + badge + sub
   const badge = { app: '<span class="badge app">app</span>', system: '<span class="badge system">system</span>', other: '<span class="badge other">user</span>' }[data.kind] || '';
-  r.name.innerHTML = esc(data.name) + badge;
+  const closing = S.closing.has(key);
+  r.name.innerHTML = esc(data.name) + badge + (closing ? '<span class="badge closing">closing…</span>' : '');
+  r.el.classList.toggle('closing', closing);
   r.sub.textContent = data.procs + (data.procs === 1 ? ' process' : ' processes') + (data.users.length ? ' · ' + data.users.join(', ') : '');
   // bar + value
   const share = total > 0 ? Math.min(100, (v / total) * 100) : 0;
@@ -431,7 +482,10 @@ function renderPanel(which) {
   // hide this panel's rows that fell out of the visible set (keep DOM for reuse)
   for (const r of rowEls.values()) {
     if (r.panel !== which) continue;
-    if (!seen.has(r.key) && r.el.parentNode === container) r.el.style.display = 'none';
+    if (!seen.has(r.key) && r.el.parentNode === container) {
+      r.el.style.display = 'none';
+      r.el.classList.remove('closing'); // stale "closing…" state on a hidden row (rebuilds when it reappears)
+    }
   }
   // empty state
   let emptyEl = container.querySelector(':scope > .empty');
@@ -456,12 +510,14 @@ function openDrawer(key) {
   $('#drawer').classList.add('on');
   document.querySelectorAll('.row').forEach((r) => r.classList.toggle('active', r.dataset.key === key));
   renderDrawer();
+  closeCtxMenu();
 }
 function closeDrawer() {
   S.drawerKey = null;
   $('#scrim').classList.remove('on');
   $('#drawer').classList.remove('on');
   document.querySelectorAll('.row.active').forEach((r) => r.classList.remove('active'));
+  closeCtxMenu();
 }
 function renderDrawer() {
   const a = S.apps.get(S.drawerKey);
@@ -490,11 +546,7 @@ function renderDrawer() {
     </div>`;
   $('#dclose').addEventListener('click', closeDrawer);
   const q = $('#dquit');
-  if (q) q.addEventListener('click', () => {
-    if (confirm(`Quit “${d.name}”?\nThis sends SIGTERM to pid ${d.mainPid}.`)) {
-      killProc(d.mainPid, 'TERM').then((ok) => { if (ok) closeDrawer(); });
-    }
-  });
+  if (q) q.addEventListener('click', () => quitApp(S.drawerKey).then((ok) => { if (ok) closeDrawer(); }));
 
   const tb = $('#dtable');
   const scroll = tb.scrollTop;
@@ -522,6 +574,12 @@ function renderDrawer() {
     const pid = +b.dataset.pid;
     if (confirm(`Kill pid ${pid}?\nSIGTERM first — the process may ignore it.`)) killProc(pid, 'TERM', b);
   }));
+  // Right-click a process row → context menu (quit app / kill this process).
+  tb.querySelectorAll('.prow').forEach((row) => {
+    const pid = +row.dataset.pid;
+    row.addEventListener('contextmenu', (e) => ctxForProc(e, S.drawerKey, pid));
+    row.addEventListener('mousedown', (e) => { if (e.button === 2) ctxForProc(e, S.drawerKey, pid); });
+  });
 }
 async function killProc(pid, sig, btn) {
   try {
@@ -532,6 +590,145 @@ async function killProc(pid, sig, btn) {
     return true;
   } catch { alert('kill request failed'); return false; }
 }
+
+/* ================= context menu =================
+ * One shared popup (#ctx-menu) at the cursor. App rows (panels) and process
+ * rows (drawer) install their own right-click handlers, which open it via
+ * ctxForApp / ctxForProc. The document-level listener below only CLOSES it
+ * and bails out early for .row/.prow targets: contextmenu bubbles, so a
+ * document-level opener/closer would fire right after the element's own
+ * handler within the same event dispatch — the menu would open and close
+ * invisibly.
+ *
+ * WKWebView (the .app) can be flaky about dispatching `contextmenu`, so
+ * every row also watches `mousedown` with button 2 as a fallback trigger.
+ *
+ * The menu deliberately SURVIVES data ticks so a user can take their time
+ * picking an action (its labels are static, nothing in it goes stale). The
+ * one exception: if the target app in ctxTarget disappears, onTick() closes
+ * it — the actions would be useless, and the app's pid could even be reused
+ * by another process shortly after it exits.
+ */
+let ctxTimeout = null;
+let ctxTarget = null; // { key, pid? } — the app (and process) the open menu acts on
+
+function showContextMenu(e, items, onPick) {
+  if (!items.length) return;
+  e.preventDefault(); // suppress the native context menu
+  if (ctxTimeout) { clearTimeout(ctxTimeout); ctxTimeout = null; } // a pending content-clear must not wipe the new content
+  const el = document.getElementById('ctx-menu');
+  if (!el) return;
+  // Render: separator between the neutral actions and the danger ones.
+  const lastSafe = items.reduce((acc, it, i) => (it.danger ? acc : i), -1);
+  el.innerHTML = items.map((it, i) =>
+    (it.danger && lastSafe >= 0 && i > lastSafe ? '<div class="sep"></div>' : '') +
+    `<button class="ci${it.danger ? ' danger' : ''}" data-idx="${i}" title="${esc(it.label)}">` +
+    `<span class="ci-label">${esc(it.label)}</span>` +
+    (it.shortcut ? `<span class="shortcut">${it.shortcut}</span>` : '') +
+    '</button>').join('');
+  // Position at the cursor, clamped to the viewport.
+  const W = 240;
+  const H = items.length * 32 + 8 + (lastSafe >= 0 ? 9 : 0);
+  let x = e.clientX, y = e.clientY;
+  if (x + W > window.innerWidth - 8) x = window.innerWidth - W - 8;
+  if (y + H > window.innerHeight - 8) y = window.innerHeight - H - 8;
+  el.style.left = Math.max(8, x) + 'px';
+  el.style.top = Math.max(8, y) + 'px';
+  el.querySelectorAll('.ci').forEach((btn) => btn.addEventListener('click', () => {
+    const it = items[+btn.dataset.idx];
+    closeCtxMenu();
+    if (it) onPick(it);
+  }));
+  el.classList.add('on');
+}
+
+function closeCtxMenu() {
+  ctxTarget = null;
+  const el = document.getElementById('ctx-menu');
+  if (!el) return;
+  if (ctxTimeout) { clearTimeout(ctxTimeout); ctxTimeout = null; }
+  if (!el.classList.contains('on')) return;
+  el.classList.remove('on');
+  ctxTimeout = setTimeout(() => { el.innerHTML = ''; ctxTimeout = null; }, 130);
+}
+
+// Mark an app's row as "closing…" (dimmed + badged) after a quit request so
+// the user sees the action took effect. The mark clears on the next tick once
+// the app is gone; if the app ignores SIGTERM it expires after a while, so
+// the badge never lies forever.
+const CLOSING_TTL = 8000;
+function markClosing(key) {
+  S.closing.add(key);
+  const old = S.closingTimers.get(key);
+  if (old) clearTimeout(old);
+  S.closingTimers.set(key, setTimeout(() => {
+    S.closing.delete(key);
+    S.closingTimers.delete(key);
+  }, CLOSING_TTL));
+}
+
+// Shared by the sheet's "Quit app" button and the right-click menu.
+// A plain quit asks nothing: SIGTERM is a polite request and well-behaved
+// apps run their own shutdown — including their own save prompts (that's why
+// macOS never confirms Cmd-Q / Dock-quit either). Only system processes —
+// where this stops being a routine app quit — are asked first.
+function quitApp(key) {
+  const a = S.apps.get(key);
+  if (!a || !a.data || !a.data.mainPid) return Promise.resolve(false);
+  const d = a.data;
+  if (d.kind === 'system' &&
+      !confirm(`Quit “${d.name}”?\nIt's a system process — this sends SIGTERM to pid ${d.mainPid}.`)) {
+    return Promise.resolve(false);
+  }
+  return killProc(d.mainPid, 'TERM').then((ok) => {
+    if (ok) {
+      markClosing(key);
+      renderPanel('cpu'); renderPanel('mem'); // feedback now — don't wait up to a tick for it
+    }
+    return ok;
+  });
+}
+
+// Right-click an app row in a panel.
+function ctxForApp(e, key) {
+  const a = S.apps.get(key);
+  if (!a || !a.data) return;
+  const items = [{ action: 'open', label: 'Open Details', shortcut: '↵' }];
+  if (a.data.mainPid) items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
+  ctxTarget = { key };
+  showContextMenu(e, items, (it) => {
+    if (it.action === 'open') openDrawer(key);
+    else if (it.action === 'quit') quitApp(key);
+  });
+}
+
+// Right-click a process row in the drawer.
+function ctxForProc(e, key, pid) {
+  const a = S.apps.get(key);
+  if (!a || !a.data) return;
+  const items = [];
+  if (a.data.mainPid) items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
+  items.push({ action: 'kill', label: `Kill pid ${pid}`, danger: true });
+  ctxTarget = { key, pid };
+  showContextMenu(e, items, (it) => {
+    if (it.action === 'quit') quitApp(key);
+    else if (it.action === 'kill') {
+      if (confirm(`Kill pid ${pid}?\nSIGTERM first — the process may ignore it.`)) killProc(pid, 'TERM');
+    }
+  });
+}
+
+// Global listeners: close the menu when the user dismisses it.
+document.addEventListener('contextmenu', (e) => {
+  if (e.target.closest && e.target.closest('.row, .prow')) return; // that element opens its own
+  e.preventDefault(); // no native context menu anywhere in the dashboard
+  closeCtxMenu();
+});
+document.addEventListener('click', (e) => {
+  const el = document.getElementById('ctx-menu');
+  if (el && !el.contains(e.target)) closeCtxMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCtxMenu(); });
 
 /* ================= system cards ================= */
 function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }
@@ -603,12 +800,23 @@ function onTick(p) {
     pushHist(e.memHist, a.mem);
   }
   for (const key of [...S.apps.keys()]) if (!seen.has(key)) S.apps.delete(key);
+  // closing marks for apps that are gone no longer need their timeout
+  for (const key of [...S.closing]) {
+    if (!seen.has(key)) {
+      S.closing.delete(key);
+      const t = S.closingTimers.get(key);
+      if (t) { clearTimeout(t); S.closingTimers.delete(key); }
+    }
+  }
 
   renderSys();
   renderPanel('cpu');
   renderPanel('mem');
   if (S.drawerKey) renderDrawer();
   setLive(true);
+  // A new tick does NOT close an open context menu (the user should be able
+  // to take their time) — unless the app it acts on has gone away.
+  if (ctxTarget && !S.apps.get(ctxTarget.key)) closeCtxMenu();
 }
 
 function setLive(on) {
