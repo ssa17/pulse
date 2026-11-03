@@ -59,6 +59,9 @@ Never store state inside the .app bundle — it must stay immutable and rebuilda
 6. **Keep release history** — `fastlane release` adds a GitHub release; never
    delete old releases/tags (the releases page is the public history). The
    appcast carrying only the latest entry is intentional and separate.
+7. **Log user-visible changes** — every user-visible change gets a bullet in
+   `CHANGELOG.md` under `[Unreleased]` (see the `changelog` skill), and the
+   entries are summarized before a release so the "what's new" stays concise.
 
 ## Run & test
 
