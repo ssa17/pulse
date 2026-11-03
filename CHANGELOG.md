@@ -13,6 +13,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Status bar: vertical bar mode alongside the sparklines (toggle from the
   item's menu; the choice persists)
 
+### Changed
+- Dashboard: battery readout no longer shows the time-remaining estimate (varies too much between machines to be useful)
+
 ### Fixed
 - Status-bar item: fixed layout issues on macOS 26/27
 - Processes whose `ps` output has leading whitespace now parse correctly

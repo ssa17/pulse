@@ -136,13 +136,12 @@ function parseIostat(out) {
 }
 
 function parseBatt(out) {
-  const r = { pct: null, charging: false, time: null };
+  const r = { pct: null, charging: false };
   if (!out) return r;
-  const m = out.match(/(\d+)\s*%;\s*([a-zA-Z ]+?);(?:\s*([\d:]+)\s*remaining)?/);
+  const m = out.match(/(\d+)\s*%;\s*([a-zA-Z ]+?);/);
   if (m) {
     r.pct = +m[1];
     r.charging = /charging/i.test(m[2]);
-    r.time = m[3] || null;
   }
   return r;
 }
@@ -444,7 +443,7 @@ const battOut = `Battery 0 (id=12345) 86%; charging; 2:31 remaining`;
 const bt = parseBatt(battOut);
 assert(bt.pct === 86, 'pct');
 assert(bt.charging === true, 'charging');
-assert(bt.time === '2:31', 'time remaining');
+assert(!('time' in bt), 'no time field (dropped from the snapshot)');
 
 // Note: the actual code uses /charging/i.test(m[2]) which matches "charging"
 // inside "not charging" too. We test the ACTUAL behavior, not ideal behavior.
@@ -452,14 +451,12 @@ const battOut2 = `Battery 0 (id=12345) 42%; not charging; 1:05 remaining`;
 const bt2 = parseBatt(battOut2);
 assert(bt2.pct === 42, 'pct when not charging');
 assert(bt2.charging === true, 'not charging → detected as charging (current behavior bug)');
-assert(bt2.time === '1:05', 'time when not charging');
 
 // No remaining time (fully charged).
 const battOut3 = `Battery 0 (id=12345) 100%; charging;`;
 const bt3 = parseBatt(battOut3);
 assert(bt3.pct === 100, '100%');
 assert(bt3.charging === true, 'still charging');
-assert(bt3.time === null, 'no remaining time');
 
 assert(parseBatt(null).pct === null, 'null input');
 

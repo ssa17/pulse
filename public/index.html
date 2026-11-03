@@ -546,7 +546,7 @@ function renderSys() {
   const bw = $('#h-batt-wrap');
   if (s.batt && s.batt.pct != null) {
     bw.style.display = '';
-    $('#h-batt').innerHTML = `${s.batt.pct}%${s.batt.charging ? ' ⚡' : ''}${s.batt.time ? ' · ' + s.batt.time : ''}`;
+    $('#h-batt').innerHTML = `${s.batt.pct}%${s.batt.charging ? ' ⚡' : ''}`;
     $('#h-batt').className = s.batt.charging ? 'batt-charging' : '';
   } else bw.style.display = 'none';
 

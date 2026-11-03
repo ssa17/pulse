@@ -243,15 +243,16 @@ function parseIostat(out) {
   return rows.slice(rows.length - half).reduce((a, b) => a + b, 0);
 }
 
-/** pmset -g batt → e.g. " -InternalBattery-0 (id=…) 86%; charging; 2:31 remaining" */
+/** pmset -g batt → e.g. " -InternalBattery-0 (id=…) 86%; charging; 2:31 remaining".
+ *  We ignore the remaining-time estimate — it varies by machine/battery size.
+ *  */
 function parseBatt(out) {
-  const r = { pct: null, charging: false, time: null };
+  const r = { pct: null, charging: false };
   if (!out) return r;
-  const m = out.match(/(\d+)\s*%;\s*([a-zA-Z ]+?);(?:\s*([\d:]+)\s*remaining)?/);
+  const m = out.match(/(\d+)\s*%;\s*([a-zA-Z ]+?);/);
   if (m) {
     r.pct = +m[1];
     r.charging = /charging/i.test(m[2]);
-    r.time = m[3] || null;
   }
   return r;
 }

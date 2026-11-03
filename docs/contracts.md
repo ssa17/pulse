@@ -25,7 +25,7 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     uptime: <seconds>,
     net:  { down, up },         // bytes/sec
     disk: { mbps },             // MB/s, read + write
-    batt: { pct, charging, time },   // pct null when on AC / no battery
+    batt: { pct, charging },        // pct null when on AC / no battery
     procCount, appCount
   },
   apps: [{
