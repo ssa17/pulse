@@ -21,6 +21,10 @@ Pulse checks for updates automatically and installs them — you never need to r
 - **Top CPU / Top Memory panels** — every process grouped into its app (Chrome's 30
   helper processes become one "Google Chrome" row), with real app icons, a bar showing
   the share of your *total* resources, live values, and sparklines.
+- **Memory explainer** — an info button on the Memory card explains what the
+  kernel-managed buckets are (wired / compressed / file cache), why they grow,
+  with live sparklines — and how each one goes away (quit the hogs, reboot for
+  the kernel's share, `sudo purge` for the file cache).
 - **System cards** — CPU (user/sys/idle), memory breakdown (apps / wired / compressed /
   cache / free + swap), network, disk, battery, load, uptime.
 - **Detail drawer** — click any app to see every process behind it: its role (web page /

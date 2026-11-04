@@ -54,15 +54,24 @@ function parsePsArgs(out) {
 }
 
 function parseVmStat(out) {
-  const r = { free: 0, active: 0, inactive: 0, wired: 0, purgeable: 0, compressed: 0 };
+  const r = {
+    free: 0, active: 0, inactive: 0, speculative: 0, wired: 0, purgeable: 0,
+    filebacked: 0, anonymous: 0, storedCompressed: 0, compressed: 0,
+  };
   if (!out) return r;
   const page = +(out.match(/page size of (\d+)/) || [])[1] || 16384;
   const grab = (re) => { const m = out.match(re); return m ? +m[1] * page : 0; };
   r.free = grab(/Pages free:\s*(\d+)/);
   r.active = grab(/Pages active:\s*(\d+)/);
   r.inactive = grab(/Pages inactive:\s*(\d+)/);
+  r.speculative = grab(/Pages speculative:\s*(\d+)/);
   r.wired = grab(/Pages wired down:\s*(\d+)/);
   r.purgeable = grab(/Pages purgeable:\s*(\d+)/);
+  r.filebacked = grab(/File-backed pages:\s*(\d+)/);
+  r.anonymous = grab(/Anonymous pages:\s*(\d+)/);
+  r.storedCompressed = grab(/Pages stored in compressor:\s*(\d+)/);
+  // "Pages occupied by compressor" is the standard line; the "Compressed"
+  // pattern is a fallback for alternate vm_stat output formats.
   r.compressed = grab(/Pages occupied by compressor:\s*(\d+)/) || grab(/"Compressed"\s*:\s*(\d+)/);
   return r;
 }
@@ -295,9 +304,13 @@ Page size of 16384 bytes
   Pages free: 173593
   Pages active: 4038523
   Pages inactive: 2578632
+  Pages speculative: 9371
   Pages wired down: 1437496
   Pages occupied by compressor: 23707
+  Pages stored in compressor: 99999
   Pages purgeable: 2521
+  File-backed pages: 55555
+  Anonymous pages: 48888
 
 Swapfile size   1024.0 MB
 `;
@@ -308,7 +321,13 @@ assert(vm.active === 4038523 * 16384, 'active bytes');
 assert(vm.wired === 1437496 * 16384, 'wired bytes');
 assert(vm.compressed === 23707 * 16384, 'compressed bytes');
 assert(vm.purgeable === 2521 * 16384, 'purgeable bytes');
+assert(vm.speculative === 9371 * 16384, 'speculative bytes');
+assert(vm.filebacked === 55555 * 16384, 'file-backed bytes');
+assert(vm.anonymous === 48888 * 16384, 'anonymous bytes');
+assert(vm.storedCompressed === 99999 * 16384, 'stored-in-compressor bytes');
 assert(parseVmStat(null).free === 0, 'null input → zeros');
+assert(parseVmStat(null).filebacked === 0, 'null input → zero file-backed');
+assert(parseVmStat(null).storedCompressed === 0, 'null input → zero stored-compressed');
 
 // Alternate format: "Compressed" key (newer macOS / alternate vm_stat).
 const vmAlt = `

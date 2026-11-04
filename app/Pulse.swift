@@ -449,7 +449,8 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // (__autoconfirm is injected in didFinish, once the real page context exists.)
         // NOTE: the JS below depends on DOM ids in public/index.html
         // (#rows-cpu .row, #dtable .prow, #dclose, #machine, #cpu-big,
-        // #mem-big, #live-text, #ver) — keep the two files in sync (see docs/contracts.md).
+        // #mem-big, #live-text, #ver, #mem-info, #mempop/#pop-*) — keep the two
+        // files in sync (see docs/contracts.md).
         if ProcessInfo.processInfo.environment["PULSE_SELFTEST"] == "1" {
             Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
                 guard let self else { return }
@@ -458,10 +459,22 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 (() => {
                   let confirmWired = null;
                   if (window.__autoconfirm) confirmWired = confirm('selftest');
-                  const row = document.querySelector('#rows-cpu .row');
+                  // first VISIBLE row — hidden cached rows (exited apps) would open an
+                  // empty drawer and read 0
+                  const row = [...document.querySelectorAll('#rows-cpu .row')].find(r => r.style.display !== 'none');
                   if (row) row.click();
                   const drawerRows = document.querySelectorAll('#dtable .prow').length;
                   document.querySelector('#dclose')?.click();
+                  // Memory info popover: open it, read back the rendered values,
+                  // close it.
+                  document.querySelector('#mem-info')?.click();
+                  const memInfo = {
+                    open: !document.querySelector('#mempop')?.hidden,
+                    wired: document.querySelector('#pop-wired')?.textContent || null,
+                    comp: document.querySelector('#pop-comp')?.textContent || null,
+                    cache: document.querySelector('#pop-cache')?.textContent || null
+                  };
+                  document.querySelector('#mem-info')?.click();
                   return JSON.stringify({
                     machine: document.querySelector('#machine')?.textContent,
                     ver: document.querySelector('#ver')?.textContent,
@@ -469,7 +482,7 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                     mem: document.querySelector('#mem-big')?.textContent,
                     rows: document.querySelectorAll('#rows-cpu .row').length,
                     live: document.querySelector('#live-text')?.textContent,
-                    confirmWired, drawerRows
+                    confirmWired, drawerRows, memInfo
                   });
                 })()
                 """

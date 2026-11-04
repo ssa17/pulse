@@ -77,7 +77,8 @@ node server.test.js              # 106 parser unit tests — fast feedback loop
 ```
 
 The self-test verifies: the page rendered (machine/cpu/mem populated), rows exist,
-the drawer opened (prow count > 0), confirm() is wired, and the menu-bar status
+the drawer opened (prow count > 0), confirm() is wired, the memory info popover
+opens and renders (wired/compressed/cache values), and the menu-bar status
 item is receiving samples.
 
 ## Deep docs — read on demand

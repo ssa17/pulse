@@ -20,6 +20,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     hostname, cores, memTotal,  // memTotal in bytes
     cpu:  { user, sys, idle, total },   // percents; total = 100 - idle
     mem:  { free, used, apps, wired, compressed, cache },  // bytes; apps+wired+compressed+cache == used
+    memDetail: {                                            // extra vm_stat counters (bytes), informational only —
+      active, inactive, speculative,                        // NOT part of the normalized `mem` segments above;
+      purgeable, filebacked, storedCompressed              // powers the memory info popover in index.html
+    },
     swap: { total, used },      // bytes
     load: [1m, 5m, 15m],
     uptime: <seconds>,
@@ -65,8 +69,10 @@ Note the confusing naming: `cpu` is the system CPU object; `topCpu` is an app.
   stdout line. The backend runs an orphan watchdog (exits if its parent dies) and
   the app kills it on quit — three mechanisms, keep them in sync if you change one.
 - **Self-test DOM contract**: with `PULSE_SELFTEST=1`, Pulse.swift clicks
-  `#rows-cpu .row`, counts `#dtable .prow`, and reads `#machine`, `#cpu-big`,
-  `#mem-big`, `#live-text`, `#ver` from index.html. Renaming those ids silently breaks the
+  `#rows-cpu .row`, counts `#dtable .prow`, reads `#machine`, `#cpu-big`,
+  `#mem-big`, `#live-text`, `#ver` from index.html, and exercises the memory info
+  popover (clicks `#mem-info` → reads `#mempop` open + `#pop-wired`,
+  `#pop-comp`, `#pop-cache` → closes it). Renaming those ids silently breaks the
   self-test. `PULSE_AUTOCONFIRM=1` makes the WKUIDelegate auto-approve confirm()
   dialogs so the test can run unattended.
 - **confirm() dialogs**: WKWebView returns false for confirm() unless a

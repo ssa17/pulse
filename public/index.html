@@ -73,6 +73,9 @@
   .memlegend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--dim); }
   .memlegend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
   .memlegend b { color: var(--text); font-weight: 600; }
+  .memlegend button { background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; }
+  .memlegend button:hover { color: var(--text); }
+  .memlegend button:hover b { color: var(--text); }
 
   /* ---------- toolbar ---------- */
   .toolbar { display: flex; align-items: center; gap: 12px; }
@@ -130,6 +133,31 @@
   }
   .showall:hover { color: var(--text); background: var(--panel2); }
   .empty { color: var(--faint); text-align: center; padding: 30px; font-size: 12.5px; }
+
+  /* ---------- memory "what is this?" info popover ---------- */
+  .infobtn {
+    margin-left: 6px; background: none; border: 1px solid var(--border); color: var(--dim);
+    width: 16px; height: 16px; border-radius: 50%; font-size: 10px; font-weight: 700; line-height: 1;
+    cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .infobtn:hover { color: var(--text); border-color: #3a4560; }
+  .infobtn.on { color: var(--mem); border-color: var(--mem); }
+  .mempop {
+    position: fixed; z-index: 120; width: 400px; max-width: calc(100vw - 24px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.5); padding: 12px 14px;
+  }
+  .mempop[hidden] { display: none; }
+  .mempop .mp-t { font-size: 12px; font-weight: 700; margin-bottom: 8px; }
+  .mempop .mp-sec { padding: 7px 0; border-top: 1px solid #1a1f2b; }
+  .mempop .mp-sec:first-of-type { border-top: none; }
+  .mempop .mp-h { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; }
+  .mempop .mp-h i { width: 8px; height: 8px; border-radius: 2px; }
+  .mempop .mp-h b { margin-left: auto; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .mempop canvas { width: 100%; height: 22px; margin: 4px 0 2px; }
+  .mempop p { font-size: 11.5px; color: var(--dim); line-height: 1.5; }
+  .mempop p b { color: var(--text); font-weight: 600; }
+  .mempop .mp-tip { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1f2b; font-size: 11px; color: var(--faint); }
 
   /* ---------- drawer ---------- */
   #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; }
@@ -244,7 +272,7 @@
       <canvas class="spark" id="spark-cpu"></canvas>
     </div>
     <div class="card mem">
-      <div class="top"><span class="label">Memory</span><span class="sub" id="mem-sub"></span></div>
+      <div class="top"><span class="label">Memory<button class="infobtn" id="mem-info" title="What are wired / compressed / cache, and how do I free them?">i</button></span><span class="sub" id="mem-sub"></span></div>
       <div class="big" id="mem-big">—</div>
       <div class="membar" id="membar"></div>
       <div class="memlegend" id="memlegend"></div>
@@ -286,6 +314,27 @@
   <div class="dhead" id="dhead"></div>
   <div class="dtable" id="dtable"></div>
 </aside>
+<div class="mempop" id="mempop" hidden>
+  <div class="mp-t">Your RAM, in plain terms</div>
+  <div class="mp-sec">
+    <div class="mp-h"><i style="background:var(--wired)"></i>Wired<b id="pop-wired"></b></div>
+    <canvas id="pop-wired-spark"></canvas>
+    <p>Memory <b>pinned in RAM</b> — macOS can never page it out, compress or swap it. Mostly the kernel and IOKit: GPU, display and audio buffers (WindowServer, video, ML/AI compute), plus anything an app locks down.</p>
+    <p><b>Freeing it:</b> it can't be purged — the kernel's share clears on a <b>reboot</b>, the apps' share when they quit.</p>
+  </div>
+  <div class="mp-sec">
+    <div class="mp-h"><i style="background:var(--comp)"></i>Compressed<b id="pop-comp"></b></div>
+    <canvas id="pop-comp-spark"></canvas>
+    <p id="pop-comp-2"><b>Your apps' own unused memory, packed.</b> When an app's pages sit idle, macOS compresses them in RAM instead of writing SSD swap.</p>
+    <p><b>Freeing it:</b> quit the app or close its tabs — and it's never pressure by itself, macOS uncompresses on demand.</p>
+  </div>
+  <div class="mp-sec">
+    <div class="mp-h"><i style="background:var(--cache)"></i>File cache<b id="pop-cache"></b></div>
+    <canvas id="pop-cache-spark"></canvas>
+    <p>Disk data cached for fast reads. macOS <b>reclaims it automatically</b> the moment any app needs RAM — nothing to do, or <code>sudo purge</code> in Terminal if you want it gone.</p>
+  </div>
+  <div class="mp-tip">Real usage? Quit the hogs in the Top Memory panel — their resident + compressed pages both go.</div>
+</div>
 <div class="ctx-menu" id="ctx-menu"></div>
 
 <script>
@@ -311,7 +360,7 @@
 const S = {
   sys: null,
   apps: new Map(),          // key → { data, cpuHist: [], memHist: [] }
-  sysHist: { cpu: [], mem: [], net: [], disk: [] },
+  sysHist: { cpu: [], mem: [], net: [], disk: [], wired: [], comp: [], cache: [] },
   search: '',
   showAll: { cpu: false, mem: false },
   drawerKey: null,
@@ -502,6 +551,49 @@ function renderPanel(which) {
   btn.textContent = S.showAll[which] ? 'show top ' + TOP_N : 'show all ' + list.length + (S.search ? ' matches' : '');
   btn.style.display = list.length > TOP_N || S.search ? '' : 'none';
 }
+
+/* ================= memory info popover ("what is this?") =================
+ * macOS gives no per-process accounting for wired/compressed to a regular user
+ * process, so instead of a second app list we explain the kernel-managed
+ * aggregates (vm_stat) in a compact popover and point at the levers that
+ * actually work: quit the hogs, reboot for the kernel's share.
+ */
+let memPop = false;
+
+function renderMemPop() {
+  if (!memPop || !S.sys) return;
+  const s = S.sys;
+  const d = s.memDetail || {};
+  $('#pop-wired').textContent = fmtBytes(s.mem.wired);
+  $('#pop-comp').textContent = fmtBytes(s.mem.compressed);
+  $('#pop-cache').textContent = fmtBytes(d.filebacked > 0 ? d.filebacked : s.mem.cache);
+  drawSpark($('#pop-wired-spark'), S.sysHist.wired, '#ff6b6b');
+  drawSpark($('#pop-comp-spark'), S.sysHist.comp, '#b07cff');
+  drawSpark($('#pop-cache-spark'), S.sysHist.cache, '#2dd4a7');
+  // The one most illuminating line: how much app data the compressor is packing.
+  if (d.storedCompressed > 0 && s.mem.compressed > 0) {
+    $('#pop-comp-2').innerHTML = `<b>Your apps' own unused memory, packed.</b> The compressor is holding <b>${fmtBytes(d.storedCompressed)}</b> of app data in <b>${fmtBytes(s.mem.compressed)}</b> of RAM instead of SSD swap.`;
+  } else if (s.mem.compressed > 0) {
+    $('#pop-comp-2').innerHTML = '<b>Your apps\' own unused memory, packed.</b> When an app\'s pages sit idle, macOS compresses them in RAM instead of writing SSD swap.';
+  } else {
+    $('#pop-comp-2').textContent = 'Nothing is compressed right now — the apps\u2019 pages are all in use or resident.';
+  }
+}
+
+function setMemPop(open) {
+  if (open === memPop) return;
+  memPop = open;
+  const pop = $('#mempop');
+  pop.hidden = !open;
+  $('#mem-info').classList.toggle('on', open);
+  if (open) {
+    const r = $('#mem-info').getBoundingClientRect();
+    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 412)) + 'px';
+    pop.style.top = (r.bottom + 8) + 'px';
+    renderMemPop();
+  }
+}
+
 
 /* ================= drawer ================= */
 function openDrawer(key) {
@@ -756,8 +848,11 @@ function renderSys() {
   // memory card
   const mt = s.memTotal || 1;
   $('#mem-big').textContent = fmtPct((s.mem.used / mt) * 100);
+  // Swap is the one bucket that means real pressure (data actually on SSD),
+  // so it shows when it's meaningful — but near-zero swap is noise, and the
+  // "total" is auto-allocated on macOS (it means nothing), so it's omitted.
   $('#mem-sub').innerHTML = `<b>${fmtBytes(s.mem.used)}</b> of ${fmtBytes(s.memTotal)} used` +
-    (s.swap.total ? ` · swap <b>${fmtBytes(s.swap.used)}</b>/${fmtBytes(s.swap.total)}` : '');
+    (s.swap.used > 16 * 1024 * 1024 ? ` · swap <b>${fmtBytes(s.swap.used)}</b>` : '');
   const segs = [
     ['apps', s.mem.apps, 'var(--mem)'], ['wired', s.mem.wired, 'var(--wired)'],
     ['comp', s.mem.compressed, 'var(--comp)'], ['cache', s.mem.cache, 'var(--cache)'], ['free', s.mem.free, 'var(--free)'],
@@ -769,6 +864,9 @@ function renderSys() {
     ['free', 'Free', s.mem.free, 'var(--free)'],
   ].map(([c, label, v, col]) => `<span><i style="background:${col}"></i>${label} <b>${fmtBytes(v)}</b></span>`).join('');
   pushHist(S.sysHist.mem, (s.mem.used / mt) * 100);
+  pushHist(S.sysHist.wired, s.mem.wired);
+  pushHist(S.sysHist.comp, s.mem.compressed);
+  pushHist(S.sysHist.cache, s.mem.cache);
 
   // net card
   $('#net-big').textContent = fmtRate(s.net.down);
@@ -812,6 +910,7 @@ function onTick(p) {
   renderSys();
   renderPanel('cpu');
   renderPanel('mem');
+  renderMemPop();
   if (S.drawerKey) renderDrawer();
   setLive(true);
   // A new tick does NOT close an open context menu (the user should be able
@@ -869,12 +968,27 @@ $('#search').addEventListener('input', (e) => {
 });
 $('#showall-cpu').addEventListener('click', () => { S.showAll.cpu = !S.showAll.cpu; renderPanel('cpu'); });
 $('#showall-mem').addEventListener('click', () => { S.showAll.mem = !S.showAll.mem; renderPanel('mem'); });
+$('#mem-info').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setMemPop(!memPop);
+});
+document.addEventListener('click', (e) => {
+  if (memPop && !e.target.closest('#mempop') && !e.target.closest('#mem-info')) setMemPop(false);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMemPop(false); });
 $('#scrim').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 window.addEventListener('resize', () => {
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
   drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');
   drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
+  if (memPop) {
+    const r = $('#mem-info').getBoundingClientRect();
+    const pop = $('#mempop');
+    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 412)) + 'px';
+    pop.style.top = (r.bottom + 8) + 'px';
+    renderMemPop();
+  }
 });
 connect();
 </script>

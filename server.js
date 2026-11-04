@@ -146,15 +146,24 @@ function parsePsArgs(out) {
 }
 
 function parseVmStat(out) {
-  const r = { free: 0, active: 0, inactive: 0, wired: 0, purgeable: 0, compressed: 0 };
+  const r = {
+    free: 0, active: 0, inactive: 0, speculative: 0, wired: 0, purgeable: 0,
+    filebacked: 0, anonymous: 0, storedCompressed: 0, compressed: 0,
+  };
   if (!out) return r;
   const page = +(out.match(/page size of (\d+)/) || [])[1] || 16384;
   const grab = (re) => { const m = out.match(re); return m ? +m[1] * page : 0; };
   r.free = grab(/Pages free:\s*(\d+)/);
   r.active = grab(/Pages active:\s*(\d+)/);
   r.inactive = grab(/Pages inactive:\s*(\d+)/);
+  r.speculative = grab(/Pages speculative:\s*(\d+)/);
   r.wired = grab(/Pages wired down:\s*(\d+)/);
   r.purgeable = grab(/Pages purgeable:\s*(\d+)/);
+  r.filebacked = grab(/File-backed pages:\s*(\d+)/);
+  r.anonymous = grab(/Anonymous pages:\s*(\d+)/);
+  // "stored" = the ORIGINAL (uncompressed) size of the pages the compressor is
+  // holding; "occupied" = what they actually take in RAM after compression.
+  r.storedCompressed = grab(/Pages stored in compressor:\s*(\d+)/);
   // "Pages occupied by compressor" is the standard line; the "Compressed"
   // pattern is a fallback for alternate vm_stat output formats.
   r.compressed = grab(/Pages occupied by compressor:\s*(\d+)/) || grab(/"Compressed"\s*:\s*(\d+)/);
@@ -581,6 +590,15 @@ async function sample() {
       memTotal,
       cpu: top,
       mem: { free, used, apps: appsMem, wired, compressed, cache },
+      // Extra vm_stat counters (bytes), informational only — NOT part of the
+      // normalized `mem` segments above (the UI's bar/sum uses those). They
+      // power the memory info popover: what's file cache, what the compressor
+      // is packing, how much inactive pool is waiting to be compressed.
+      memDetail: {
+        active: vm.active, inactive: vm.inactive, speculative: vm.speculative,
+        purgeable: vm.purgeable, filebacked: vm.filebacked,
+        storedCompressed: vm.storedCompressed,
+      },
       swap: { total: sysc.swapTotal, used: sysc.swapUsed },
       load: sysc.load,
       uptime: sysc.bootTime ? Math.max(0, Math.floor(Date.now() / 1000 - sysc.bootTime)) : 0,
