@@ -50,7 +50,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
 { cpu: { user, sys, idle, total },   // SYSTEM cpu (from top) — NOT an app
   memPct, memUsed, memTotal,
   topCpu: { name, cpu },             // top app by cpu
-  topMem: { name, mem } }            // top app by mem
+  topMem: { name, mem },
+  purge: <id> }                      // OPTIONAL — only while a purge is queued;
+                                     // the app shell runs the in-process prompt
+                                     // and reports via /api/purge-result
 ```
 
 `Pulse.swift` (`StatusController.poll`) reads exactly: `cpu.total`, `cpu.user`,
@@ -79,6 +82,26 @@ Note the confusing naming: `cpu` is the system CPU object; `topCpu` is an app.
   WKUIDelegate handles it — Pulse.swift renders native NSAlerts (without this the
   kill / quit buttons appear to do nothing). In web mode the browser's own dialogs
   are used.
+- **`/api/purge` (server.js ⇄ index.html)**: `POST`, empty body. Two modes:
+  * **app mode** (`PULSE=1`): the server samples `vm_stat`, queues the request
+    and advertises `purge: <id>` in `/api/status`. The app shell (which polls
+    it every 2s) runs the built-in `purge` via an in-process `NSAppleScript`
+    — so the SecurityAgent prompt is attributed to Pulse itself (branded, and
+    Touch ID is offered) rather than the osascript helper — then POSTs
+    `{ id, ok, cancelled }` to **`/api/purge-result`**.
+  * **web mode**: the server runs osascript directly (no app shell exists);
+    the prompt is attributed to osascript and is password-only.
+  Either way the server re-samples `vm_stat` and responds to the UI's original
+  fetch with `{ ok, cancelled, freed, cached, error }` (`freed` = free-pool
+  growth, `cached` = filecache + purgeable shrink). The popover button
+  `#mem-purge` + status `#mem-purge-status` render the result. Fixed command,
+  no user input → safe under the loopback-only invariant; 409 while one is in
+  flight. On macOS 26.3+, `authd` requires the bundle to satisfy
+  `codesign -R="notarized"` for Touch ID to appear on `system.privilege.admin`
+  prompts: notarized builds (`fastlane distrib` / `fastlane release` /
+  `./app/build.sh --notarize`) get Touch ID + password fallback, while
+  unnotarized dev builds (plain `./app/build.sh`) get a Pulse-branded password
+  prompt.
 - **Status-bar graph style** (`Pulse.swift`-only, not shared with the web UI): the
   menu-bar item can render either the classic sparklines or oMLX-style vertical
   capsule bars, toggled from its menu. The choice persists in

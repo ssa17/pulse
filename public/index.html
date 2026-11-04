@@ -157,6 +157,16 @@
   .mempop canvas { width: 100%; height: 22px; margin: 4px 0 2px; }
   .mempop p { font-size: 11.5px; color: var(--dim); line-height: 1.5; }
   .mempop p b { color: var(--text); font-weight: 600; }
+  .mempop .purgebtn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 4px 11px; font-size: 11.5px; cursor: pointer;
+  }
+  .mempop .purgebtn:hover:not(:disabled) { border-color: var(--cache); color: var(--cache); }
+  .mempop .purgebtn:disabled { opacity: .55; cursor: default; }
+  .mempop .purge-note { color: var(--faint); font-size: 10.5px; }
+  .mempop .mp-status { color: var(--faint); }
+  .mempop .mp-status.good { color: var(--cache); }
+  .mempop .mp-status.bad { color: var(--danger); }
   .mempop .mp-tip { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1f2b; font-size: 11px; color: var(--faint); }
 
   /* ---------- drawer ---------- */
@@ -331,7 +341,9 @@
   <div class="mp-sec">
     <div class="mp-h"><i style="background:var(--cache)"></i>File cache<b id="pop-cache"></b></div>
     <canvas id="pop-cache-spark"></canvas>
-    <p>Disk data cached for fast reads. macOS <b>reclaims it automatically</b> the moment any app needs RAM — nothing to do, or <code>sudo purge</code> in Terminal if you want it gone.</p>
+    <p>Disk data cached for fast reads. macOS <b>reclaims it automatically</b> the moment any app needs RAM — a big cache is healthy, not a problem.</p>
+    <p><b>Force it:</b> <button class="purgebtn" id="mem-purge" title="Runs the built-in 'purge' after a Touch ID / password prompt">Purge disk cache</button> <span class="purge-note">asks for Touch ID / password</span></p>
+    <p id="mem-purge-status" class="mp-status" hidden></p>
   </div>
   <div class="mp-tip">Real usage? Quit the hogs in the Top Memory panel — their resident + compressed pages both go.</div>
 </div>
@@ -352,7 +364,9 @@
  *
  * DOM ids are a contract with app/Pulse.swift's self-test (PULSE_SELFTEST=1):
  * #machine, #cpu-big, #mem-big, #live-text, #rows-cpu .row, #dtable .prow,
- * #dclose. Renaming them silently breaks the self-test.
+ * #dclose, #mem-purge (presence only — the self-test never clicks it, because
+ * it would raise a real OS security dialog). Renaming them silently breaks the
+ * self-test.
  */
 'use strict';
 
@@ -594,6 +608,47 @@ function setMemPop(open) {
   }
 }
 
+/* ================= purge disk cache (the "clear RAM" lever) =================
+ * POST /api/purge → the admin prompt (app mode: in-process in the app shell,
+ * branded + Touch ID on notarized builds; web mode: osascript) is the
+ * confirmation itself — there is deliberately NO JS confirm() before it
+ * (that would be a double dialog, worse in the app's WKWebView).
+ * It evicts file-cache + app-purgeable pages to the free pool; compressed/app
+ * memory is untouched by design, so the button says "disk cache", not "RAM".
+ */
+let purging = false;
+
+async function purgeCache() {
+  if (purging) return;
+  const btn = $('#mem-purge'), st = $('#mem-purge-status');
+  purging = true;
+  btn.disabled = true;
+  btn.textContent = 'Waiting for your approval…';
+  st.hidden = false;
+  st.className = 'mp-status';
+  st.textContent = 'Approve the macOS security prompt to continue…';
+  let r = { ok: false, error: 'no response from the server' };
+  try {
+    const res = await fetch('/api/purge', { method: 'POST' });
+    try { r = await res.json(); }
+    // Non-JSON body = the running backend predates this feature (a reused
+    // live server; the page is always fresh but its code is stale).
+    catch { r = { ok: false, error: 'stale backend — quit Pulse and relaunch (or restart node server.js), then try again' }; }
+  } catch (e) { r = { ok: false, error: e.message || String(e) }; }
+  if (r.ok) {
+    st.className = 'mp-status good';
+    st.textContent = `✓ Cleared ${fmtBytes(r.freed)} — it will refill as you work`;  // honest: the cache is for a reason
+  } else if (r.cancelled) {
+    st.className = 'mp-status';
+    st.textContent = 'Cancelled — nothing was touched.';
+  } else {
+    st.className = 'mp-status bad';
+    st.textContent = `Couldn't run the purge: ${r.error || 'unknown error'}`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Purge disk cache';
+  purging = false;
+}
 
 /* ================= drawer ================= */
 function openDrawer(key) {
@@ -853,11 +908,19 @@ function renderSys() {
   // "total" is auto-allocated on macOS (it means nothing), so it's omitted.
   $('#mem-sub').innerHTML = `<b>${fmtBytes(s.mem.used)}</b> of ${fmtBytes(s.memTotal)} used` +
     (s.swap.used > 16 * 1024 * 1024 ? ` · swap <b>${fmtBytes(s.swap.used)}</b>` : '');
+  // Segments are persistent elements — widths update in place, so the bar's
+  // CSS transition actually eases between values (a purge visibly drains
+  // cache into free; no DOM rebuild, like the rowEls pattern).
   const segs = [
-    ['apps', s.mem.apps, 'var(--mem)'], ['wired', s.mem.wired, 'var(--wired)'],
-    ['comp', s.mem.compressed, 'var(--comp)'], ['cache', s.mem.cache, 'var(--cache)'], ['free', s.mem.free, 'var(--free)'],
+    ['apps', s.mem.apps], ['wired', s.mem.wired], ['comp', s.mem.compressed],
+    ['cache', s.mem.cache], ['free', s.mem.free],
   ];
-  $('#membar').innerHTML = segs.map(([c, v]) => `<div class="seg ${c}" style="width:${Math.max(0, (v / mt) * 100)}%"></div>`).join('');
+  const bar = $('#membar');
+  for (const [c, v] of segs) {
+    let el = bar.querySelector('.seg.' + c);
+    if (!el) { el = document.createElement('div'); el.className = 'seg ' + c; bar.appendChild(el); }
+    el.style.width = Math.max(0, (v / mt) * 100) + '%';
+  }
   $('#memlegend').innerHTML = [
     ['apps', 'Apps', s.mem.apps, 'var(--mem)'], ['wired', 'Wired', s.mem.wired, 'var(--wired)'],
     ['comp', 'Compressed', s.mem.compressed, 'var(--comp)'], ['cache', 'Cache', s.mem.cache, 'var(--cache)'],
@@ -972,6 +1035,7 @@ $('#mem-info').addEventListener('click', (e) => {
   e.stopPropagation();
   setMemPop(!memPop);
 });
+$('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
 document.addEventListener('click', (e) => {
   if (memPop && !e.target.closest('#mempop') && !e.target.closest('#mem-info')) setMemPop(false);
 });

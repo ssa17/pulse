@@ -35,6 +35,8 @@ server.js  →  one JSON "snapshot" per tick (schema in docs/contracts.md)
    ├─ GET  /api/snapshot   → last snapshot            →  index.html (polling fallback)
    ├─ GET  /api/status     → lightweight status       →  Pulse.swift menu-bar item (2s poll)
    ├─ POST /api/kill       → { pid, sig }             ←  index.html (kill / quit buttons)
+   ├─ POST /api/purge      → admin-prompted `purge`   ←  index.html ("Purge disk cache")
+   ├─ POST /api/purge-result → { id, ok, cancelled } ←  Pulse.swift (in-app prompt)
    ├─ GET  /icons/*.png    → cached app icons
    └─ stdout "PULSE_LISTENING=<port>"                 →  Pulse.swift (when app-spawned)
 ```
@@ -67,7 +69,9 @@ Never store state inside the .app bundle — it must stay immutable and rebuilda
 
 ```bash
 node server.js                          # web mode → http://127.0.0.1:8787
-./app/build.sh                          # build dist/Pulse.app (needs Xcode CLT + node)
+./app/build.sh                          # build dist/Pulse.app (needs Xcode CLT + node;
+                                        #   auto re-notarizes if the previous build was)
+./app/build.sh --notarize               # force notarize & staple (needed for Touch ID on Purge)
 open dist/Pulse.app
 # Self-test (needs a GUI session): renders the page, opens the drawer, checks
 # confirm() wiring + the menu-bar item, prints SELFTEST: {...} and exits:

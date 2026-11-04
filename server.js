@@ -628,19 +628,112 @@ async function sample() {
   if (appsArr.length) {
     const topCpu = appsArr.reduce((a, b) => (b.cpu > a.cpu ? b : a));
     const topMem = appsArr.reduce((a, b) => (b.mem > a.mem ? b : a));
-    lastStatus = JSON.stringify({
+    const st = {
       cpu: top,
       memPct: memTotal ? +((used / memTotal) * 100).toFixed(1) : 0,
       memUsed: used,
       memTotal,
       topCpu: { name: topCpu.name, cpu: +topCpu.cpu.toFixed(1) },
       topMem: { name: topMem.name, mem: topMem.mem },
-    });
+    };
+    if (purgeQueue) st.purge = purgeQueue.id;  // the app shell runs the in-process prompt
+    lastStatus = JSON.stringify(st);
   }
 
   for (const res of clients) {
     try { res.write('data: ' + lastPayload + '\n\n'); } catch { /* client gone */ }
   }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Purge — the "Clear RAM" lever
+ *
+ *  The only supported reclamation primitive on macOS: /usr/sbin/purge
+ *  (vfs_purge in the kernel) evicts clean file-backed cache pages and
+ *  volatile app-purgeable pages to the free pool. It NEVER touches the
+ *  compressed pool or apps' working sets, and it requires root — so we
+ *  run it through osascript's native Touch ID / password dialog. Fixed
+ *  command, no user input: as safe as /api/kill under the loopback-only
+ *  invariant. Needs an active GUI session for the dialog to render.
+ * ------------------------------------------------------------------ */
+
+// "User canceled. (-128)" → exit 1; "Cannot complete…" variants → other codes.
+const PURGE_SCRIPT =
+  'do shell script "/usr/sbin/purge" with prompt "Pulse wants to clear the disk cache. '
+  + 'You will be asked for Touch ID or your password." with administrator privileges';
+
+// App mode (PULSE=1): the app shell runs the AppleScript in-process, so the
+// SecurityAgent prompt is attributed to Pulse itself — branded, and offered
+// Touch ID when the bundle is notarized (releases or `./app/build.sh --notarize`;
+// unnotarized dev builds fall back to password-only). The server only queues
+// the request and reports the result. Web mode has no app shell, so the server
+// runs osascript directly (attributed to osascript — password-only).
+const APP_MODE = process.env.PULSE === '1';
+
+let purgeBusy = false;
+let purgeQueue = null;  // app mode: { id, before, resolve, settled, timer }
+let purgeSeq = 0;
+
+// Run the admin-prompted purge. Resolves { ok, cancelled, error } — never rejects.
+function purgeFailure(err, stderr) {
+  if (!err) return { ok: true, cancelled: false };
+  const s = `${stderr || ''} ${err.message || ''}`;
+  if (err.code === 'ENOENT')
+    return { ok: false, cancelled: false, error: 'osascript not available (macOS only)' };
+  if (/user cancel(ed|led)|\(-128\)/i.test(s))
+    return { ok: false, cancelled: true };
+  if (err.code === 'ETIMEDOUT' || err.killed)
+    return { ok: false, cancelled: false, error: 'timed out waiting for the security prompt' };
+  return { ok: false, cancelled: false, error: 'the security prompt failed — a GUI session is required' };
+}
+
+// Both deltas should agree (the kernel moves evicted pages straight to the
+// free pool); take the max so memory freed by other apps in the same second
+// never masks the win, and the result can't go negative.
+function computePurged(before, after) {
+  const freed = Math.max(0, after.free - before.free);
+  const cached = Math.max(0, (before.filebacked + before.purgeable) - (after.filebacked + after.purgeable));
+  return Math.max(freed, cached);
+}
+
+async function doPurge() {
+  const before = parseVmStat(await run('vm_stat'));
+  if (APP_MODE) {
+    // Queue for the app shell: it sees the id in /api/status (2s poll), runs
+    // the in-process prompt, and reports back via /api/purge-result. The UI's
+    // fetch stays pending until then (or the 5-min timeout below).
+    const id = ++purgeSeq;
+    return new Promise((resolve) => {
+      purgeQueue = { id, before, resolve, settled: false,
+        timer: setTimeout(() => settlePurgeQueue(id, { ok: false, error: 'timed out waiting for the Pulse app to run the purge' }), 5 * 60 * 1000) };
+    });
+  }
+  return new Promise((resolve) => {
+    execFile('/usr/bin/osascript', ['-e', PURGE_SCRIPT], { timeout: 5 * 60 * 1000 },
+      (err, stdout, stderr) => {
+        const fail = purgeFailure(err, stderr);
+        if (!fail.ok) return resolve(fail);
+        run('vm_stat').then((out) => {
+          const after = parseVmStat(out);
+          const cached = Math.max(0, (before.filebacked + before.purgeable) - (after.filebacked + after.purgeable));
+          resolve({ ok: true, cancelled: false, freed: computePurged(before, after), cached });
+        });
+      });
+  });
+}
+
+// App shell reported the in-process prompt outcome; finish with the before/after math.
+function settlePurgeQueue(id, result) {
+  const q = purgeQueue;
+  if (!q || q.id !== id || q.settled) return;  // stale — already timed out or superseded
+  q.settled = true;
+  if (q.timer) clearTimeout(q.timer);
+  run('vm_stat').then((out) => {
+    const after = parseVmStat(out);
+    const cached = Math.max(0, (q.before.filebacked + q.before.purgeable) - (after.filebacked + after.purgeable));
+    purgeQueue = null;  // also drops the `purge` flag from /api/status
+    q.resolve({ ...result, freed: computePurged(q.before, after), cached });
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -652,6 +745,9 @@ async function sample() {
  *  /api/status     lightweight status for the menu-bar item
  *  /api/kill       POST { pid, sig: 'TERM' | 'KILL' } — safe only because we
  *                  bind 127.0.0.1 with no auth; don't change the default HOST
+ *  /api/purge      POST {} → admin-prompted `purge`; app mode queues for the
+ *                  app shell (in-process prompt), web mode runs osascript
+ *  /api/purge-result POST { id, ok, cancelled } ← Pulse.swift (in-app outcome)
  *  /icons/*        cached app icons
  * ------------------------------------------------------------------ */
 const server = http.createServer((req, res) => {
@@ -698,6 +794,40 @@ const server = http.createServer((req, res) => {
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: e.code === 'ESRCH' ? 'process already gone' : String(e.message || e) }));
+      }
+    });
+  } else if (url === '/api/purge' && req.method === 'POST') {
+    if (purgeBusy) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'a purge is already in progress' }));
+      return;
+    }
+    purgeBusy = true;
+    doPurge()
+      .then((r) => {
+        res.writeHead(r.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      })
+      .catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+      })
+      .finally(() => { purgeBusy = false; });
+  } else if (url === '/api/purge-result' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1e4) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const { id, ok, cancelled } = JSON.parse(body || '{}');
+        const p = Math.floor(+id);
+        if (purgeQueue && purgeQueue.id === p) {
+          settlePurgeQueue(p, { ok: !!ok && !cancelled, cancelled: !!cancelled });
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false }));
       }
     });
   } else if (url.startsWith('/icons/')) {

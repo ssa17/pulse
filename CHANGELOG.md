@@ -10,6 +10,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ## [Unreleased]
 
 ### Added
+- Memory: "Purge disk cache" button in the memory info popover — a Touch ID /
+  password prompt (shown as Pulse), then it clears cached file data + apps'
+  discardable buffers and reports exactly how much RAM came back
 - Memory card: info button explaining what wired / compressed / file cache
   actually are, with live sparklines and how to free each of them
 - Status bar: vertical bar mode alongside the sparklines (toggle from the

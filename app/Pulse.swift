@@ -91,6 +91,7 @@ final class StatusController {
     var timer: Timer?
     var samples = 0
     var port: Int?
+    var lastPurgeId = 0  // dedupe: the `purge` flag stays in /api/status until settled
 
     let cpuItem = NSMenuItem(title: "CPU —", action: nil, keyEquivalent: "")
     let memItem = NSMenuItem(title: "Memory —", action: nil, keyEquivalent: "")
@@ -157,6 +158,11 @@ final class StatusController {
                 if self.memHist.count > 40 { self.memHist.removeFirst(self.memHist.count - 40) }
                 self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist)
                 self.updateMenu(obj)
+                if let pid = obj["purge"] as? Int, pid != self.lastPurgeId {
+                    self.lastPurgeId = pid
+                    let p = self.port
+                    DispatchQueue.global(qos: .userInitiated).async { self.runPurge(id: pid, port: p) }
+                }
             }
         }.resume()
     }
@@ -177,6 +183,39 @@ final class StatusController {
             topMemItem.title = "Top Memory  \(n)  (\(gb(m)))"
         }
     }
+
+    /// Purge prompt, run IN-PROCESS: the SecurityAgent dialog is then attributed
+    /// to Pulse itself (branded name + icon, and Touch ID is offered when the
+    /// bundle is notarized — releases or `./app/build.sh --notarize`) instead of
+    /// the osascript helper. The `do shell script` execution blocks until the user
+    /// responds; a 5-min bound covers a forgotten prompt. Runs off-main so the
+    /// menu-bar item keeps ticking while the dialog is up.
+    func runPurge(id: Int, port: Int?) {
+        guard let port else { return }
+        var err: NSDictionary?
+        // No timeout parameter: an ignored dialog blocks this (sacrificed)
+        // background thread until the user answers; the server's 5-minute
+        // timeout keeps the UI from hanging, and the app exiting reaps the rest.
+        NSAppleScript(source: Self.purgeScript)?.executeAndReturnError(&err)
+        var ok = false
+        var cancelled = false
+        if let e = err {
+            let code = (e["errAENumber"] as? Int) ?? (e["NSAppleErrNumber"] as? Int) ?? 0
+            let msg = ((e["errAEError"] as? String) ?? "") + " " +
+                      ((e["NSAppleErrAEError"] as? String) ?? "")
+            cancelled = code == -128 || msg.lowercased().contains("cancel")
+        } else { ok = true }
+        let payload: [String: Any] = ["id": id, "ok": ok, "cancelled": cancelled]
+        var req = URLRequest(url: urlForPort(port, "/api/purge-result"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
+    }
+
+    static let purgeScript =
+        "do shell script \"/usr/sbin/purge\" with prompt \"Pulse wants to clear the disk cache. " +
+        "You will be asked for Touch ID or your password.\" with administrator privileges"
 
     /// Status bar rendering — sparkline or vertical bar mode.
     static func render(cpu: [Double], mem: [Double]) -> NSImage {
@@ -449,8 +488,10 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // (__autoconfirm is injected in didFinish, once the real page context exists.)
         // NOTE: the JS below depends on DOM ids in public/index.html
         // (#rows-cpu .row, #dtable .prow, #dclose, #machine, #cpu-big,
-        // #mem-big, #live-text, #ver, #mem-info, #mempop/#pop-*) — keep the two
-        // files in sync (see docs/contracts.md).
+        // #mem-big, #live-text, #ver, #mem-info, #mempop/#pop-*, #mem-purge)
+        // — keep the two files in sync (see docs/contracts.md). #mem-purge is
+        // checked for presence ONLY: clicking it would raise a real SecurityAgent
+        // prompt, which an unattended self-test must not do.
         if ProcessInfo.processInfo.environment["PULSE_SELFTEST"] == "1" {
             Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
                 guard let self else { return }
@@ -482,7 +523,8 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                     mem: document.querySelector('#mem-big')?.textContent,
                     rows: document.querySelectorAll('#rows-cpu .row').length,
                     live: document.querySelector('#live-text')?.textContent,
-                    confirmWired, drawerRows, memInfo
+                    confirmWired, drawerRows, memInfo,
+                    purgeBtn: !!document.querySelector('#mem-purge')
                   });
                 })()
                 """

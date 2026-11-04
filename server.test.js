@@ -203,6 +203,25 @@ function roleOf(name) {
   return null;
 }
 
+// Purge result classifiers (self-test for the /api/purge endpoint logic).
+function purgeFailure(err, stderr) {
+  if (!err) return { ok: true, cancelled: false };
+  const s = `${stderr || ''} ${err.message || ''}`;
+  if (err.code === 'ENOENT')
+    return { ok: false, cancelled: false, error: 'osascript not available (macOS only)' };
+  if (/user cancel(ed|led)|\(-128\)/i.test(s))
+    return { ok: false, cancelled: true };
+  if (err.code === 'ETIMEDOUT' || err.killed)
+    return { ok: false, cancelled: false, error: 'timed out waiting for the security prompt' };
+  return { ok: false, cancelled: false, error: 'the security prompt failed — a GUI session is required' };
+}
+
+function computePurged(before, after) {
+  const freed = Math.max(0, after.free - before.free);
+  const cached = Math.max(0, (before.filebacked + before.purgeable) - (after.filebacked + after.purgeable));
+  return Math.max(freed, cached);
+}
+
 // ---------------------------------------------------------------------------
 //  Assertions
 // ---------------------------------------------------------------------------
@@ -592,6 +611,45 @@ assert(th.total === 0.8, 'high idle → low total');
 const topLowIdle = `CPU usage: 45.2% user,  30.1% sys, 24.7% idle`;
 const tl = parseTop(topLowIdle);
 assert(tl.total === 75.3, 'low idle → high total');
+
+/* ── purge helpers (the "Clear RAM" button) ─────────────────────────── */
+console.log('\n--- purge helpers ---');
+
+// Successful osascript exit → ok.
+assert(purgeFailure(null, '').ok === true, 'no error → ok');
+// User dismisses the SecurityAgent prompt → cancelled (exit 1, -128).
+const pCancel = purgeFailure({ code: 1, message: 'Command failed' },
+  'execution error: User canceled. (-128)');
+assert(pCancel.ok === false && pCancel.cancelled === true, 'user canceled → cancelled');
+// British spelling variant.
+const pCancel2 = purgeFailure({ code: 1 }, 'execution error: User cancelled. (-128)');
+assert(pCancel2.cancelled === true, 'user cancelled (UK) → cancelled');
+// osascript missing (non-macOS box).
+const pNoMac = purgeFailure({ code: 'ENOENT', message: 'spawn /usr/bin/osascript ENOENT' }, '');
+assert(pNoMac.ok === false && !pNoMac.cancelled && /macOS only/.test(pNoMac.error),
+  'ENOENT → not-macOS error');
+// Timed out waiting for the user at the prompt.
+const pTimeout = purgeFailure({ code: 'ETIMEDOUT', killed: true }, '');
+assert(pTimeout.ok === false && !pTimeout.cancelled && /timed out/.test(pTimeout.error),
+  'timeout → timed-out error');
+// Anything else is a generic failure.
+const pOther = purgeFailure({ code: 1, message: 'boom' }, 'weird failure');
+assert(pOther.ok === false && !pOther.cancelled && pOther.error, 'other failure → generic error');
+
+// Before/after vm_stat (bytes). Purge evicted 3GB filecache + 1GB purgeable.
+const pvBefore = { free: 2 * 2 ** 30, filebacked: 6 * 2 ** 30, purgeable: 1 * 2 ** 30 };
+const pvAfter = { free: 6 * 2 ** 30, filebacked: 3 * 2 ** 30, purgeable: 0 };
+assert(computePurged(pvBefore, pvAfter) === 4 * 2 ** 30, 'evicted cache + purgeable → 4 GiB');
+// Other apps freed 1GB in the same second — free grew more than the cache shrank;
+// the max keeps the honest (bigger) number.
+const pvAfter2 = { free: 7 * 2 ** 30, filebacked: 3 * 2 ** 30, purgeable: 0 };
+assert(computePurged(pvBefore, pvAfter2) === 5 * 2 ** 30, 'free grew but cache shrank less → free delta wins');
+const pvAfter3 = { free: 8 * 2 ** 30, filebacked: 3 * 2 ** 30, purgeable: 0 };
+assert(computePurged(pvBefore, pvAfter3) === 6 * 2 ** 30, 'free grew even more (other apps) → free delta wins');
+// Nothing was cached → 0, never negative.
+assert(computePurged(pvBefore, pvBefore) === 0, 'no change → 0');
+const pvNeg = { free: 1 * 2 ** 30, filebacked: 7 * 2 ** 30, purgeable: 1 * 2 ** 30 };
+assert(computePurged(pvBefore, pvNeg) === 0, 'free shrank & cache grew (noise) → clamped to 0');
 
 // ---------------------------------------------------------------------------
 //  Wrap up

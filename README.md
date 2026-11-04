@@ -61,9 +61,15 @@ UI, no build step). No npm packages anywhere.
 ### Build from source
 
 ```bash
-./app/build.sh          # builds dist/Pulse.app (needs Xcode CLT: swiftc, + Node)
+./app/build.sh              # builds dist/Pulse.app (needs Xcode CLT: swiftc, + Node)
+./app/build.sh --notarize   # + notarize & staple — enables Touch ID on "Purge disk cache"
 open dist/Pulse.app
 ```
+
+The "Purge disk cache" button (Memory ⓘ) shows a Touch ID / password prompt;
+macOS 26.3+ only offers the fingerprint on **notarized** builds. `build.sh`
+re-notarizes automatically once the previous build was (pass
+`--no-notarize` to opt out); in web mode the prompt is password-only.
 
 `Pulse.app` is a small native Swift shell (WKWebView) that:
 - is **single-instance**: launching it again focuses the existing window instead of

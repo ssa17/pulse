@@ -12,6 +12,7 @@ covers what it does and what it needs.
 
 | Command | Does |
 |---|---|
+| `./app/build.sh` | build → sign (Developer ID); auto re-notarizes + staples when the previous build was (keeps the dev loop Touch-ID-ready; `--notarize` / `--no-notarize` force the outcome) |
 | `fastlane distrib` | build → sign (Developer ID) → notarize + staple → `dist/Pulse.dmg` |
 | `fastlane release` | distrib + Sparkle update zip + GitHub release + appcast (commit + push) |
 
