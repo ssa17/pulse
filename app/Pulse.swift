@@ -126,7 +126,11 @@ func serverIsAlive(port: Int) -> Bool {
  *  Menu-bar status item: live CPU + memory graphs, like oMLX's.
  * ================================================================== */
 final class StatusController {
-    let item = NSStatusBar.system.statusItem(withLength: 76)
+    // variableLength: the item hugs its graph image so macOS applies the
+    // standard uniform gap to it, like every other menu-bar item. A fixed
+    // length (was 76) centred narrower images (54 in bars mode) and left a
+    // big dead zone on each side, pushing the icon away from its neighbours.
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     var cpuHist: [Double] = []
     var memHist: [Double] = []
     var lastRenderKey = ""

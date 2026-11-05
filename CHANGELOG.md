@@ -22,6 +22,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Process list: `kernel_task` now appears alongside other system processes
 
 ### Changed
+- Status bar: trimmed the dead space around the menu-bar icon so it sits right up next to your other menu-bar items like any of them
 - Memory card: redesigned header and 2×2 legend — removed duplicate file-cache and Free clutter, fixed header/info-button wrapping, made Wired / Compressed / Cache clickable to open the breakdown, and hid swap until 16 MB+ is in use
 - Network card: headline now shows combined ↓ + ↑ throughput matching its sparkline, with download and upload split in the subtitle
 - Quit app no longer asks for confirmation for regular apps (they get a polite
