@@ -88,6 +88,7 @@ final class StatusController {
     let item = NSStatusBar.system.statusItem(withLength: 76)
     var cpuHist: [Double] = []
     var memHist: [Double] = []
+    var lastRenderKey = ""
     var timer: Timer?
     var samples = 0
     var port: Int?
@@ -136,6 +137,7 @@ final class StatusController {
         s["statusBarGraphType"] = next
         writeSettings(s)
         sender.title = next == "bars" ? "▥ Vertical Bars" : "◈ Sparklines"
+        lastRenderKey = ""
         item.button?.image = Self.render(cpu: cpuHist, mem: memHist)  // bars with no samples → empty tracks
     }
 
@@ -156,7 +158,11 @@ final class StatusController {
                 if let m = obj["memPct"] as? Double { self.memHist.append(m) }
                 if self.cpuHist.count > 40 { self.cpuHist.removeFirst(self.cpuHist.count - 40) }
                 if self.memHist.count > 40 { self.memHist.removeFirst(self.memHist.count - 40) }
-                self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist)
+                let key = Self.renderKey(cpu: self.cpuHist, mem: self.memHist)
+                if key != self.lastRenderKey {
+                    self.lastRenderKey = key
+                    self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist)
+                }
                 self.updateMenu(obj)
                 if let pid = obj["purge"] as? Int, pid != self.lastPurgeId {
                     self.lastPurgeId = pid
@@ -216,6 +222,20 @@ final class StatusController {
     static let purgeScript =
         "do shell script \"/usr/sbin/purge\" with prompt \"Pulse wants to clear the disk cache. " +
         "You will be asked for Touch ID or your password.\" with administrator privileges"
+
+    /// Quantized signature of the rendered status bar graph so identical visual frames
+    /// don't reassign `item.button?.image` and force redundant NSStatusBarWindow composites.
+    static func renderKey(cpu: [Double], mem: [Double]) -> String {
+        let style = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
+        if style == "bars" {
+            let cBucket = Int(((min(max(cpu.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
+            let mBucket = Int(((min(max(mem.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
+            return "bars:\(cBucket):\(mBucket)"
+        }
+        let cPts = cpu.map { String(Int(((min(max($0, 0), 100) / 100.0) * 18.0).rounded())) }.joined(separator: ",")
+        let mPts = mem.map { String(Int(((min(max($0, 0), 100) / 100.0) * 18.0).rounded())) }.joined(separator: ",")
+        return "spark:\(cPts)|\(mPts)"
+    }
 
     /// Status bar rendering — sparkline or vertical bar mode.
     static func render(cpu: [Double], mem: [Double]) -> NSImage {
