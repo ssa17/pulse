@@ -63,17 +63,58 @@ func findNode() -> String? {
     return nil
 }
 
-/// Is a *valid* Pulse server listening on this port?
+/// Resolve the backend script: inside a repo checkout (dist/Pulse.app/...),
+/// prefer the checkout's server.js — matching server.js's own PUBLIC_DIR
+/// lookup so UI and backend can never split-brain across edits. Installed
+/// builds (/Applications/Pulse.app) use Contents/Resources/server.js.
+func serverScriptPath() -> String {
+    let fm = FileManager.default
+    let res = Bundle.main.resourcePath ?? "."
+    var url = URL(fileURLWithPath: res)
+    for _ in 0..<5 {
+        url.deleteLastPathComponent()
+        let candidate = url.appendingPathComponent("server.js").path
+        let pub = url.appendingPathComponent("public/index.html").path
+        if fm.isReadableFile(atPath: candidate), fm.isReadableFile(atPath: pub) {
+            return candidate
+        }
+    }
+    return res + "/server.js"
+}
+
+func expectedServerMtime() -> Int? {
+    let p = serverScriptPath()
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: p),
+          let d = attrs[.modificationDate] as? Date else { return nil }
+    return Int(d.timeIntervalSince1970)
+}
+
+/// Is a *valid*, up-to-date, actively sampling Pulse server listening on this port?
 func serverIsAlive(port: Int) -> Bool {
     let sem = DispatchSemaphore(value: 0)
     var up = false
+    let expectedMtime = expectedServerMtime()
     var req = URLRequest(url: urlForPort(port, "/api/snapshot"))
+    req.cachePolicy = .reloadIgnoringLocalCacheData
     req.timeoutInterval = 1.5
     let task = URLSession.shared.dataTask(with: req) { data, resp, _ in
-        // require a real Pulse payload, so a stale/foreign server on the port is not reused
+        // require a fresh Pulse payload matching our server.js mtime,
+        // so a stale/suspended/foreign server on the port is never reused
         if let h = resp as? HTTPURLResponse, h.statusCode == 200,
-           let s = String(data: data ?? Data(), encoding: .utf8),
-           s.contains("\"apps\""), s.contains("\"sys\"") { up = true }
+           let obj = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any],
+           obj["apps"] != nil, obj["sys"] != nil {
+            let freshEnough: Bool = {
+                guard let t = (obj["t"] as? NSNumber)?.doubleValue else { return true }
+                return abs(Date().timeIntervalSince1970 * 1000 - t) < 12_000
+            }()
+            if freshEnough {
+                if let exp = expectedMtime {
+                    if let got = obj["serverMtime"] as? Int, got == exp { up = true }
+                } else {
+                    up = true
+                }
+            }
+        }
         sem.signal()
     }
     task.resume()
@@ -92,7 +133,10 @@ final class StatusController {
     var timer: Timer?
     var samples = 0
     var port: Int?
+    var lastStatusT: Double = 0
+    var pollFails = 0
     var lastPurgeId = 0  // dedupe: the `purge` flag stays in /api/status until settled
+    var onStaleBackend: (() -> Void)?
 
     let cpuItem = NSMenuItem(title: "CPU —", action: nil, keyEquivalent: "")
     let memItem = NSMenuItem(title: "Memory —", action: nil, keyEquivalent: "")
@@ -124,10 +168,12 @@ final class StatusController {
     }
 
     func start(port: Int) {
-        guard self.port == nil else { return }
+        let first = (self.port == nil)
         self.port = port
         poll()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+        if first {
+            timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+        }
     }
 
     @objc func toggleBarMode(_ sender: NSMenuItem) {
@@ -144,20 +190,44 @@ final class StatusController {
     func poll() {
         guard let port else { return }
         var req = URLRequest(url: urlForPort(port, "/api/status"))
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 1.5
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
-            guard let self,
-                  let h = resp as? HTTPURLResponse, h.statusCode == 200,
+            guard let self else { return }
+            guard let h = resp as? HTTPURLResponse, h.statusCode == 200,
                   let obj = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any]
-            else { return }
-            DispatchQueue.main.async {
-                self.samples += 1
-                if let c = obj["cpu"] as? [String: Any], let t = c["total"] as? Double {
-                    self.cpuHist.append(t)
+            else {
+                DispatchQueue.main.async {
+                    self.pollFails += 1
+                    if self.pollFails >= 3 {
+                        self.pollFails = 0
+                        self.onStaleBackend?()
+                    }
                 }
-                if let m = obj["memPct"] as? Double { self.memHist.append(m) }
-                if self.cpuHist.count > 40 { self.cpuHist.removeFirst(self.cpuHist.count - 40) }
-                if self.memHist.count > 40 { self.memHist.removeFirst(self.memHist.count - 40) }
+                return
+            }
+            DispatchQueue.main.async {
+                self.pollFails = 0
+                guard obj["cpu"] != nil else { return } // still warming up (<250ms after spawn)
+                if let diskMtime = expectedServerMtime(), (obj["serverMtime"] as? Int) != diskMtime {
+                    self.onStaleBackend?()
+                    return
+                }
+                let snapT = (obj["t"] as? NSNumber)?.doubleValue ?? 0
+                if snapT > 0 && abs(Date().timeIntervalSince1970 * 1000 - snapT) > 15_000 {
+                    self.onStaleBackend?()
+                    return
+                }
+                self.samples += 1
+                if snapT == 0 || snapT > self.lastStatusT {
+                    if snapT > 0 { self.lastStatusT = snapT }
+                    if let c = obj["cpu"] as? [String: Any], let t = c["total"] as? Double {
+                        self.cpuHist.append(t)
+                    }
+                    if let m = obj["memPct"] as? Double { self.memHist.append(m) }
+                    if self.cpuHist.count > 40 { self.cpuHist.removeFirst(self.cpuHist.count - 40) }
+                    if self.memHist.count > 40 { self.memHist.removeFirst(self.memHist.count - 40) }
+                }
                 let key = Self.renderKey(cpu: self.cpuHist, mem: self.memHist)
                 if key != self.lastRenderKey {
                     self.lastRenderKey = key
@@ -326,13 +396,25 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     var web: WKWebView!
     var nodeProc: Process?
     var spawnedNode = false
+    var restartingBackend = false
+    var lastBackendMtime: Int?
     var quitting = false
     var loaded = false
     var serverPort: Int?
     var status: StatusController?
     var updater: SPUStandardUpdaterController!
+    var activityToken: NSObjectProtocol?
 
-    @objc func reload() { web.reload() }
+    @objc func reload() {
+        if spawnedNode, let disk = expectedServerMtime(), disk != lastBackendMtime {
+            restartSpawnedBackend()
+        } else {
+            web.reload()
+        }
+    }
+    @objc func findInPage() {
+        web.evaluateJavaScript("(() => { const s = document.getElementById('search'); if (s) { s.focus(); s.select(); } })()", completionHandler: nil)
+    }
     @objc func openApp() {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -391,6 +473,11 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let findItem = NSMenuItem(title: "Find…", action: #selector(findInPage), keyEquivalent: "f")
+        findItem.target = self
+        editMenu.addItem(findItem)
         editItem.submenu = editMenu
         let viewItem = NSMenuItem(); mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
@@ -405,6 +492,7 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
         status = StatusController()
+        status?.onStaleBackend = { [weak self] in self?.restartSpawnedBackend() }
         for mi in [status?.cpuItem, status?.memItem, status?.topCpuItem, status?.topMemItem] {
             mi?.isEnabled = false
         }
@@ -417,6 +505,19 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 mi.target = status
                 mi.action = #selector(StatusController.toggleBarMode(_:))
             }
+        }
+
+        // Prevent App Nap from throttling live menu-bar polling & sampling while
+        // Pulse is behind other windows, without blocking normal idle system sleep.
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep,
+            reason: "Live system resource monitoring"
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.status?.poll()
+            self?.web.evaluateJavaScript("window.__pulseWake && window.__pulseWake()", completionHandler: nil)
         }
 
         startServer()
@@ -433,6 +534,10 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             }
             return
         }
+        if ProcessInfo.processInfo.environment["PULSE_SELFTEST"] == "1" {
+            spawnBackend(portOverride: 0)
+            return
+        }
         if let p = readPortFile(), serverIsAlive(port: p) {
             serverPort = p
             beginService()
@@ -441,15 +546,30 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         spawnBackend(portOverride: nil)
     }
 
+    func restartSpawnedBackend() {
+        guard spawnedNode, !quitting, !restartingBackend else { return }
+        restartingBackend = true
+        if let old = nodeProc {
+            nodeProc = nil
+            if old.isRunning { old.terminate() }
+        }
+        serverPort = nil
+        loaded = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, !self.quitting else { return }
+            self.restartingBackend = false
+            self.spawnBackend(portOverride: nil)
+        }
+    }
+
     func spawnBackend(portOverride: Int?) {
         guard let node = findNode() else {
             showFatal("Node.js was not found.\nInstall it (brew install node) or set PULSE_NODE=/path/to/node, then reopen Pulse.")
             return
         }
-        let res = Bundle.main.resourcePath ?? "."
         let p = Process()
         p.executableURL = URL(fileURLWithPath: node)
-        p.arguments = [res + "/server.js"]
+        p.arguments = [serverScriptPath()]
         var env = ProcessInfo.processInfo.environment
         env["PULSE"] = "1"
         env["PORT"] = portOverride.map(String.init) ?? "0" // 0 → OS assigns a free port
@@ -463,7 +583,7 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         p.standardError = FileHandle.nullDevice
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
-                guard let self, !self.quitting else { return }
+                guard let self, !self.quitting, proc === self.nodeProc else { return }
                 if proc.terminationReason == .uncaughtSignal || proc.terminationStatus != 0 {
                     self.showFatal("The Pulse backend exited unexpectedly (status \(proc.terminationStatus)).\nReopen the app to try again.")
                 }
@@ -473,6 +593,7 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             try p.run()
             nodeProc = p
             spawnedNode = true
+            lastBackendMtime = expectedServerMtime()
         } catch {
             showFatal("Could not start the Pulse backend:\n\(error.localizedDescription)")
             return

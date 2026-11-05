@@ -87,8 +87,8 @@ iconutil -c icns app/Pulse.iconset -o "$APP/Contents/Resources/Pulse.icns"
 rm -rf app/Pulse.iconset
 
 echo "→ bundling backend"
-cp server.js "$APP/Contents/Resources/server.js"
 cp -R public "$APP/Contents/Resources/public"
+cp server.js "$APP/Contents/Resources/server.js"
 
 echo "→ code-signing bundle"
 # Sign inside-out with Developer ID + Hardened Runtime when available (same as

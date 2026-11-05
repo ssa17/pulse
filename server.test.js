@@ -113,6 +113,27 @@ function parseTop(out) {
   return r;
 }
 
+function parseTopProcs(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(?:([\d.]+)\s+)?(\d+)([KMGTP]?B?)\s*[+-]?\s*$/);
+    if (!m) continue;
+    const mult = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5 }[(m[4] || '')[0]] || 1;
+    map.set(+m[1], {
+      mem: +m[3] * mult,
+      cpu: m[2] !== undefined ? +m[2] : null,
+    });
+  }
+  return map;
+}
+
+function parseTopMem(out) {
+  const map = new Map();
+  for (const [pid, v] of parseTopProcs(out)) map.set(pid, v.mem);
+  return map;
+}
+
 function parseNetstat(out) {
   let ib = 0, ob = 0;
   if (!out) return { ib, ob };
@@ -147,10 +168,11 @@ function parseIostat(out) {
 function parseBatt(out) {
   const r = { pct: null, charging: false };
   if (!out) return r;
-  const m = out.match(/(\d+)\s*%;\s*([a-zA-Z ]+?);/);
+  const m = out.match(/(\d+)\s*%;\s*([^;\n]+)/);
   if (m) {
     r.pct = +m[1];
-    r.charging = /charging/i.test(m[2]);
+    const state = m[2].replace(/\s+present:.*$/i, '').trim();
+    r.charging = /^(charging|finishing charge)$/i.test(state);
   }
   return r;
 }
@@ -178,6 +200,7 @@ function groupOf(p, procs) {
   for (let depth = 0; cur && depth <= 8; depth++) {
     const b = bundleOf(cur.exe);
     if (b) return { key: 'app:' + b.bundle, name: b.name, kind: 'app', bundle: b.bundle };
+    if (!cur.ppid || cur.ppid === cur.pid) break;
     cur = procs.get(cur.ppid);
   }
   const exe = p.exe;
@@ -417,6 +440,72 @@ assert(ts.user === 12.5, 'single sample: user');
 assert(ts.sys === 3.0, 'single sample: sys');
 assert(ts.total === 15.5, 'single sample: total');
 
+/* ── parseTopMem ────────────────────────────────────────────────────────── */
+console.log('\n--- parseTopMem ---');
+
+// Live format: the full header (incl. date + PID/MEM column) repeats per
+// sample; values are human-scaled with a trailing +/-/space delta marker.
+const topMemOut = `Processes: 759 total, 2 running, 757 sleeping, 3110 threads 
+2026-11-04 23:09:04
+Load Avg: 2.97, 2.88, 2.74 
+CPU usage: 4.80% user, 12.66% sys, 82.53% idle 
+SharedLibs: 701M resident, 70M data, 96M linkedit.
+MemRegions: 143741 total, 2707M resident, 258M private, 30G shared.
+PhysMem: 54G used (32G wired, 1556M compressor), 9656M unused.
+VM: 350T vsize, 57G framework vsize, 188(0) swapins, 312(0) swapouts.
+Networks: packets: 5367675/38G in, 4725279/37G out.
+Disks: 3707012/869G read, 2757684/281G written.
+
+PID    MEM  
+1212   16G-  
+1        26M   
+420    646M   
+9999   1456K  
+777    0K-
+
+Processes: 759 total, 2 running, 757 sleeping, 3110 threads 
+2026-11-04 23:09:05
+CPU usage: 3.10% user, 11.02% sys, 85.88% idle 
+
+PID    MEM  
+1212   29G+  
+1        26M   `;
+
+const tm = parseTopMem(topMemOut);
+assert(tm.get(1212) === 29 * 1024 ** 3, 'last sample wins (29G, not the earlier 16G-)');
+assert(tm.get(1) === 26 * 1024 ** 2, 'M unit (kernel_task)');
+assert(tm.get(420) === 646 * 1024 ** 2, 'M unit');
+assert(tm.get(9999) === 1456 * 1024, 'K unit');
+assert(tm.get(777) === 0, '0K- → 0');
+assert(tm.size === 5, 'header/date/CPU lines produce no false entries');
+assert(parseTopMem(null).size === 0, 'null input → empty map');
+
+// 3-column output (-stats pid,cpu,mem) including PID 0 (kernel_task).
+const topProcOut = `Processes: 765 total, 2 running, 763 sleeping, 3136 threads
+2026/11/05 17:39:48
+CPU usage: 7.23% user, 7.17% sys, 85.59% idle
+
+PID    %CPU MEM
+1212   0.0  16G
+420    0.0  728M
+0      0.0  23M
+
+Processes: 765 total, 2 running, 763 sleeping, 3136 threads
+2026/11/05 17:39:49
+CPU usage: 4.48% user, 4.66% sys, 90.85% idle
+
+PID    %CPU MEM
+1212   1.2  16G
+420    44.3 728M-
+0      17.3 23M+
+888    0.0  0B`;
+
+const tpr = parseTopProcs(topProcOut);
+assert(tpr.get(0).cpu === 17.3 && tpr.get(0).mem === 23 * 1024 ** 2, 'PID 0 kernel_task cpu + mem from 2nd sample');
+assert(tpr.get(420).cpu === 44.3 && tpr.get(420).mem === 728 * 1024 ** 2, 'PID 420 cpu + mem');
+assert(tpr.get(1212).cpu === 1.2 && tpr.get(1212).mem === 16 * 1024 ** 3, 'PID 1212 cpu + mem');
+assert(tpr.get(888).mem === 0 && tpr.get(888).cpu === 0, '0B parsed cleanly');
+
 /* ── parseNetstat ───────────────────────────────────────────────────────── */
 console.log('\n--- parseNetstat ---');
 
@@ -483,12 +572,24 @@ assert(bt.pct === 86, 'pct');
 assert(bt.charging === true, 'charging');
 assert(!('time' in bt), 'no time field (dropped from the snapshot)');
 
-// Note: the actual code uses /charging/i.test(m[2]) which matches "charging"
-// inside "not charging" too. We test the ACTUAL behavior, not ideal behavior.
 const battOut2 = `Battery 0 (id=12345) 42%; not charging; 1:05 remaining`;
 const bt2 = parseBatt(battOut2);
 assert(bt2.pct === 42, 'pct when not charging');
-assert(bt2.charging === true, 'not charging → detected as charging (current behavior bug)');
+assert(bt2.charging === false, 'not charging → false');
+
+const battDischarging = ` -InternalBattery-0 (id=12345)	74%; discharging; 4:12 remaining present: true`;
+const btDis = parseBatt(battDischarging);
+assert(btDis.pct === 74 && btDis.charging === false, 'discharging → false');
+
+const battAcHold = ` -InternalBattery-0 (id=23789667)	80%; AC attached; not charging present: true`;
+const btHold = parseBatt(battAcHold);
+assert(btHold.pct === 80 && btHold.charging === false, 'AC attached hold → false');
+
+const battFinishing = ` -InternalBattery-0 (id=12345)	99%; finishing charge; 0:04 remaining`;
+assert(parseBatt(battFinishing).charging === true, 'finishing charge → true');
+
+const battCharged = ` -InternalBattery-0 (id=12345)	100%; charged; 0:00 remaining`;
+assert(parseBatt(battCharged).charging === false, 'charged → false');
 
 // No remaining time (fully charged).
 const battOut3 = `Battery 0 (id=12345) 100%; charging;`;

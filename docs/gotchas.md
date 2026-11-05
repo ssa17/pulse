@@ -16,18 +16,36 @@ quirk of a macOS tool, verified against live output.
   helper bundles resolve to the real app); otherwise walk up to 8 parent levels
   (so a `node` spawned by VS Code shows up under VS Code).
 - **vm_stat** page size varies (16384 on Apple Silicon) — always multiply by the
-  parsed page size, never hardcode it.
+  parsed page size, never hardcode it. Activity Monitor's "Cached Files" is
+  `File-backed pages + Pages purgeable`; we cap that sum to `used − wired −
+  compressed` to guard against transient non-atomic `vm_stat` counter skew so
+  the four bar segments always sum cleanly to `used`.
 - **Per-process wired/compressed is not available** to a regular user binary:
   `task_for_pid` only succeeds for the calling process itself (task ports are
   gated behind Apple's private `get-task-ports` entitlement — ad-hoc signing
-  doesn't help), so `task_info(TASK_VM_INFO)` (the only public source of
-  per-process compressed / phys_footprint) is unreachable for other processes.
-  `proc_pidinfo` (bsdinfo/taskinfo/regioninfo) works on EVERY process without
-  privilege, but its `pri_user_wired_count` is dead on current macOS (system-wide
-  total is ~0 while vm_stat reports tens of GB wired) and its taskinfo struct
-  has no compressed field. Don't try to rebuild this — the UI's memory info
-  popover therefore explains the vm_stat aggregates instead of attributing
-  them per app. (Verified on macOS 27, 2026.)
+  doesn't help), so `task_info(TASK_VM_INFO)` is unreachable for other
+  processes, and `proc_pidinfo`'s `pri_user_wired_count` is dead on current
+  macOS (system-wide total is ~0 while vm_stat reports tens of GB wired).
+  Don't try to rebuild a per-app wired/compressed split — the UI's memory info
+  popover therefore explains the vm_stat aggregates instead. (Verified on
+  macOS 27, 2026.)
+- **Per-process memory (phys_footprint) and PID 0 (`kernel_task`) come from `top`**,
+  the one per-process source a regular binary can get: `top` is Apple-platform-signed
+  and holds the entitlements to read every process's task info, so its `mem` column is
+  the kernel's phys_footprint — the same number Activity Monitor displays (RSS
+  minus shared file pages, i.e. no dyld-shared-cache double-count) — and it also
+  surfaces `PID 0` (`kernel_task`), which `ps -axo` omits. Pass `-F` to skip
+  shared-library region scanning (faster and lighter). Quirks:
+  `-l 2` repeats the whole header per sample (the last occurrence of a pid
+  wins), values are human-scaled (`1456K`/`646M`/`22G`, never decimal) with a
+  trailing `+`/`-`/space delta marker to strip, and `-n N` keeps only the top N
+  by the `-o` sort key — sort by mem, fall back to ps RSS for unlisted pids.
+  The sub-MB tail is the only data lost. (Verified on macOS 27, 2026.)
+  One trap: a single-shot sample (`-l 1`, the fast path) makes the `CPU
+  usage:` line the average-SINCE-BOOT, not the current load — rates must
+  come from the 2nd sample of `-l 2`, so the fast path updates per-process
+  mem but never the system CPU (and kernel_task's cpu), which stay at the
+  last real window instead.
 - **proc_listallpids** returns a pid COUNT, not a byte count (the man page is
   stale), and **proc_pidinfo** returns 0 (no partial fill) when the buffer is
   smaller than the struct — size buffers ≥ 256B. `purge` needs root; a

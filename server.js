@@ -40,6 +40,9 @@ function plistVersion(file) {
 const VERSION = process.env.PULSE_VERSION
   || plistVersion(path.join(__dirname, 'app', 'Info.plist'))   // web mode (repo root)
   || plistVersion(path.join(__dirname, '..', 'Info.plist'));   // app mode (Contents/Resources)
+const SERVER_MTIME = (() => {
+  try { return Math.floor(fs.statSync(__filename).mtimeMs / 1000); } catch { return 0; }
+})();
 // Shared state lives in ~/.pulse (port file + icon cache) — never inside the app
 // bundle, which should stay immutable.
 const PULSE_DIR = path.join(os.homedir(), '.pulse');
@@ -62,6 +65,14 @@ const PUBLIC_DIR = (() => {
 })();
 
 fs.mkdirSync(ICON_DIR, { recursive: true });
+
+let uiMtime = 0;
+function refreshUiMtime() {
+  fs.stat(path.join(PUBLIC_DIR, 'index.html'), (err, st) => {
+    if (!err && st) uiMtime = Math.floor(st.mtimeMs / 1000);
+  });
+}
+refreshUiMtime();
 
 // Show up nicely in Activity Monitor / ps when running as the app's backend.
 process.title = 'Pulse';
@@ -177,15 +188,13 @@ function parseSize(v, unit) {
 }
 
 function parseSysctl(out) {
-  const r = { memTotal: 0, cores: os.cpus().length, swapTotal: 0, swapUsed: 0, load: [0, 0, 0], bootTime: 0 };
+  const r = { memTotal: 0, cores: os.cpus().length, swapTotal: 0, swapUsed: 0, bootTime: 0 };
   if (!out) return r;
   const g = (re) => { const m = out.match(re); return m ? m[1] : null; };
   r.memTotal = +(g(/hw\.memsize:\s*(\d+)/)) || 0;
   r.cores = +(g(/hw\.ncpu:\s*(\d+)/)) || r.cores;
   const sw = out.match(/vm\.swapusage:.*?total = ([\d.]+)([KMGT]?)[B]?.*?used = ([\d.]+)([KMGT]?)[B]?/);
   if (sw) { r.swapTotal = parseSize(sw[1], sw[2]); r.swapUsed = parseSize(sw[3], sw[4]); }
-  const la = out.match(/vm\.loadavg:\s*\{\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\}/);
-  if (la) r.load = [+la[1], +la[2], +la[3]];
   const bt = out.match(/kern\.boottime:\s*\{\s*sec = (\d+)/);
   if (bt) r.bootTime = +bt[1];
   return r;
@@ -206,6 +215,42 @@ function parseTop(out) {
   r.idle = i ? +i[1] : 0;
   r.total = +Math.max(0, Math.min(100, 100 - r.idle)).toFixed(2);
   return r;
+}
+
+/**
+ * top -F -l 2 -n 800 -o mem -stats pid,cpu,mem → pid → { mem, cpu }.
+ * The MEM column is the kernel's phys_footprint — the same number Activity
+ * Monitor shows: RSS with shared file pages (dyld shared cache, app bundles)
+ * excluded, so apps stop double-counting each other. `top` is an Apple
+ * platform binary holding the entitlements to read task info of every process
+ * (a regular binary cannot — see docs/gotchas.md), so it is the only way to
+ * get per-process footprint — and PID 0 (`kernel_task`, omitted by `ps`) —
+ * without root.
+ * Format quirks: top prints the whole header (incl. the PID/MEM column line)
+ * once per sample, so the last occurrence of a pid wins; values are
+ * human-scaled (1456K / 646M / 22G, never decimal) with a trailing +/-/space
+ * delta marker that is stripped; -o mem sorts by memory so -n 800 keeps the
+ * ones that matter — anything unlisted (sub-MB tail) falls back to RSS.
+ */
+function parseTopProcs(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(?:([\d.]+)\s+)?(\d+)([KMGTP]?B?)\s*[+-]?\s*$/);
+    if (!m) continue;
+    const mult = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5 }[(m[4] || '')[0]] || 1;
+    map.set(+m[1], {
+      mem: +m[3] * mult,
+      cpu: m[2] !== undefined ? +m[2] : null,
+    });
+  }
+  return map;
+}
+
+function parseTopMem(out) {
+  const map = new Map();
+  for (const [pid, v] of parseTopProcs(out)) map.set(pid, v.mem);
+  return map;
 }
 
 /**
@@ -252,16 +297,18 @@ function parseIostat(out) {
   return rows.slice(rows.length - half).reduce((a, b) => a + b, 0);
 }
 
-/** pmset -g batt → e.g. " -InternalBattery-0 (id=…) 86%; charging; 2:31 remaining".
- *  We ignore the remaining-time estimate — it varies by machine/battery size.
- *  */
+/** pmset -g batt → e.g. " -InternalBattery-0 (id=…) 86%; charging; 2:31 remaining"
+ *  or "80%; AC attached; not charging present: true". Only true active charging
+ *  ("charging" / "finishing charge") sets `charging` — not "discharging" or "not charging".
+ */
 function parseBatt(out) {
   const r = { pct: null, charging: false };
   if (!out) return r;
-  const m = out.match(/(\d+)\s*%;\s*([a-zA-Z ]+?);/);
+  const m = out.match(/(\d+)\s*%;\s*([^;\n]+)/);
   if (m) {
     r.pct = +m[1];
-    r.charging = /charging/i.test(m[2]);
+    const state = m[2].replace(/\s+present:.*$/i, '').trim();
+    r.charging = /^(charging|finishing charge)$/i.test(state);
   }
   return r;
 }
@@ -318,6 +365,7 @@ function groupOf(p, procs) {
   for (let depth = 0; cur && depth <= 8; depth++) {
     const b = bundleOf(cur.exe);
     if (b) return { key: 'app:' + b.bundle, name: b.name, kind: 'app', bundle: b.bundle };
+    if (!cur.ppid || cur.ppid === cur.pid) break;
     cur = procs.get(cur.ppid);
   }
   const exe = p.exe;
@@ -451,8 +499,16 @@ let hardware = { model: os.hostname(), chip: null, memLabel: null };
 let prevCpuTime = new Map(); // pid → cumulative cpu seconds
 let prevSampleT = Date.now();
 let lastPayload = null;
+let lastPayloadTime = 0;
 let lastStatus = null;
 let sampleCount = 0;
+let sampleInFlight = null;
+let lastTopProcs = new Map(); // pid → { mem, cpu } from most recent valid `top`
+let lastTopCpu = { user: 0, sys: 0, idle: 100, total: 0 };
+let lastKernelCpu = 0; // raw %CPU for PID 0 from most recent 2-sample `top`
+let lastTopCpuT = 0;
+let lastDiskMbps = 0;
+let lastDiskT = 0;
 const clients = new Set();
 
 // Network: `netstat -ib` can take seconds on machines with many interfaces,
@@ -467,7 +523,9 @@ function kickNetstat() {
   netBusy = true;
   run('netstat', ['-ib'], 10000).then((out) => {
     netBusy = false;
+    if (!out) return; // never overwrite counters with 0 on a timeout
     const n = parseNetstat(out);
+    if (n.ib === 0 && n.ob === 0 && netCounters) return;
     const now = Date.now();
     if (netCounters) {
       const dt = Math.max((now - netCounters.t) / 1000, 0.5);
@@ -478,32 +536,77 @@ function kickNetstat() {
   });
 }
 
-async function sample() {
-  const t0 = Date.now();
-  // First sample skips the 1s-window commands (top, iostat) so the UI gets
-  // real data almost instantly; they fill in on the next tick.
-  const first = sampleCount++ === 0;
-  const [psMain, psArgs, vmOut, sysOut, topOut, iostatOut, battOut] = await Promise.all([
-    run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
-    run('ps', ['-axo', 'pid=,args=']),
-    run('vm_stat'),
-    run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'vm.loadavg', 'kern.boottime']),
-    first ? Promise.resolve(null) : run('top', ['-l', '2', '-n', '0', '-s', '1'], 6000),
-    first ? Promise.resolve(null) : run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
-    run('pmset', ['-g', 'batt']),
-  ]);
+function triggerSample(fast = false) {
+  if (sampleInFlight) return sampleInFlight;
+  sampleInFlight = sample(fast).finally(() => { sampleInFlight = null; });
+  return sampleInFlight;
+}
+
+async function sample(fast = false) {
+  // First sample (or an explicit on-demand refresh) skips the 1s sleep window in
+  // top/iostat and uses single-shot `top -F -l 1` (~250ms) so the UI immediately
+  // gets real phys_footprint memory without waiting >1s. On regular ticks, run
+  // the 1s window commands FIRST and read ps/vm_stat/sysctl/pmset right as that
+  // window finishes — so every metric in the snapshot is <30ms fresh when sent.
+  const useFast = fast || sampleCount++ === 0;
+  refreshUiMtime();
   kickNetstat(); // background — never blocks the sample
+
+  let topOut = null, iostatOut = null;
+  let psMain, psArgs, vmOut, sysOut, battOut;
+  if (useFast) {
+    [psMain, psArgs, vmOut, sysOut, topOut, battOut] = await Promise.all([
+      run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
+      run('ps', ['-axo', 'pid=,args=']),
+      run('vm_stat'),
+      run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
+      run('top', ['-F', '-l', '1', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem'], 4000),
+      run('pmset', ['-g', 'batt']),
+    ]);
+  } else {
+    [topOut, iostatOut] = await Promise.all([
+      run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1'], 6000),
+      run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
+    ]);
+    [psMain, psArgs, vmOut, sysOut, battOut] = await Promise.all([
+      run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
+      run('ps', ['-axo', 'pid=,args=']),
+      run('vm_stat'),
+      run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
+      run('pmset', ['-g', 'batt']),
+    ]);
+  }
+
+  // Never overwrite live data with empty/zero parser fallbacks if a core tool failed.
+  if (!psMain || !vmOut || !sysOut) return;
 
   const sysc = parseSysctl(sysOut);
   const cores = sysc.cores;
+  const psNow = Date.now();
   // Floor the window at 0.2s so a stalled loop / clock jump can't produce
   // absurd CPU values from a tiny denominator.
-  const dt = Math.max((t0 - prevSampleT) / 1000, 0.2);
-  prevSampleT = t0;
+  const dt = Math.max((psNow - prevSampleT) / 1000, 0.2);
+  prevSampleT = psNow;
 
   // ---- processes + real-time CPU (delta of cumulative cpu time) ----
   const procs = parsePsMain(psMain);
+  if (!procs.size) return;
   const argsMap = parsePsArgs(psArgs);
+  if (topOut) {
+    const parsedTop = parseTopProcs(topOut);
+    if (parsedTop.size) lastTopProcs = parsedTop;
+    // The `CPU usage:` line (and PID 0's %CPU) are RATES: with a single-shot
+    // sample (-l 1 fast path) they reflect average-SINCE-BOOT / 0, not current
+    // load — only the 2nd sample of `-l 2` is a real window. Never let the fast
+    // path overwrite the last real window.
+    if (!useFast && topOut.includes('CPU usage:')) {
+      lastTopCpu = parseTop(topOut);
+      lastKernelCpu = parsedTop.get(0)?.cpu || 0;
+      lastTopCpuT = Date.now();
+    }
+  }
+  if (iostatOut) { lastDiskMbps = parseIostat(iostatOut); lastDiskT = Date.now(); }
+  const topProcs = lastTopProcs;
   const seen = new Set();
   for (const p of procs.values()) {
     seen.add(p.pid);
@@ -517,9 +620,27 @@ async function sample() {
     prevCpuTime.set(p.pid, p.cpuTime);
     p.args = argsMap.get(p.pid) || p.exe;
     p.name = path.basename(p.exe) || 'unknown';
-    p.mem = p.rss * 1024;
+    // Physical footprint (top) — the Activity Monitor number — with ps RSS as
+    // the fallback for pids top didn't list (sub-MB tail beyond top-2000).
+    p.mem = topProcs.get(p.pid)?.mem ?? p.rss * 1024;
   }
   for (const pid of prevCpuTime.keys()) if (!seen.has(pid)) prevCpuTime.delete(pid);
+  for (const pid of lastTopProcs.keys()) if (pid > 0 && !seen.has(pid)) lastTopProcs.delete(pid);
+  // BSD `ps` never lists PID 0 (`kernel_task`), whereas `top` does — surface it
+  // so kernel CPU/memory load shows up in the panels like Activity Monitor.
+  const k = topProcs.get(0);
+  if (k && !procs.has(0)) {
+    const kCpu = Date.now() - lastTopCpuT < 15000 ? lastKernelCpu : 0;
+    procs.set(0, {
+      pid: 0, ppid: 0, user: 'root',
+      cpuTime: 0, pcpu: kCpu,
+      rss: Math.round(k.mem / 1024), vsz: 0, stat: 'R', etime: '—',
+      exe: '/System/Library/Kernels/kernel_task',
+      name: 'kernel_task', args: 'kernel_task',
+      cpu: Math.max(0, kCpu / cores),
+      mem: k.mem,
+    });
+  }
 
   // ---- group into apps ----
   const groups = new Map();
@@ -548,7 +669,8 @@ async function sample() {
   }
   for (const grp of groups.values()) {
     grp.processes.sort((a, b) => b.cpu - a.cpu || b.mem - a.mem);
-    if (grp.mainPid === null && grp.processes.length) grp.mainPid = grp.processes[0].pid;
+    const killable = grp.processes.find((p) => p.pid > 0);
+    if (grp.mainPid === null && killable) grp.mainPid = killable.pid;
     ensureIcon(grp);
     const ic = iconMap.get(grp.bundle);
     grp.icon = ic && ic.ready && ic.url ? ic.url : null;
@@ -556,40 +678,50 @@ async function sample() {
 
   // ---- system stats ----
   const vm = parseVmStat(vmOut);
-  const top = parseTop(topOut);
+  // Rate metrics (CPU from top, MB/s from iostat) go honest-zero when the
+  // backing tool has been failing long enough — same rule as the netstat
+  // guard, so a stalled sampler never displays a frozen "live" number.
+  const top = Date.now() - lastTopCpuT < 15000 ? lastTopCpu : { user: 0, sys: 0, idle: 100, total: 0 };
   const batt = parseBatt(battOut);
-  const diskMbps = parseIostat(iostatOut);
+  const diskMbps = Date.now() - lastDiskT < 15000 ? lastDiskMbps : 0;
 
-  const sumRss = [...groups.values()].reduce((a, g) => a + g.mem, 0);
   const memTotal = sysc.memTotal;
   // Clamp: vm_stat can transiently report more free bytes than the machine has.
   const free = Math.min(vm.free, memTotal);
   const used = Math.max(0, memTotal - free);
-  // segments normalized so they always sum to `used` (RSS double-counts shared pages)
-  const appsMem = Math.min(sumRss, used);
-  let rem = used - appsMem;
-  const wired = Math.min(vm.wired, rem); rem -= wired;
-  const compressed = Math.min(vm.compressed, rem); rem -= compressed;
-  const cache = Math.max(0, rem);
+  // Activity Monitor-style partition of `used` (its bar shows these buckets):
+  // kernel-measured wired + compressor first, then the reclaimable cache
+  // (file-backed + purgeable, matching AM's "Cached Files" and what `purge`
+  // evicts), guarded against transient vm_stat read skew. The apps' share is
+  // the absorbing residual so the four segments always sum to `used`.
+  const wired = Math.min(vm.wired, used);
+  const compressed = Math.min(vm.compressed, Math.max(0, used - wired));
+  const cache = Math.min(vm.filebacked + vm.purgeable, Math.max(0, used - wired - compressed));
+  const appsMem = Math.max(0, used - wired - compressed - cache);
+  // "in use" = used − cache = Apps + Wired + Compressed (reclaimable file/purgeable
+  // cache excluded, matching Activity Monitor's "Memory Used" pool concept).
+  const inUse = Math.max(0, used - cache);
 
   let netDown = 0, netUp = 0;
-  if (netCounters) {
+  if (netCounters && Date.now() - netCounters.t < 15000) {
     netDown = netRate.down;
     netUp = netRate.up;
   }
 
+  const snapTime = Date.now();
   // The snapshot — the contract with public/index.html (full schema in docs/contracts.md).
   // The UI reads exactly these fields; add/rename on both sides together.
   const payload = {
-    t: t0,
+    t: snapTime,
     version: VERSION,
+    serverMtime: SERVER_MTIME,
+    uiMtime,
     sys: {
       ...hardware,
-      hostname: os.hostname(),
       cores,
       memTotal,
       cpu: top,
-      mem: { free, used, apps: appsMem, wired, compressed, cache },
+      mem: { free, used, apps: appsMem, wired, compressed, cache, inUse },
       // Extra vm_stat counters (bytes), informational only — NOT part of the
       // normalized `mem` segments above (the UI's bar/sum uses those). They
       // power the memory info popover: what's file cache, what the compressor
@@ -599,8 +731,7 @@ async function sample() {
         purgeable: vm.purgeable, filebacked: vm.filebacked,
         storedCompressed: vm.storedCompressed,
       },
-      swap: { total: sysc.swapTotal, used: sysc.swapUsed },
-      load: sysc.load,
+      swap: { used: sysc.swapUsed },  // total omitted: auto-allocated on macOS, means nothing
       uptime: sysc.bootTime ? Math.max(0, Math.floor(Date.now() / 1000 - sysc.bootTime)) : 0,
       net: { down: netDown, up: netUp },
       disk: { mbps: diskMbps },
@@ -620,6 +751,7 @@ async function sample() {
   };
 
   lastPayload = JSON.stringify(payload);
+  lastPayloadTime = snapTime;
 
   // Lightweight status for the menu-bar item (avoids shipping the full snapshot).
   // Contract with app/Pulse.swift StatusController: `cpu` is the SYSTEM cpu
@@ -629,9 +761,13 @@ async function sample() {
     const topCpu = appsArr.reduce((a, b) => (b.cpu > a.cpu ? b : a));
     const topMem = appsArr.reduce((a, b) => (b.mem > a.mem ? b : a));
     const st = {
+      t: snapTime,
+      serverMtime: SERVER_MTIME,
       cpu: top,
-      memPct: memTotal ? +((used / memTotal) * 100).toFixed(1) : 0,
-      memUsed: used,
+      // AM-style: "memory used" = used − cache (Apps + Wired + Compressed;
+      // reclaimable file/purgeable cache excluded)
+      memPct: memTotal ? +((inUse / memTotal) * 100).toFixed(1) : 0,
+      memUsed: inUse,
       memTotal,
       topCpu: { name: topCpu.name, cpu: +topCpu.cpu.toFixed(1) },
       topMem: { name: topMem.name, mem: topMem.mem },
@@ -764,21 +900,49 @@ const server = http.createServer((req, res) => {
   } else if (url === '/events') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    res.write('retry: 2000\n\n');
-    if (lastPayload) res.write('data: ' + lastPayload + '\n\n');
+    res.write('retry: 1500\n\n');
+    if (lastPayload && Date.now() - lastPayloadTime < 4000) {
+      res.write('data: ' + lastPayload + '\n\n');
+    } else {
+      triggerSample(true).catch(() => {});
+    }
     clients.add(res);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* noop */ } }, 15000);
     req.on('close', () => { clearInterval(ping); clients.delete(res); });
   } else if (url === '/api/snapshot') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(lastPayload || '{}');
+    const wantFresh = (req.url || '').includes('fresh=1');
+    const stale = !lastPayload || Date.now() - lastPayloadTime > 4000;
+    const reply = () => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(lastPayload || '{}');
+    };
+    if (wantFresh || stale) {
+      triggerSample(true).catch(() => {}).finally(reply);
+    } else {
+      reply();
+    }
   } else if (url === '/api/status') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(lastStatus || '{}');
+    // Await the fresh sample like /api/snapshot does — replying fire-and-forget
+    // would hand the menu bar a minutes-old graph right after wake/stall.
+    const reply = () => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(lastStatus || '{}');
+    };
+    if (!lastStatus || Date.now() - lastPayloadTime > 5000) {
+      triggerSample(true).catch(() => {}).finally(reply);
+    } else {
+      reply();
+    }
   } else if (url === '/api/kill' && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 1e4) req.destroy(); });
@@ -853,6 +1017,7 @@ let actualPort = PORT;
 // so a later launch (app or web) can find and reuse this server.
 function announcePort() {
   console.log(`PULSE_LISTENING=${actualPort}`);
+  if (process.env.PULSE_SELFTEST === '1') return; // don't clobber a live session's port file
   try {
     fs.mkdirSync(PULSE_DIR, { recursive: true });
     fs.writeFileSync(path.join(PULSE_DIR, 'port'), String(actualPort) + '\n');
@@ -884,10 +1049,10 @@ process.on('exit', () => {
     hardware = h;
     console.log(`  ${hardware.model} · ${hardware.chip || ''} · ${hardware.memLabel || ''}\n`);
   });
-  sample(); // first sample immediately (fast path: skips 1s-window commands)
+  await triggerSample(true); // fast first sample (~250ms) — awaited so it never overlaps loop()
   (function loop() {
     const started = Date.now();
-    sample().catch(() => {}).finally(() => {
+    triggerSample(false).catch(() => {}).finally(() => {
       setTimeout(loop, Math.max(50, INTERVAL - (Date.now() - started)));
     });
   })();

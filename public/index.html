@@ -35,14 +35,14 @@
 
   /* ---------- header ---------- */
   header {
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center;
     padding: 10px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   }
   .logo { font-size: 15px; font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
   .logo .ver { color: var(--dim); font-size: 11px; font-weight: 600; }
   .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cpu); box-shadow: 0 0 10px var(--cpu); animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
-  .machine { color: var(--dim); font-size: 12.5px; }
+  .machine { color: var(--dim); font-size: 12.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine b { color: var(--text); font-weight: 600; }
   .hmeta { margin-left: auto; display: flex; gap: 16px; color: var(--dim); font-size: 12px; }
   .hmeta b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -52,30 +52,40 @@
   .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 108px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-height: 112px;
   }
-  .card .top { display: flex; align-items: baseline; justify-content: space-between; }
-  .card .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
-  .card .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .card .sub { color: var(--dim); font-size: 11.5px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .card .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 16px; }
+  .card .label {
+    color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    height: 16px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0; line-height: 1;
+  }
+  .card .big { font-size: 26px; line-height: 1.15; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .sub {
+    color: var(--dim); font-size: 11.5px; line-height: 16px; display: flex; align-items: baseline; justify-content: flex-end;
+    gap: 2px 9px; flex-wrap: wrap; text-align: right; font-variant-numeric: tabular-nums; min-width: 0;
+  }
+  .card .sub > span { white-space: nowrap; }
   .card .sub b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .card canvas.spark { width: 100%; height: 30px; margin-top: auto; }
+  .card canvas.spark { width: 100%; height: 36px; margin-top: auto; }
   .card.cpu .big, .card.cpu .label { color: var(--cpu); }
   .card.mem .big, .card.mem .label { color: var(--mem); }
   .card.net .big, .card.net .label { color: var(--net); }
   .card.disk .big, .card.disk .label { color: var(--disk); }
-  .card .big { color: var(--text); }
 
-  .membar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--free); margin-top: 2px; }
+  .membar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: var(--free); margin-top: auto; }
   .membar .seg { height: 100%; transition: width .6s ease; }
   .seg.apps { background: var(--mem); } .seg.wired { background: var(--wired); }
-  .seg.comp { background: var(--comp); } .seg.cache { background: var(--cache); } .seg.free { background: var(--free); }
-  .memlegend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--dim); }
-  .memlegend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+  .seg.comp { background: var(--comp); } .seg.cache { background: var(--cache); }
+  .memlegend {
+    display: grid; grid-template-columns: max-content max-content; justify-content: space-between;
+    gap: 3px 8px; font-size: 11px; line-height: 1.35; color: var(--dim);
+    font-variant-numeric: tabular-nums; margin-top: 2px;
+  }
+  .memlegend .ml { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .memlegend .ml.clickable { cursor: pointer; transition: color .15s; }
+  .memlegend .ml.clickable:hover { color: var(--text); }
+  .memlegend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
   .memlegend b { color: var(--text); font-weight: 600; }
-  .memlegend button { background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; }
-  .memlegend button:hover { color: var(--text); }
-  .memlegend button:hover b { color: var(--text); }
 
   /* ---------- toolbar ---------- */
   .toolbar { display: flex; align-items: center; gap: 12px; }
@@ -106,7 +116,7 @@
   .rows::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
 
   .row {
-    display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 64px 74px;
+    display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 68px 74px;
     gap: 10px; align-items: center; padding: 7px 14px; cursor: pointer;
     border-bottom: 1px solid #1a1f2b;
     transition: opacity .35s ease;
@@ -115,7 +125,8 @@
   .row.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--cpu); }
   .row.closing { opacity: .6; }
   .row .icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: #1d2330; }
-  .row .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--faint); }
+  .row .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--dim); }
+  .row .icon.placeholder.cli { font-size: 10px; font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: -.5px; }
   .row .name { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .sub { color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .badge { display: inline-block; font-size: 9.5px; padding: 1px 5px; border-radius: 4px; margin-left: 6px; vertical-align: 1px; letter-spacing: .4px; }
@@ -136,9 +147,10 @@
 
   /* ---------- memory "what is this?" info popover ---------- */
   .infobtn {
-    margin-left: 6px; background: none; border: 1px solid var(--border); color: var(--dim);
-    width: 16px; height: 16px; border-radius: 50%; font-size: 10px; font-weight: 700; line-height: 1;
+    background: none; border: 1px solid var(--border); color: var(--dim);
+    width: 15px; height: 15px; border-radius: 50%; font-size: 9.5px; font-weight: 700; line-height: 1;
     cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    text-transform: lowercase; letter-spacing: 0; flex-shrink: 0;
   }
   .infobtn:hover { color: var(--text); border-color: #3a4560; }
   .infobtn.on { color: var(--mem); border-color: var(--mem); }
@@ -270,7 +282,6 @@
     <div class="machine" id="machine">reading system…</div>
     <div class="hmeta">
       <span>uptime <b id="h-uptime">—</b></span>
-      <span>load <b id="h-load">—</b></span>
       <span id="h-batt-wrap">battery <b id="h-batt">—</b></span>
     </div>
   </header>
@@ -300,7 +311,7 @@
   </section>
 
   <section class="toolbar">
-    <input id="search" type="search" placeholder="Search apps or processes…" autocomplete="off" spellcheck="false">
+    <input id="search" type="search" placeholder="Search apps or processes… (⌘F)" autocomplete="off" spellcheck="false">
     <span class="hint" id="hint"></span>
     <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
   </section>
@@ -374,12 +385,13 @@
 const S = {
   sys: null,
   apps: new Map(),          // key → { data, cpuHist: [], memHist: [] }
-  sysHist: { cpu: [], mem: [], net: [], disk: [], wired: [], comp: [], cache: [] },
+  sysHist: { cpu: [], net: [], disk: [], wired: [], comp: [], cache: [] },
   search: '',
   showAll: { cpu: false, mem: false },
   drawerKey: null,
   closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
   closingTimers: new Map(), // key → timeout that clears the mark if the app ignores SIGTERM
+  killedPids: new Map(),    // pid → { sig, t } so drawer ticks keep kill feedback & offer force-kill
 };
 const HIST = 90;
 const TOP_N = 20;
@@ -449,12 +461,22 @@ function drawSpark(canvas, data, color) {
 // different metrics, so the DOM nodes must not be shared between panels.
 const rowEls = new Map(); // `${panel}:${key}` → { el, icon, name, sub, fill, val, spark }
 
+function placeholderGlyph(d) {
+  if (d.kind === 'system') return '⚙';
+  if (d.kind === 'other') return '>_';
+  const m = (d.name || '').match(/[a-zA-Z0-9]/);
+  return m ? m[0].toUpperCase() : 'A';
+}
+function placeholderClass(d) {
+  return 'icon placeholder' + (d.kind === 'other' ? ' cli' : '');
+}
+
 function makeRow(panel, key) {
   const el = document.createElement('div');
   el.className = 'row';
   el.dataset.key = key;
   el.innerHTML = `
-    <div class="icon placeholder">?</div>
+    <div class="icon placeholder">⚙</div>
     <div><div class="name"></div><div class="sub"></div></div>
     <div class="bar"><div class="fill"></div></div>
     <div class="val"></div>
@@ -489,17 +511,26 @@ function updateRow(panel, key, data, metric, total) {
       const img = document.createElement('img');
       img.className = 'icon';
       img.alt = '';
-      img.onerror = () => { img.remove(); if (!r.icon.isConnected) r.el.prepend(Object.assign(document.createElement('div'), { className: 'icon placeholder', textContent: '?' })); };
+      img.onerror = () => {
+        const ph = document.createElement('div');
+        ph.className = placeholderClass(data);
+        ph.textContent = placeholderGlyph(data);
+        if (img.isConnected) r.el.replaceChild(ph, img);
+        r.icon = ph;
+      };
       r.el.replaceChild(img, r.icon);
       r.icon = img;
     }
     if (r.icon.src !== data.icon) r.icon.src = data.icon;
-  } else if (r.icon.tagName === 'IMG') {
-    const ph = document.createElement('div');
-    ph.className = 'icon placeholder';
-    ph.textContent = data.kind === 'app' ? 'A' : '⚙';
-    r.el.replaceChild(ph, r.icon);
-    r.icon = ph;
+  } else {
+    if (r.icon.tagName === 'IMG') {
+      const ph = document.createElement('div');
+      r.el.replaceChild(ph, r.icon);
+      r.icon = ph;
+    }
+    const cls = placeholderClass(data), txt = placeholderGlyph(data);
+    if (r.icon.className !== cls) r.icon.className = cls;
+    if (r.icon.textContent !== txt) r.icon.textContent = txt;
   }
   // name + badge + sub
   const badge = { app: '<span class="badge app">app</span>', system: '<span class="badge system">system</span>', other: '<span class="badge other">user</span>' }[data.kind] || '';
@@ -580,7 +611,7 @@ function renderMemPop() {
   const d = s.memDetail || {};
   $('#pop-wired').textContent = fmtBytes(s.mem.wired);
   $('#pop-comp').textContent = fmtBytes(s.mem.compressed);
-  $('#pop-cache').textContent = fmtBytes(d.filebacked > 0 ? d.filebacked : s.mem.cache);
+  $('#pop-cache').textContent = fmtBytes(s.mem.cache);
   drawSpark($('#pop-wired-spark'), S.sysHist.wired, '#ff6b6b');
   drawSpark($('#pop-comp-spark'), S.sysHist.comp, '#b07cff');
   drawSpark($('#pop-cache-spark'), S.sysHist.cache, '#2dd4a7');
@@ -638,6 +669,7 @@ async function purgeCache() {
   if (r.ok) {
     st.className = 'mp-status good';
     st.textContent = `✓ Cleared ${fmtBytes(r.freed)} — it will refill as you work`;  // honest: the cache is for a reason
+    setTimeout(() => pollOnce(true), 80);
   } else if (r.cancelled) {
     st.className = 'mp-status';
     st.textContent = 'Cancelled — nothing was touched.';
@@ -670,9 +702,11 @@ function renderDrawer() {
   const a = S.apps.get(S.drawerKey);
   if (!a) { closeDrawer(); return; }
   const d = a.data;
+  const phGlyph = esc(placeholderGlyph(d));
+  const phCls = placeholderClass(d);
   const iconHtml = d.icon
-    ? `<img class="icon" src="${esc(d.icon)}" onerror="this.outerHTML='<div class=\\'icon placeholder\\'>?</div>'">`
-    : `<div class="icon placeholder">${d.kind === 'app' ? 'A' : '⚙'}</div>`;
+    ? `<img class="icon" src="${esc(d.icon)}" onerror="this.outerHTML='<div class=\\'${phCls}\\'>${phGlyph}</div>'">`
+    : `<div class="${phCls}">${phGlyph}</div>`;
   $('#dhead').innerHTML = `
     <div class="t1">
       ${iconHtml}
@@ -688,38 +722,61 @@ function renderDrawer() {
       <div>Processes<b>${d.procs}</b></div>
       <div>Users<b>${esc(d.users.join(', ') || '—')}</b></div>
     </div>
-    <div class="dactions">
-      ${d.mainPid ? `<button class="act danger" id="dquit">Quit app (pid ${d.mainPid})</button>` : ''}
-    </div>`;
+    ${d.mainPid ? `<div class="dactions">
+      <button class="act danger" id="dquit">Quit app (pid ${d.mainPid})</button>
+      <button class="act" id="dfquit" title="Send SIGKILL immediately">Force quit</button>
+    </div>` : ''}`;
   $('#dclose').addEventListener('click', closeDrawer);
   const q = $('#dquit');
   if (q) q.addEventListener('click', () => quitApp(S.drawerKey).then((ok) => { if (ok) closeDrawer(); }));
+  const fq = $('#dfquit');
+  if (fq) fq.addEventListener('click', () => forceQuitApp(S.drawerKey).then((ok) => { if (ok) closeDrawer(); }));
 
   const tb = $('#dtable');
   const scroll = tb.scrollTop;
-  tb.innerHTML = d.processes.map((p) => `
+  const now = Date.now();
+  tb.innerHTML = d.processes.map((p) => {
+    let killBtn = '';
+    if (p.pid > 0) {
+      const kp = S.killedPids.get(p.pid);
+      if (kp && now - kp.t < 8000) {
+        if (kp.sig === 'TERM' && now - kp.t >= 1800) {
+          killBtn = `<button class="kill" data-pid="${p.pid}" data-sig="KILL" title="Still running — send SIGKILL">⚡ force kill</button>`;
+        } else {
+          killBtn = `<button class="kill killed" data-pid="${p.pid}" disabled>${kp.sig === 'KILL' ? 'killed ✓' : 'terminating…'}</button>`;
+        }
+      } else {
+        killBtn = `<button class="kill" data-pid="${p.pid}" data-sig="TERM" title="Send SIGTERM to this process">⏏ kill</button>`;
+      }
+    }
+    return `
     <div class="prow" data-pid="${p.pid}">
       <div class="l1">
         <span class="pname" title="${esc(p.args)}">${esc(p.name)}</span>
         ${p.role ? `<span class="role">${esc(p.role)}</span>` : ''}
-        <button class="kill" data-pid="${p.pid}" title="kill this process">⏏ kill</button>
+        ${killBtn}
       </div>
       <div class="pvals">
         <span class="cpu">CPU <b>${fmtPct(p.cpu)}</b></span>
         <span class="mem">MEM <b>${fmtBytes(p.mem)}</b></span>
-        <span>VSZ <b>${fmtBytes(p.vsz)}</b></span>
+        ${p.vsz ? `<span>VSZ <b>${fmtBytes(p.vsz)}</b></span>` : ''}
         <span>state <b>${esc(p.stat)}</b></span>
         <span>up <b>${esc(p.etime)}</b></span>
         <span>pid <b>${p.pid}</b></span>
       </div>
       ${p.desc ? `<div class="desc">${esc(p.desc)}</div>` : ''}
       <div class="cmd" title="${esc(p.args)}">${esc(p.args)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   tb.scrollTop = scroll;
-  tb.querySelectorAll('.kill').forEach((b) => b.addEventListener('click', (e) => {
+  tb.querySelectorAll('.kill:not(:disabled)').forEach((b) => b.addEventListener('click', (e) => {
     e.stopPropagation();
     const pid = +b.dataset.pid;
-    if (confirm(`Kill pid ${pid}?\nSIGTERM first — the process may ignore it.`)) killProc(pid, 'TERM', b);
+    const sig = b.dataset.sig === 'KILL' ? 'KILL' : 'TERM';
+    const msg = sig === 'KILL'
+      ? `Force kill pid ${pid}?\nSends SIGKILL immediately — unsaved work in this process will be lost.`
+      : `Terminate pid ${pid}?\nSends SIGTERM first — if it ignores it, Force Kill will appear.`;
+    if (confirm(msg)) killProc(pid, sig, b);
   }));
   // Right-click a process row → context menu (quit app / kill this process).
   tb.querySelectorAll('.prow').forEach((row) => {
@@ -733,7 +790,13 @@ async function killProc(pid, sig, btn) {
     const r = await fetch('/api/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, sig }) });
     const j = await r.json();
     if (!j.ok) { alert(j.error || 'kill failed'); return false; }
-    if (btn) { btn.textContent = 'killed ✓'; btn.classList.add('killed'); btn.disabled = true; }
+    S.killedPids.set(pid, { sig, t: Date.now() });
+    if (btn) {
+      btn.textContent = sig === 'KILL' ? 'killed ✓' : 'terminating…';
+      btn.classList.add('killed');
+      btn.disabled = true;
+    }
+    setTimeout(() => pollOnce(true), 150);
     return true;
   } catch { alert('kill request failed'); return false; }
 }
@@ -768,7 +831,7 @@ function showContextMenu(e, items, onPick) {
   // Render: separator between the neutral actions and the danger ones.
   const lastSafe = items.reduce((acc, it, i) => (it.danger ? acc : i), -1);
   el.innerHTML = items.map((it, i) =>
-    (it.danger && lastSafe >= 0 && i > lastSafe ? '<div class="sep"></div>' : '') +
+    (it.danger && lastSafe >= 0 && i === lastSafe + 1 ? '<div class="sep"></div>' : '') +
     `<button class="ci${it.danger ? ' danger' : ''}" data-idx="${i}" title="${esc(it.label)}">` +
     `<span class="ci-label">${esc(it.label)}</span>` +
     (it.shortcut ? `<span class="shortcut">${it.shortcut}</span>` : '') +
@@ -836,16 +899,36 @@ function quitApp(key) {
   });
 }
 
+function forceQuitApp(key) {
+  const a = S.apps.get(key);
+  if (!a || !a.data || !a.data.mainPid) return Promise.resolve(false);
+  const d = a.data;
+  if (!confirm(`Force quit “${d.name}” (pid ${d.mainPid})?\nSends SIGKILL immediately — unsaved changes will be lost.`)) {
+    return Promise.resolve(false);
+  }
+  return killProc(d.mainPid, 'KILL').then((ok) => {
+    if (ok) {
+      markClosing(key);
+      renderPanel('cpu'); renderPanel('mem');
+    }
+    return ok;
+  });
+}
+
 // Right-click an app row in a panel.
 function ctxForApp(e, key) {
   const a = S.apps.get(key);
   if (!a || !a.data) return;
   const items = [{ action: 'open', label: 'Open Details', shortcut: '↵' }];
-  if (a.data.mainPid) items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
+  if (a.data.mainPid) {
+    items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
+    items.push({ action: 'fquit', label: `Force Quit ${a.data.name}`, shortcut: '⌥⌘⎋', danger: true });
+  }
   ctxTarget = { key };
   showContextMenu(e, items, (it) => {
     if (it.action === 'open') openDrawer(key);
     else if (it.action === 'quit') quitApp(key);
+    else if (it.action === 'fquit') forceQuitApp(key);
   });
 }
 
@@ -855,12 +938,22 @@ function ctxForProc(e, key, pid) {
   if (!a || !a.data) return;
   const items = [];
   if (a.data.mainPid) items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
-  items.push({ action: 'kill', label: `Kill pid ${pid}`, danger: true });
+  if (pid > 0) {
+    items.push({ action: 'kill', label: `Terminate pid ${pid}`, danger: true });
+    items.push({ action: 'fkill', label: `Force Kill pid ${pid}`, danger: true });
+  }
+  if (!items.length) { e.preventDefault(); closeCtxMenu(); return; }
   ctxTarget = { key, pid };
   showContextMenu(e, items, (it) => {
     if (it.action === 'quit') quitApp(key);
     else if (it.action === 'kill') {
-      if (confirm(`Kill pid ${pid}?\nSIGTERM first — the process may ignore it.`)) killProc(pid, 'TERM');
+      if (confirm(`Terminate pid ${pid}?\nSends SIGTERM first — if it ignores it, use Force Kill.`)) {
+        killProc(pid, 'TERM').then((ok) => { if (ok && S.drawerKey) renderDrawer(); });
+      }
+    } else if (it.action === 'fkill') {
+      if (confirm(`Force kill pid ${pid}?\nSends SIGKILL immediately — unsaved work in this process will be lost.`)) {
+        killProc(pid, 'KILL').then((ok) => { if (ok && S.drawerKey) renderDrawer(); });
+      }
     }
   });
 }
@@ -875,7 +968,6 @@ document.addEventListener('click', (e) => {
   const el = document.getElementById('ctx-menu');
   if (el && !el.contains(e.target)) closeCtxMenu();
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCtxMenu(); });
 
 /* ================= system cards ================= */
 function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }
@@ -886,7 +978,6 @@ function renderSys() {
   // header
   $('#machine').innerHTML = `<b>${esc(s.model)}</b> · ${esc(s.chip || '')} · ${esc(s.memLabel || fmtBytes(s.memTotal))} · ${s.cores} cores`;
   $('#h-uptime').textContent = fmtDur(s.uptime);
-  $('#h-load').textContent = s.load.map((x) => x.toFixed(2)).join(' ');
   const bw = $('#h-batt-wrap');
   if (s.batt && s.batt.pct != null) {
     bw.style.display = '';
@@ -896,51 +987,78 @@ function renderSys() {
 
   // cpu card
   $('#cpu-big').textContent = fmtPct(s.cpu.total);
-  $('#cpu-sub').innerHTML = `user <b>${s.cpu.user.toFixed(1)}%</b> sys <b>${s.cpu.sys.toFixed(1)}%</b> idle <b>${s.cpu.idle.toFixed(0)}%</b>`;
+  $('#cpu-sub').innerHTML = `<span>user <b>${s.cpu.user.toFixed(1)}%</b></span><span>sys <b>${s.cpu.sys.toFixed(1)}%</b></span>`;
   pushHist(S.sysHist.cpu, s.cpu.total);
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
 
-  // memory card
+  // memory card — Activity Monitor's "Memory Used" (Apps + Wired + Compressed,
+  // excluding reclaimable file cache) as the headline, with the 4 active pools
+  // in the bar + 2×2 legend below (the bar's track represents free RAM).
   const mt = s.memTotal || 1;
-  $('#mem-big').textContent = fmtPct((s.mem.used / mt) * 100);
-  // Swap is the one bucket that means real pressure (data actually on SSD),
-  // so it shows when it's meaningful — but near-zero swap is noise, and the
-  // "total" is auto-allocated on macOS (it means nothing), so it's omitted.
-  $('#mem-sub').innerHTML = `<b>${fmtBytes(s.mem.used)}</b> of ${fmtBytes(s.memTotal)} used` +
-    (s.swap.used > 16 * 1024 * 1024 ? ` · swap <b>${fmtBytes(s.swap.used)}</b>` : '');
-  // Segments are persistent elements — widths update in place, so the bar's
-  // CSS transition actually eases between values (a purge visibly drains
-  // cache into free; no DOM rebuild, like the rowEls pattern).
+  const inUse = s.mem.inUse ?? Math.max(0, s.mem.used - (s.mem.cache || 0));
+  $('#mem-big').textContent = fmtPct((inUse / mt) * 100);
+  const totalLabel = s.memLabel || fmtBytes(s.memTotal).replace(/\.0 /, ' ');
+  const inUseStr = fmtBytes(inUse);
+  if (s.swap && s.swap.used > 16 * 1024 * 1024) {
+    const shortInUse = inUseStr.endsWith(' GB') && totalLabel.endsWith(' GB') ? inUseStr.slice(0, -3) : inUseStr;
+    $('#mem-sub').innerHTML = `<span><b>${shortInUse}</b> / ${esc(totalLabel)}</span><span>swap <b>${fmtBytes(s.swap.used)}</b></span>`;
+  } else {
+    $('#mem-sub').innerHTML = `<span><b>${inUseStr}</b> of ${esc(totalLabel)}</span>`;
+  }
+  // Persistent segment elements so CSS width transitions animate smoothly.
   const segs = [
-    ['apps', s.mem.apps], ['wired', s.mem.wired], ['comp', s.mem.compressed],
-    ['cache', s.mem.cache], ['free', s.mem.free],
+    ['apps', 'Apps', s.mem.apps],
+    ['wired', 'Wired', s.mem.wired],
+    ['comp', 'Compressed', s.mem.compressed],
+    ['cache', 'File cache', s.mem.cache],
   ];
   const bar = $('#membar');
-  for (const [c, v] of segs) {
+  const staleFree = bar.querySelector('.seg.free');
+  if (staleFree) staleFree.remove();
+  for (const [c, label, v] of segs) {
     let el = bar.querySelector('.seg.' + c);
     if (!el) { el = document.createElement('div'); el.className = 'seg ' + c; bar.appendChild(el); }
     el.style.width = Math.max(0, (v / mt) * 100) + '%';
+    el.title = `${label}: ${fmtBytes(v)}`;
   }
-  $('#memlegend').innerHTML = [
-    ['apps', 'Apps', s.mem.apps, 'var(--mem)'], ['wired', 'Wired', s.mem.wired, 'var(--wired)'],
-    ['comp', 'Compressed', s.mem.compressed, 'var(--comp)'], ['cache', 'Cache', s.mem.cache, 'var(--cache)'],
-    ['free', 'Free', s.mem.free, 'var(--free)'],
-  ].map(([c, label, v, col]) => `<span><i style="background:${col}"></i>${label} <b>${fmtBytes(v)}</b></span>`).join('');
-  pushHist(S.sysHist.mem, (s.mem.used / mt) * 100);
+  bar.title = `In use: ${inUseStr} · Cache: ${fmtBytes(s.mem.cache)} · Free: ${fmtBytes(s.mem.free)}`;
+  const leg = $('#memlegend');
+  const legItems = [
+    ['apps', 'Apps', s.mem.apps, 'var(--mem)', false],
+    ['wired', 'Wired', s.mem.wired, 'var(--wired)', true],
+    ['comp', 'Compressed', s.mem.compressed, 'var(--comp)', true],
+    ['cache', 'Cache', s.mem.cache, 'var(--cache)', true],
+  ];
+  for (const [c, label, v, col, clickable] of legItems) {
+    let item = leg.querySelector(`.ml[data-seg="${c}"]`);
+    if (!item) {
+      item = document.createElement('span');
+      item.className = 'ml' + (clickable ? ' clickable' : '');
+      item.dataset.seg = c;
+      if (clickable) {
+        item.title = 'What is this & how to free it';
+        item.addEventListener('click', (e) => { e.stopPropagation(); setMemPop(!memPop); });
+      }
+      item.innerHTML = `<i style="background:${col}"></i>${label} <b></b>`;
+      leg.appendChild(item);
+    }
+    item.querySelector('b').textContent = fmtBytes(v);
+  }
   pushHist(S.sysHist.wired, s.mem.wired);
   pushHist(S.sysHist.comp, s.mem.compressed);
   pushHist(S.sysHist.cache, s.mem.cache);
 
-  // net card
-  $('#net-big').textContent = fmtRate(s.net.down);
-  $('#net-sub').innerHTML = `↓ <b>${fmtRate(s.net.down)}</b> &nbsp; ↑ <b>${fmtRate(s.net.up)}</b>`;
+  // net card — headline matches the combined ↓+↑ sparkline; subtitle splits ↓ and ↑
+  $('#net-big').textContent = fmtRate(s.net.down + s.net.up);
+  $('#net-sub').innerHTML = `<span>↓ <b>${fmtRate(s.net.down)}</b></span><span>↑ <b>${fmtRate(s.net.up)}</b></span>`;
   pushHist(S.sysHist.net, s.net.down + s.net.up);
   drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');
 
   // disk card
-  $('#disk-big').textContent = s.disk.mbps.toFixed(1) + ' MB/s';
-  $('#disk-sub').innerHTML = `read + write`;
-  pushHist(S.sysHist.disk, s.disk.mbps);
+  const mbps = s.disk.mbps || 0;
+  $('#disk-big').textContent = mbps >= 1024 ? (mbps / 1024).toFixed(2) + ' GB/s' : (mbps >= 10 ? mbps.toFixed(0) : mbps.toFixed(1)) + ' MB/s';
+  $('#disk-sub').innerHTML = '<span>read + write</span>';
+  pushHist(S.sysHist.disk, mbps);
   drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
 
   $('#hint').textContent = `${s.procCount} processes · ${s.appCount} apps`;
@@ -948,7 +1066,28 @@ function renderSys() {
 }
 
 /* ================= tick ================= */
+let lastSnapT = 0;
+let lastFreshWall = 0;
+let bootServerMtime = null;
+let bootUiMtime = null;
+
 function onTick(p) {
+  if (!p || !p.sys || !Array.isArray(p.apps)) return;
+  if (p.serverMtime) {
+    if (bootServerMtime === null) bootServerMtime = p.serverMtime;
+    else if (p.serverMtime !== bootServerMtime) { location.reload(); return; }
+  }
+  if (p.uiMtime) {
+    if (bootUiMtime === null) bootUiMtime = p.uiMtime;
+    else if (p.uiMtime !== bootUiMtime) { location.reload(); return; }
+  }
+  const now = Date.now();
+  // Never re-render an older or duplicate snapshot, and never mark >10s-old data as live.
+  if (p.t && p.t <= lastSnapT) return;
+  if (p.t && now - p.t > 10000) { setLive(false); return; }
+  lastSnapT = p.t || now;
+  lastFreshWall = now;
+
   S.sys = p.sys;
   if (p.version) $('#ver').textContent = 'v' + p.version;
   const seen = new Set();
@@ -969,6 +1108,9 @@ function onTick(p) {
       if (t) { clearTimeout(t); S.closingTimers.delete(key); }
     }
   }
+  for (const [pid, info] of S.killedPids) {
+    if (now - info.t >= 8000) S.killedPids.delete(pid);
+  }
 
   renderSys();
   renderPanel('cpu');
@@ -986,45 +1128,87 @@ function setLive(on) {
   $('#live-text').textContent = on ? 'live' : 'reconnecting…';
 }
 
-/* ================= live data (SSE, with polling fallback) ================= */
+/* ================= live data (SSE + freshness watchdog + polling fallback) ================= */
+let es = null;
 let pollTimer = null;
+let reconnectTimer = null;
 let sseFails = 0;
+let pollBusy = false;
 
-async function pollOnce() {
+async function pollOnce(fresh = false) {
+  if (pollBusy) return;
+  pollBusy = true;
   try {
-    const r = await fetch('/api/snapshot');
-    if (r.ok) { onTick(await r.json()); setLive(true); }
+    const r = await fetch(fresh ? '/api/snapshot?fresh=1' : '/api/snapshot', { cache: 'no-store' });
+    if (r.ok) onTick(await r.json());
     else setLive(false);
-  } catch { setLive(false); }
+  } catch {
+    setLive(false);
+  } finally {
+    pollBusy = false;
+  }
 }
 
-function connect() {
-  if (pollTimer) return;
+function connect(forceReset = false) {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (forceReset && es) {
+    try { es.close(); } catch { /* noop */ }
+    es = null;
+  }
   if (typeof EventSource === 'undefined') {
-    // some webviews lack EventSource → poll instead
-    setLive(false);
-    pollOnce();
-    pollTimer = setInterval(pollOnce, 1500);
+    if (!pollTimer) {
+      setLive(false);
+      pollOnce(true);
+      pollTimer = setInterval(() => pollOnce(false), 1500);
+    }
     return;
   }
-  const es = new EventSource('/events');
-  es.onopen = () => { sseFails = 0; setLive(true); };
-  es.onmessage = (e) => { try { onTick(JSON.parse(e.data)); } catch { /* skip */ } };
-  es.onerror = () => {
-    es.close();
+  if (es) return;
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  const stream = new EventSource('/events');
+  es = stream;
+  stream.onopen = () => { sseFails = 0; };
+  stream.onmessage = (e) => { try { onTick(JSON.parse(e.data)); } catch { /* skip */ } };
+  stream.onerror = () => {
+    if (es === stream) es = null;
+    try { stream.close(); } catch { /* noop */ }
     setLive(false);
     if (++sseFails >= 3) {
-      // EventSource keeps failing in this environment → fall back to polling
-      pollOnce();
-      pollTimer = setInterval(pollOnce, 1500);
+      pollOnce(true);
+      if (!pollTimer) pollTimer = setInterval(() => pollOnce(false), 1500);
+      // Periodically try upgrading back to SSE in case the drop was transient.
+      reconnectTimer = setTimeout(() => { sseFails = 0; connect(true); }, 10000);
     } else {
-      setTimeout(connect, 1500);
+      reconnectTimer = setTimeout(() => connect(false), 1200);
     }
   };
 }
 
+// Liveness watchdog: never claim "live" when ticks have stalled (sleep/wake,
+// hung socket, restarted server), and actively recover right away.
+setInterval(() => {
+  const silence = lastFreshWall ? Date.now() - lastFreshWall : Infinity;
+  if (silence > 4500) {
+    setLive(false);
+    pollOnce(true);
+    if (es) connect(true);
+  }
+}, 1500);
+
+window.__pulseWake = () => {
+  if (!lastFreshWall || Date.now() - lastFreshWall > 1800) {
+    pollOnce(true);
+    if (!es || es.readyState !== 1) connect(true);
+  }
+};
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') window.__pulseWake();
+});
+window.addEventListener('focus', () => window.__pulseWake());
+
 /* ================= init ================= */
-$('#search').addEventListener('input', (e) => {
+const searchEl = $('#search');
+searchEl.addEventListener('input', (e) => {
   S.search = e.target.value.trim();
   renderPanel('cpu');
   renderPanel('mem');
@@ -1037,11 +1221,33 @@ $('#mem-info').addEventListener('click', (e) => {
 });
 $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
 document.addEventListener('click', (e) => {
-  if (memPop && !e.target.closest('#mempop') && !e.target.closest('#mem-info')) setMemPop(false);
+  if (memPop && !e.target.closest('#mempop') && !e.target.closest('#mem-info') && !e.target.closest('.ml.clickable')) {
+    setMemPop(false);
+  }
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMemPop(false); });
 $('#scrim').addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', (e) => {
+  const inInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+  if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') || (!inInput && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === '/')) {
+    e.preventDefault();
+    searchEl.focus();
+    searchEl.select();
+    return;
+  }
+  if (e.key === 'Escape') {
+    const cm = $('#ctx-menu');
+    if (cm && cm.classList.contains('on')) { closeCtxMenu(); return; }
+    if (memPop) { setMemPop(false); return; }
+    if (S.drawerKey) { closeDrawer(); return; }
+    if (S.search || document.activeElement === searchEl) {
+      searchEl.value = '';
+      S.search = '';
+      searchEl.blur();
+      renderPanel('cpu');
+      renderPanel('mem');
+    }
+  }
+});
 window.addEventListener('resize', () => {
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
   drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');

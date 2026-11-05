@@ -15,17 +15,25 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   t: <ms epoch>,
   version: <string|null>,   // app version — source of truth is app/Info.plist
                             // (PULSE_VERSION env in app mode, plist read in web mode)
+  serverMtime: <sec epoch>, // mtime of the running server.js at boot (used by Pulse.swift
+                            // & index.html so UI and backend never go out of sync)
+  uiMtime: <sec epoch>,     // mtime of index.html on disk (auto-reloads UI on edit/rebuild)
   sys: {
     model, chip, memLabel,      // from system_profiler; null until it finishes loading
-    hostname, cores, memTotal,  // memTotal in bytes
+    cores, memTotal,            // memTotal in bytes
     cpu:  { user, sys, idle, total },   // percents; total = 100 - idle
-    mem:  { free, used, apps, wired, compressed, cache },  // bytes; apps+wired+compressed+cache == used
+    mem:  { free, used, apps, wired, compressed, cache, inUse },  // bytes. Activity-Monitor-style:
+                                                                 // wired/compressor are vm_stat measurements,
+                                                                 // cache = vm_stat filebacked + purgeable (capped
+                                                                 // to the non-wired pool), apps = the residual; the
+                                                                 // four segments sum to `used`. `inUse` =
+                                                                 // used − cache = the "Memory Used" figure AM
+                                                                 // shows (App + Wired + Compressed).
     memDetail: {                                            // extra vm_stat counters (bytes), informational only —
       active, inactive, speculative,                        // NOT part of the normalized `mem` segments above;
       purgeable, filebacked, storedCompressed              // powers the memory info popover in index.html
     },
-    swap: { total, used },      // bytes
-    load: [1m, 5m, 15m],
+    swap: { used },                // bytes (total is auto-allocated on macOS — not shipped)
     uptime: <seconds>,
     net:  { down, up },         // bytes/sec
     disk: { mbps },             // MB/s, read + write
@@ -37,8 +45,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     bundle,                    // .app path or null
     icon,                      // /icons/<hash>.png or null
     cpu,                       // % of ALL cores (16 cores fully busy = 100)
-    mem,                       // bytes (sum of process RSS)
-    procs, users: [..], mainPid,
+    mem,                       // bytes — physical footprint per process (top's MEM,
+                               // the number Activity Monitor shows; RSS fallback),
+                               // summed over the app's processes
+    procs, users: [..], mainPid,   // mainPid is always > 0 or null (PID 0 kernel_task is never killable)
     processes: [{ pid, ppid, user, name, cpu, mem, vsz, stat, etime, args, role, desc }]
   }]
 }
@@ -47,8 +57,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
 ## The /api/status shape (server.js ⇄ Pulse.swift)
 
 ```js
-{ cpu: { user, sys, idle, total },   // SYSTEM cpu (from top) — NOT an app
-  memPct, memUsed, memTotal,
+{ t: <ms epoch>,                     // sample completion timestamp
+  serverMtime: <sec epoch>,          // mtime of server.js at boot (triggers live backend reload on rebuild)
+  cpu: { user, sys, idle, total },   // SYSTEM cpu (from top) — NOT an app
+  memPct, memUsed, memTotal,         // AM-style: memUsed = used − file cache
   topCpu: { name, cpu },             // top app by cpu
   topMem: { name, mem },
   purge: <id> }                      // OPTIONAL — only while a purge is queued;
