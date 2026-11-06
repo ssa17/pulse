@@ -107,3 +107,11 @@ One-line summaries, so you know what exists without opening them:
   plus how the app finds / reuses / spawns the backend and how the self-test drives the UI.
 - **gotchas.md** — the non-obvious output formats of the macOS tools the parsers
   depend on, and why each parser is shaped the way it is.
+
+## Local work artifacts — `.work/` (gitignored — never commit)
+
+`.work/` is the local-only workspace: task briefs (`.work/briefs/`), screenshots
+(`.work/screenshots/`), measurement baselines (`.work/baselines/<date>/`), personal
+reference notes (`.work/notes/`). It may contain this machine's data (app names,
+paths) — put new working artifacts there, not in `docs/` (which is tracked and
+shared). See `.work/README.md` for the layout.

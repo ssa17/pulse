@@ -18,9 +18,9 @@ vendor/sparkle/
 # Secrets — never commit signing keys
 secrets/
 
-# Maintainer-only distribution setup notes (the committed distribution-guide.md
-# is the streamlined version; this keeps the full one-time-setup walkthrough)
-docs/distribution-setup.md
+# Local-only working workspace — task briefs, screenshots, baselines, personal notes
+# (may contain the maintainer's machine data; never commit — see AGENTS.md & .work/README.md)
+.work/
 
 # macOS
 .DS_Store
@@ -30,10 +30,3 @@ docs/distribution-setup.md
 
 # Node (if dependencies are ever added)
 node_modules/
-
-# Task-brief artifacts — kept LOCAL-ONLY by user decision (useful for the maintainer and local
-# agents, but not part of the repo): the brief, both screenshots (the dashboard one shows the
-# user's own apps), and date-stamped measurement baselines
-docs/screenshots/
-docs/baseline-*/
-docs/prompt-lightweight-responsiveness.md
