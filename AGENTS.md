@@ -114,4 +114,8 @@ One-line summaries, so you know what exists without opening them:
 (`.work/screenshots/`), measurement baselines (`.work/baselines/<date>/`), personal
 reference notes (`.work/notes/`). It may contain this machine's data (app names,
 paths) — put new working artifacts there, not in `docs/` (which is tracked and
-shared). See `.work/README.md` for the layout.
+shared). See `.work/README.md` for the layout. Personal (cross-project) agent
+skills belong in the user-level skills dirs (`~/.agents/skills/`,
+`~/.claude/skills/`) — not in the repo and not in `.work/` (no tool auto-loads
+from there); the only repo-tracked skill is `.agents/skills/changelog` (the
+release contract, invariant 7).
