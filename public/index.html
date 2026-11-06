@@ -45,13 +45,20 @@
   }
   .logo { font-size: 15px; font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
   .logo .ver { color: var(--dim); font-size: 11px; font-weight: 600; }
-  .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cpu); box-shadow: 0 0 10px var(--cpu); animation: pulse 2s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cpu); box-shadow: 0 0 8px var(--cpu); }
   .machine { color: var(--dim); font-size: 12.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine b { color: var(--text); font-weight: 600; }
-  .hmeta { margin-left: auto; display: flex; gap: 16px; color: var(--dim); font-size: 12px; }
+  .hmeta { margin-left: auto; display: flex; align-items: center; gap: 16px; color: var(--dim); font-size: 12px; }
   .hmeta b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .hmeta .batt-charging { color: var(--net); }
+  .hdr-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--panel2); color: var(--dim); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 10px; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: color .15s, border-color .15s, background .15s;
+  }
+  .hdr-btn:hover, .hdr-btn.on { color: var(--text); border-color: #3a4560; background: #1d2230; }
+  .hdr-btn svg { flex-shrink: 0; opacity: .85; }
 
   /* ---------- stat cards ---------- */
   .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -78,7 +85,7 @@
   .card.disk .big, .card.disk .label { color: var(--disk); }
 
   .membar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: var(--free); margin-top: auto; }
-  .membar .seg { height: 100%; transition: width .6s ease; }
+  .membar .seg { height: 100%; }
   .seg.apps { background: var(--mem); } .seg.wired { background: var(--wired); }
   .seg.comp { background: var(--comp); } .seg.cache { background: var(--cache); }
   .memlegend {
@@ -102,7 +109,18 @@
   .toolbar .hint { color: var(--faint); font-size: 12px; }
   .toolbar .live { margin-left: auto; color: var(--faint); font-size: 11.5px; display: flex; align-items: center; gap: 6px; }
   .toolbar .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--net); }
+  .toolbar .live.connecting .dot { background: var(--cpu); }
   .toolbar .live.off .dot { background: var(--danger); }
+
+  /* ---------- connecting skeleton ---------- */
+  .skel-list { display: flex; flex-direction: column; }
+  .skel-row {
+    display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 68px 74px;
+    gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #1a1f2b;
+    opacity: .55;
+  }
+  .skel-box { background: #1c2230; border-radius: 5px; height: 10px; }
+  .skel-icon { width: 26px; height: 26px; border-radius: 6px; background: #1c2230; }
 
   /* ---------- panels ---------- */
   .panels { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
@@ -124,7 +142,6 @@
     display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 68px 74px;
     gap: 10px; align-items: center; padding: 7px 14px; cursor: pointer;
     border-bottom: 1px solid #1a1f2b;
-    transition: opacity .35s ease;
   }
   .row:hover { background: var(--panel2); }
   .row.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--cpu); }
@@ -140,7 +157,7 @@
   .badge.other { background: rgba(176,124,255,.15); color: var(--disk); }
   .badge.closing { background: rgba(255,159,67,.15); color: var(--cpu); }
   .bar { height: 8px; background: #1c2230; border-radius: 4px; overflow: hidden; }
-  .bar .fill { height: 100%; border-radius: 4px; transition: width .5s ease; min-width: 1px; }
+  .bar .fill { height: 100%; border-radius: 4px; min-width: 1px; }
   .row .val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12.5px; }
   .row canvas.spark { width: 74px; height: 24px; }
   .showall {
@@ -186,16 +203,97 @@
   .mempop .mp-status.bad { color: var(--danger); }
   .mempop .mp-tip { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1f2b; font-size: 11px; color: var(--faint); }
 
+  /* ---------- settings modal ---------- */
+  #settings-scrim {
+    position: fixed; inset: 0; background: rgba(6, 8, 12, .72);
+    display: none; align-items: center; justify-content: center; padding: 20px; z-index: 160;
+  }
+  #settings-scrim.on { display: flex; }
+  .s-modal {
+    width: 100%; max-width: 472px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: 0 20px 54px rgba(0,0,0,.6); overflow: hidden;
+  }
+  .s-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 15px 18px 13px; border-bottom: 1px solid var(--border);
+  }
+  .s-head h2 { font-size: 14.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .s-head .s-kbd {
+    font-size: 10px; font-weight: 600; color: var(--faint); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .s-head .s-sub { color: var(--dim); font-size: 11.5px; margin-top: 2px; }
+  .s-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .s-card {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .s-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .s-info { flex: 1; min-width: 0; }
+  .s-title {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  }
+  .s-desc { color: var(--dim); font-size: 11.5px; line-height: 1.45; margin-top: 3px; }
+  .s-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px;
+    background: rgba(139,148,167,.12); color: var(--dim); letter-spacing: .2px;
+  }
+  .s-pill .pdot { width: 5.5px; height: 5.5px; border-radius: 50%; background: currentColor; }
+  .s-pill.active { background: rgba(45,212,167,.14); color: var(--net); }
+  .s-pill.busy { background: rgba(255,159,67,.15); color: var(--cpu); }
+  .s-pill.err { background: rgba(255,95,87,.15); color: var(--danger); }
+  .s-pill.mem { background: rgba(77,159,255,.13); color: var(--mem); }
+  .s-err { color: var(--danger); font-size: 11px; margin-top: 2px; }
+  .s-err[hidden] { display: none; }
+  /* pill toggle switch */
+  button.sw {
+    position: relative; width: 38px; height: 22px; border-radius: 99px; flex-shrink: 0;
+    background: #262e3f; border: 1px solid #333d52; cursor: pointer; padding: 0;
+    transition: background .16s ease, border-color .16s ease; margin-top: 1px;
+  }
+  button.sw .knob {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: #c5cddb; box-shadow: 0 1px 3px rgba(0,0,0,.45);
+    transition: transform .16s cubic-bezier(.2,.85,.32,1.1), background .16s ease;
+  }
+  button.sw[aria-checked="true"] { background: rgba(45,212,167,.25); border-color: var(--net); }
+  button.sw[aria-checked="true"] .knob { transform: translateX(16px); background: var(--net); }
+  button.sw:hover { border-color: #495673; }
+  button.sw[aria-checked="true"]:hover { border-color: #4ce3b8; }
+  /* segmented control */
+  .s-seg {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+    background: #10131b; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
+  }
+  .s-seg button {
+    background: none; border: 1px solid transparent; color: var(--dim);
+    border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: color .14s, background .14s, border-color .14s;
+  }
+  .s-seg button:hover { color: var(--text); }
+  .s-seg button.on {
+    background: var(--panel2); color: var(--text); border-color: #2f384c;
+    box-shadow: 0 1px 3px rgba(0,0,0,.35);
+  }
+  .s-foot {
+    padding: 10px 18px 12px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    color: var(--faint); font-size: 11px;
+  }
+  .s-foot code { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--dim); font-size: 10.5px; }
+
   /* ---------- drawer ---------- */
-  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; }
-  #scrim.on { opacity: 1; pointer-events: auto; }
+  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; z-index: 40; }
+  #scrim.on { display: block; }
   #drawer {
     position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 50;
     background: var(--panel); border-left: 1px solid var(--border);
-    transform: translateX(105%); transition: transform .22s ease;
-    display: flex; flex-direction: column;
+    display: none; flex-direction: column;
   }
-  #drawer.on { transform: translateX(0); }
+  #drawer.on { display: flex; }
   .dhead { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
   .dhead .t1 { display: flex; align-items: center; gap: 10px; }
   .dhead .icon { width: 34px; height: 34px; border-radius: 8px; object-fit: contain; background: #1d2330; }
@@ -245,16 +343,11 @@
     min-width: 190px;
     box-shadow: 0 8px 24px rgba(0,0,0,.45);
     z-index: 200;
-    opacity: 0;
-    pointer-events: none;
-    transform: scale(0.96);
-    transition: opacity .12s ease, transform .12s ease;
+    display: none;
     user-select: none;
   }
   .ctx-menu.on {
-    opacity: 1;
-    pointer-events: auto;
-    transform: scale(1);
+    display: block;
   }
   .ctx-menu .ci {
     display: flex; align-items: center; gap: 8px;
@@ -288,6 +381,10 @@
     <div class="hmeta">
       <span>uptime <b id="h-uptime">—</b></span>
       <span id="h-batt-wrap">battery <b id="h-batt">—</b></span>
+      <button class="hdr-btn" id="settings-btn" title="Settings (⌘,)" aria-label="Settings">
+        <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.3"/><path d="M8 1.6v1.5M8 12.9v1.5M3.48 3.48l1.06 1.06M11.46 11.46l1.06 1.06M1.6 8h1.5M12.9 8h1.5M3.48 12.52l1.06-1.06M11.46 4.54l1.06-1.06"/></svg>
+        <span>Settings</span>
+      </button>
     </div>
   </header>
 
@@ -317,19 +414,37 @@
 
   <section class="toolbar">
     <input id="search" type="search" placeholder="Search apps or processes… (⌘F)" autocomplete="off" spellcheck="false">
-    <span class="hint" id="hint"></span>
-    <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
+    <span class="hint" id="hint">connecting to local sampler…</span>
+    <span class="live connecting" id="live"><span class="dot"></span><span id="live-text">connecting…</span></span>
   </section>
 
   <section class="panels">
     <div class="panel">
       <h2><span class="swatch" style="background:var(--cpu)"></span>Top CPU <span class="note" id="note-cpu">share of all cores</span></h2>
-      <div class="rows" id="rows-cpu"></div>
+      <div class="rows" id="rows-cpu">
+        <div class="skel-list" id="skel-cpu">
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:68%;margin-bottom:5px"></div><div class="skel-box" style="width:45%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:54%;margin-bottom:5px"></div><div class="skel-box" style="width:38%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:74%;margin-bottom:5px"></div><div class="skel-box" style="width:50%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:60%;margin-bottom:5px"></div><div class="skel-box" style="width:42%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:48%;margin-bottom:5px"></div><div class="skel-box" style="width:35%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:64%;margin-bottom:5px"></div><div class="skel-box" style="width:44%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+        </div>
+      </div>
       <button class="showall" id="showall-cpu"></button>
     </div>
     <div class="panel">
       <h2><span class="swatch" style="background:var(--mem)"></span>Top Memory <span class="note">share of total RAM</span></h2>
-      <div class="rows" id="rows-mem"></div>
+      <div class="rows" id="rows-mem">
+        <div class="skel-list" id="skel-mem">
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:66%;margin-bottom:5px"></div><div class="skel-box" style="width:46%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:58%;margin-bottom:5px"></div><div class="skel-box" style="width:40%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:72%;margin-bottom:5px"></div><div class="skel-box" style="width:48%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:52%;margin-bottom:5px"></div><div class="skel-box" style="width:36%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:62%;margin-bottom:5px"></div><div class="skel-box" style="width:42%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+          <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:50%;margin-bottom:5px"></div><div class="skel-box" style="width:34%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
+        </div>
+      </div>
       <button class="showall" id="showall-mem"></button>
     </div>
   </section>
@@ -362,6 +477,59 @@
     <p id="mem-purge-status" class="mp-status" hidden></p>
   </div>
   <div class="mp-tip">Real usage? Quit the hogs in the Top Memory panel — their resident + compressed pages both go.</div>
+  <div class="mp-tip" id="pop-webkit-note">Pulse's WebKit rendering processes appear separately in Activity Monitor (macOS runs web views as standalone system XPC services).</div>
+</div>
+<div id="settings-scrim" aria-hidden="true">
+  <div class="s-modal" id="settings-modal" role="dialog" aria-labelledby="s-title">
+    <div class="s-head">
+      <div>
+        <h2 id="s-title">Pulse Settings <span class="s-kbd">⌘,</span></h2>
+        <div class="s-sub">Background daemon, menu bar &amp; memory lifecycle</div>
+      </div>
+      <button class="dclose" id="settings-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="s-body">
+      <div class="s-card">
+        <div class="s-row">
+          <div class="s-info">
+            <div class="s-title">
+              Start at login
+              <span class="s-pill" id="st-daemon-badge"><span class="pdot"></span><span id="st-daemon-text">Off</span></span>
+            </div>
+            <div class="s-desc">Runs the sampler via a macOS LaunchAgent so history and metrics are already warm the instant you open Pulse.</div>
+            <div class="s-err" id="st-daemon-err" hidden></div>
+          </div>
+          <button class="sw" id="sw-login" role="switch" aria-checked="false" aria-label="Start at login"><span class="knob"></span></button>
+        </div>
+      </div>
+      <div class="s-card">
+        <div class="s-info">
+          <div class="s-title">When the window is closed</div>
+          <div class="s-desc">Keep Pulse active in the macOS menu bar with live CPU &amp; memory bars, or quit completely when closing the window.</div>
+        </div>
+        <div class="s-seg" id="seg-close" role="radiogroup" aria-label="When the window is closed">
+          <button type="button" data-val="background" class="on">Keep in Menu Bar</button>
+          <button type="button" data-val="quit">Quit Pulse</button>
+        </div>
+      </div>
+      <div class="s-card">
+        <div class="s-row">
+          <div class="s-info">
+            <div class="s-title">
+              Keep dashboard in memory
+              <span class="s-pill mem">Off saves ~120 MB</span>
+            </div>
+            <div class="s-desc">When off, closing the window releases WebKit rendering processes and reloads (&lt;0.5s) on reopen. Turn on to keep the page resident.</div>
+          </div>
+          <button class="sw" id="sw-keepmem" role="switch" aria-checked="false" aria-label="Keep dashboard in memory when closed"><span class="knob"></span></button>
+        </div>
+      </div>
+    </div>
+    <div class="s-foot">
+      <span>Saved in <code>~/.pulse/settings.json</code></span>
+      <span>Esc to close</span>
+    </div>
+  </div>
 </div>
 <div class="ctx-menu" id="ctx-menu"></div>
 
@@ -432,14 +600,15 @@ function esc(s) {
 
 /* ================= sparklines ================= */
 function drawSpark(canvas, data, color) {
+  if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !h) return;
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  if (data.length < 2) return;
+  if (!data || data.length < 2) return;
   const max = Math.max(...data, 1e-9);
   const step = w / (HIST - 1);
   const x0 = w - (data.length - 1) * step;
@@ -459,6 +628,13 @@ function drawSpark(canvas, data, color) {
   ctx.fillStyle = color;
   ctx.fill();
   ctx.globalAlpha = 1;
+}
+
+function releaseSpark(canvas) {
+  if (canvas && (canvas.width > 0 || canvas.height > 0)) {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
 }
 
 /* ================= rows ================= */
@@ -578,12 +754,13 @@ function renderPanel(which) {
     const a = S.apps.get(d.key);
     drawSpark(r.spark, metric === 'cpu' ? a.cpuHist : a.memHist, metric === 'cpu' ? '#ff9f43' : '#4d9fff');
   }
-  // hide this panel's rows that fell out of the visible set (keep DOM for reuse)
+  // hide this panel's rows that fell out of the visible set (keep DOM for reuse, release GPU canvas backing store)
   for (const r of rowEls.values()) {
     if (r.panel !== which) continue;
     if (!seen.has(r.key) && r.el.parentNode === container) {
       r.el.style.display = 'none';
       r.el.classList.remove('closing'); // stale "closing…" state on a hidden row (rebuilds when it reappears)
+      releaseSpark(r.spark);
     }
   }
   // empty state
@@ -639,8 +816,13 @@ function setMemPop(open) {
   if (open) {
     const r = $('#mem-info').getBoundingClientRect();
     pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 412)) + 'px';
-    pop.style.top = (r.bottom + 8) + 'px';
     renderMemPop();
+    const maxTop = Math.max(12, window.innerHeight - pop.offsetHeight - 12);
+    pop.style.top = Math.min(r.bottom + 8, maxTop) + 'px';
+  } else {
+    releaseSpark($('#pop-wired-spark'));
+    releaseSpark($('#pop-comp-spark'));
+    releaseSpark($('#pop-cache-spark'));
   }
 }
 
@@ -1070,11 +1252,28 @@ function renderSys() {
   $('#note-cpu').textContent = `share of ${s.cores} cores`;
 }
 
+/* ================= startup trace (stage names + timestamps only) ================= */
+let tracedFirstMsg = false;
+let tracedFirstRender = false;
+function traceStage(stage) {
+  try {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pulseTrace) {
+      window.webkit.messageHandlers.pulseTrace.postMessage({ stage, t: Date.now() });
+    }
+  } catch { /* web mode: no native handler */ }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => traceStage('dom_content_loaded'), { once: true });
+} else {
+  traceStage('dom_content_loaded');
+}
+
 /* ================= tick ================= */
 let lastSnapT = 0;
 let lastFreshWall = 0;
 let bootServerMtime = null;
 let bootUiMtime = null;
+let skelCleared = false;
 
 function onTick(p) {
   if (!p || !p.sys || !Array.isArray(p.apps)) return;
@@ -1093,6 +1292,11 @@ function onTick(p) {
   lastSnapT = p.t || now;
   lastFreshWall = now;
 
+  if (!skelCleared) {
+    skelCleared = true;
+    document.querySelectorAll('.skel-list').forEach((el) => el.remove());
+  }
+
   S.sys = p.sys;
   if (p.version) $('#ver').textContent = 'v' + p.version;
   const seen = new Set();
@@ -1104,7 +1308,20 @@ function onTick(p) {
     pushHist(e.cpuHist, a.cpu);
     pushHist(e.memHist, a.mem);
   }
-  for (const key of [...S.apps.keys()]) if (!seen.has(key)) S.apps.delete(key);
+  for (const key of [...S.apps.keys()]) {
+    if (!seen.has(key)) {
+      S.apps.delete(key);
+      for (const panel of ['cpu', 'mem']) {
+        const rk = panel + ':' + key;
+        const r = rowEls.get(rk);
+        if (r) {
+          releaseSpark(r.spark);
+          r.el.remove();
+          rowEls.delete(rk);
+        }
+      }
+    }
+  }
   // closing marks for apps that are gone no longer need their timeout
   for (const key of [...S.closing]) {
     if (!seen.has(key)) {
@@ -1123,13 +1340,22 @@ function onTick(p) {
   renderMemPop();
   if (S.drawerKey) renderDrawer();
   setLive(true);
+  if (!tracedFirstRender) {
+    tracedFirstRender = true;
+    let sent = false;
+    const done = () => { if (!sent) { sent = true; traceStage('first_render'); } };
+    requestAnimationFrame(done);
+    setTimeout(done, 25);
+  }
   // A new tick does NOT close an open context menu (the user should be able
   // to take their time) — unless the app it acts on has gone away.
   if (ctxTarget && !S.apps.get(ctxTarget.key)) closeCtxMenu();
 }
 
 function setLive(on) {
-  $('#live').classList.toggle('off', !on);
+  const el = $('#live');
+  el.classList.remove('connecting');
+  el.classList.toggle('off', !on);
   $('#live-text').textContent = on ? 'live' : 'reconnecting…';
 }
 
@@ -1145,7 +1371,11 @@ async function pollOnce(fresh = false) {
   pollBusy = true;
   try {
     const r = await fetch(fresh ? '/api/snapshot?fresh=1' : '/api/snapshot', { cache: 'no-store' });
-    if (r.ok) onTick(await r.json());
+    if (r.ok) {
+      const data = await r.json();
+      if (!tracedFirstMsg && data && data.sys) { tracedFirstMsg = true; traceStage('first_sse_message'); }
+      onTick(data);
+    }
     else setLive(false);
   } catch {
     setLive(false);
@@ -1173,7 +1403,13 @@ function connect(forceReset = false) {
   const stream = new EventSource('/events');
   es = stream;
   stream.onopen = () => { sseFails = 0; };
-  stream.onmessage = (e) => { try { onTick(JSON.parse(e.data)); } catch { /* skip */ } };
+  stream.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (!tracedFirstMsg && data && data.sys) { tracedFirstMsg = true; traceStage('first_sse_message'); }
+      onTick(data);
+    } catch { /* skip */ }
+  };
   stream.onerror = () => {
     if (es === stream) es = null;
     try { stream.close(); } catch { /* noop */ }
@@ -1211,6 +1447,109 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('focus', () => window.__pulseWake());
 
+/* ================= settings modal ================= */
+let settingsOpen = false;
+const settingsState = {
+  startAtLogin: false,
+  closeBehavior: 'background',
+  keepDashboardInMemory: false,
+  daemonStatus: 'off', // 'active' | 'busy' | 'error' | 'stopped' | 'off'
+  daemonError: '',
+};
+
+function renderSettingsUI() {
+  $('#sw-login').setAttribute('aria-checked', settingsState.startAtLogin ? 'true' : 'false');
+  $('#sw-keepmem').setAttribute('aria-checked', settingsState.keepDashboardInMemory ? 'true' : 'false');
+  document.querySelectorAll('#seg-close button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.val === settingsState.closeBehavior);
+  });
+  const badge = $('#st-daemon-badge');
+  const txt = $('#st-daemon-text');
+  const errEl = $('#st-daemon-err');
+  const st = settingsState.daemonStatus;
+  if (settingsState.daemonError) {
+    badge.className = 's-pill err';
+    txt.textContent = 'Error';
+    errEl.textContent = settingsState.daemonError;
+    errEl.hidden = false;
+  } else if (st === 'busy') {
+    badge.className = 's-pill busy';
+    txt.textContent = 'Applying…';
+    errEl.hidden = true;
+  } else if (st === 'active' || (settingsState.startAtLogin && st !== 'stopped')) {
+    badge.className = 's-pill active';
+    txt.textContent = 'Active';
+    errEl.hidden = true;
+  } else if (st === 'stopped') {
+    badge.className = 's-pill';
+    txt.textContent = 'Paused for session';
+    errEl.hidden = true;
+  } else {
+    badge.className = 's-pill';
+    txt.textContent = 'Off';
+    errEl.hidden = true;
+  }
+}
+
+function postNativeSetting(payload) {
+  try {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pulseSettings) {
+      window.webkit.messageHandlers.pulseSettings.postMessage(payload);
+      return true;
+    }
+  } catch { /* fallback to HTTP */ }
+  return false;
+}
+
+async function fetchSettingsFallback() {
+  try {
+    const r = await fetch('/api/settings', { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json();
+      Object.assign(settingsState, d);
+      renderSettingsUI();
+    }
+  } catch { /* noop */ }
+}
+
+async function saveSettingsFallback(patch) {
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      if (d && d.ok) { Object.assign(settingsState, d); renderSettingsUI(); }
+    }
+  } catch { /* noop */ }
+}
+
+function setSettingsModal(open) {
+  settingsOpen = !!open;
+  const scrim = $('#settings-scrim');
+  scrim.classList.toggle('on', settingsOpen);
+  scrim.setAttribute('aria-hidden', settingsOpen ? 'false' : 'true');
+  $('#settings-btn').classList.toggle('on', settingsOpen);
+  if (settingsOpen) {
+    setMemPop(false);
+    closeCtxMenu();
+    if (!postNativeSetting({ action: 'sync' })) {
+      fetchSettingsFallback();
+    }
+    renderSettingsUI();
+  }
+}
+
+window.__pulseSyncSettings = (st) => {
+  if (st && typeof st === 'object') {
+    Object.assign(settingsState, st);
+    renderSettingsUI();
+  }
+};
+window.__pulseOpenSettings = () => setSettingsModal(true);
+
 /* ================= init ================= */
 const searchEl = $('#search');
 searchEl.addEventListener('input', (e) => {
@@ -1225,6 +1564,43 @@ $('#mem-info').addEventListener('click', (e) => {
   setMemPop(!memPop);
 });
 $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
+$('#settings-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setSettingsModal(!settingsOpen);
+});
+$('#settings-close').addEventListener('click', () => setSettingsModal(false));
+$('#settings-scrim').addEventListener('click', (e) => {
+  if (e.target === $('#settings-scrim')) setSettingsModal(false);
+});
+$('#sw-login').addEventListener('click', () => {
+  const next = !settingsState.startAtLogin;
+  settingsState.startAtLogin = next;
+  settingsState.daemonStatus = 'busy';
+  settingsState.daemonError = '';
+  renderSettingsUI();
+  if (!postNativeSetting({ action: 'setStartAtLogin', value: next })) {
+    settingsState.daemonStatus = next ? 'active' : 'off';
+    saveSettingsFallback({ startAtLogin: next });
+  }
+});
+$('#seg-close').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-val]');
+  if (!btn) return;
+  const val = btn.dataset.val === 'quit' ? 'quit' : 'background';
+  settingsState.closeBehavior = val;
+  renderSettingsUI();
+  if (!postNativeSetting({ action: 'setCloseBehavior', value: val })) {
+    saveSettingsFallback({ closeBehavior: val });
+  }
+});
+$('#sw-keepmem').addEventListener('click', () => {
+  const next = !settingsState.keepDashboardInMemory;
+  settingsState.keepDashboardInMemory = next;
+  renderSettingsUI();
+  if (!postNativeSetting({ action: 'setKeepDashboardInMemory', value: next })) {
+    saveSettingsFallback({ keepDashboardInMemory: next });
+  }
+});
 document.addEventListener('click', (e) => {
   if (memPop && !e.target.closest('#mempop') && !e.target.closest('#mem-info') && !e.target.closest('.ml.clickable')) {
     setMemPop(false);
@@ -1233,6 +1609,11 @@ document.addEventListener('click', (e) => {
 $('#scrim').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => {
   const inInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+  if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    e.preventDefault();
+    setSettingsModal(!settingsOpen);
+    return;
+  }
   if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') || (!inInput && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === '/')) {
     e.preventDefault();
     searchEl.focus();
@@ -1242,6 +1623,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const cm = $('#ctx-menu');
     if (cm && cm.classList.contains('on')) { closeCtxMenu(); return; }
+    if (settingsOpen) { setSettingsModal(false); return; }
     if (memPop) { setMemPop(false); return; }
     if (S.drawerKey) { closeDrawer(); return; }
     if (S.search || document.activeElement === searchEl) {
@@ -1261,10 +1643,12 @@ window.addEventListener('resize', () => {
     const r = $('#mem-info').getBoundingClientRect();
     const pop = $('#mempop');
     pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 412)) + 'px';
-    pop.style.top = (r.bottom + 8) + 'px';
     renderMemPop();
+    const maxTop = Math.max(12, window.innerHeight - pop.offsetHeight - 12);
+    pop.style.top = Math.min(r.bottom + 8, maxTop) + 'px';
   }
 });
+if (!postNativeSetting({ action: 'sync' })) fetchSettingsFallback();
 connect();
 </script>
 </body>

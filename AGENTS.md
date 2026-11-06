@@ -15,9 +15,9 @@ a handful of source files.
 
 | File | Role |
 |---|---|
-| `server.js` | Node backend: samples the system every second, groups processes into apps, serves the UI over HTTP + SSE |
+| `server.js` | Node backend: samples the system every second, groups processes into apps, serves the UI over HTTP + SSE (runs app-spawned or as a `launchd` LaunchAgent) |
 | `public/index.html` | The entire UI in one file (vanilla JS + CSS, no build step) |
-| `app/Pulse.swift` | Native macOS shell: WKWebView window, backend lifecycle, menu-bar status item, native dialogs |
+| `app/Pulse.swift` | Native macOS shell: WKWebView window, background/daemon lifecycle, Settings panel, menu-bar status item, native dialogs |
 | `app/Info.plist` | App metadata (bundle id, local-networking exception, icon) |
 | `app/build.sh` | Builds `dist/Pulse.app` (swiftc + sips + iconutil) |
 | `app/make-icon.mjs` | Generates the 1024px app icon (pure-Node PNG writer) |
@@ -34,6 +34,7 @@ server.js  →  one JSON "snapshot" per tick (schema in docs/contracts.md)
    ├─ GET  /events         → SSE stream of snapshots  →  index.html (live updates)
    ├─ GET  /api/snapshot   → last snapshot            →  index.html (polling fallback)
    ├─ GET  /api/status     → lightweight status       →  Pulse.swift menu-bar item (2s poll)
+   ├─ GET/POST /api/settings → ~/.pulse/settings.json ←  index.html (web mode fallback)
    ├─ POST /api/kill       → { pid, sig }             ←  index.html (kill / quit buttons)
    ├─ POST /api/purge      → admin-prompted `purge`   ←  index.html ("Purge disk cache")
    ├─ POST /api/purge-result → { id, ok, cancelled } ←  Pulse.swift (in-app prompt)
@@ -41,7 +42,12 @@ server.js  →  one JSON "snapshot" per tick (schema in docs/contracts.md)
    └─ stdout "PULSE_LISTENING=<port>"                 →  Pulse.swift (when app-spawned)
 ```
 
-Shared state lives in `~/.pulse/`: `port` (port file) and `icons/` (icon cache).
+Shared state lives in `~/.pulse/`: `port` (active backend port), `settings.json`
+(versioned user preferences), `boot-trace.log` (last 10 launch/reopen timing
+traces — stage names + timestamps only), and `icons/` (icon cache). Optional
+"Start at login" installs `~/Library/LaunchAgents/local.pulse.monitor.plist` so
+the backend stays warm across reboots. Closing the dashboard window hides it to
+the menu bar by default and releases the `WKWebView` so WebKit XPC helpers exit.
 Never store state inside the .app bundle — it must stay immutable and rebuildable.
 
 ## Invariants (do not break)
@@ -82,8 +88,10 @@ node server.test.js              # 136 parser unit tests — fast feedback loop
 
 The self-test verifies: the page rendered (machine/cpu/mem populated), rows exist,
 the drawer opened (prow count > 0), confirm() is wired, the memory info popover
-opens and renders (wired/compressed/cache values), and the menu-bar status
-item is receiving samples.
+opens and renders (wired/compressed/cache values + WebKit XPC note), the menu-bar
+status item is receiving samples, window close keeps the backend alive while
+releasing the webview, window reopen re-renders live data, the Settings dialog
+migrates/round-trips `settings.json`, and the LaunchAgent install/remove cycle works.
 
 ## Deep docs — read on demand
 

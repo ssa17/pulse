@@ -10,6 +10,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ## [Unreleased]
 
 ### Added
+- Settings & background mode: new Settings window (`⌘,` and menu bar) with instant toggles for **Start at login** (runs a `launchd` background sampler so data is already warm after boot), **When the window is closed** (keep running in menu bar vs quit), and **Keep dashboard in memory when closed**, plus matching checkmarks and **Quit Pulse & Stop Background** in the menu-bar menu
 - Memory: "Purge disk cache" button in the memory info popover — a Touch ID /
   password prompt (shown as Pulse), then it clears cached file data + apps'
   discardable buffers and reports exactly how much RAM came back
@@ -22,6 +23,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Process list: `kernel_task` now appears alongside other system processes
 
 ### Changed
+- Lifecycle & footprint: closing the window now keeps Pulse sampling in the menu bar by default while releasing WebKit rendering processes (~80 MB total in the background, reopening in under 0.2s), with a tuned Node heap cutting sampler memory by over half, a connecting skeleton on cold paint, and a note in the memory popover explaining separate WebKit processes in Activity Monitor
 - Dashboard: right-clicking no longer highlights app names or any other display text (the custom context menu still opens as before)
 - Status bar: trimmed the dead space around the menu-bar icon so it sits right up next to your other menu-bar items like any of them
 - Status bar: the sparkline view and its menu toggle are gone — the item always shows the vertical bars

@@ -74,13 +74,17 @@ function refreshUiMtime() {
 }
 refreshUiMtime();
 
+// Startup trace timestamps (stage names + epoch ms only — never process names/args).
+const BOOT_TRACE = { start: Date.now(), listen: 0, firstSnapshot: 0 };
+
 // Show up nicely in Activity Monitor / ps when running as the app's backend.
 process.title = 'Pulse';
 
 // Safety net: when launched by the Pulse app, exit if our parent (the app) dies,
 // so a crashed/killed app never leaves an orphaned backend behind.
+// Launchd-managed background daemons (ppid === 1 or PULSE_DAEMON === '1') skip this.
 // (process.ppid is cached at startup; signal 0 is the live existence check.)
-if (process.env.PULSE === '1') {
+if (process.env.PULSE === '1' && process.env.PULSE_DAEMON !== '1') {
   const parentPid = process.ppid;
   if (parentPid !== 1) {
     setInterval(() => {
@@ -411,9 +415,9 @@ const KNOWN = {
   talagent: 'App task scheduling',
   runningboardd: 'App lifecycle management',
   backboardd: 'App launch / termination',
-  'com.apple.WebKit.WebContent': 'Safari — web page process',
-  'com.apple.WebKit.GPU': 'Safari — GPU process',
-  'com.apple.WebKit.Networking': 'Safari — networking process',
+  'com.apple.WebKit.WebContent': 'WebKit — web page rendering process',
+  'com.apple.WebKit.GPU': 'WebKit — GPU & media process',
+  'com.apple.WebKit.Networking': 'WebKit — networking process',
   'Safari Web Content': 'Safari — web page process',
   'Safari Web Content (Privileged)': 'Safari — privileged web process',
   'Safari Helper': 'Safari — helper process',
@@ -517,9 +521,11 @@ const clients = new Set();
 let netCounters = null; // { ib, ob, t }
 let netRate = { down: 0, up: 0 };
 let netBusy = false;
+let lastBattOut = null;
+let lastBattT = 0;
 
 function kickNetstat() {
-  if (netBusy) return;
+  if (netBusy || (netCounters && Date.now() - netCounters.t < 4500)) return;
   netBusy = true;
   run('netstat', ['-ib'], 10000).then((out) => {
     netBusy = false;
@@ -554,6 +560,7 @@ async function sample(fast = false) {
 
   let topOut = null, iostatOut = null;
   let psMain, psArgs, vmOut, sysOut, battOut;
+  const needBatt = !lastBattOut || Date.now() - lastBattT >= 4500;
   if (useFast) {
     [psMain, psArgs, vmOut, sysOut, topOut, battOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
@@ -561,7 +568,7 @@ async function sample(fast = false) {
       run('vm_stat'),
       run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
       run('top', ['-F', '-l', '1', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem'], 4000),
-      run('pmset', ['-g', 'batt']),
+      needBatt ? run('pmset', ['-g', 'batt']) : Promise.resolve(lastBattOut),
     ]);
   } else {
     [topOut, iostatOut] = await Promise.all([
@@ -573,9 +580,10 @@ async function sample(fast = false) {
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
       run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
-      run('pmset', ['-g', 'batt']),
+      needBatt ? run('pmset', ['-g', 'batt']) : Promise.resolve(lastBattOut),
     ]);
   }
+  if (needBatt && battOut) { lastBattOut = battOut; lastBattT = Date.now(); }
 
   // Never overwrite live data with empty/zero parser fallbacks if a core tool failed.
   if (!psMain || !vmOut || !sysOut) return;
@@ -752,6 +760,7 @@ async function sample(fast = false) {
 
   lastPayload = JSON.stringify(payload);
   lastPayloadTime = snapTime;
+  if (!BOOT_TRACE.firstSnapshot) BOOT_TRACE.firstSnapshot = snapTime;
 
   // Lightweight status for the menu-bar item (avoids shipping the full snapshot).
   // Contract with app/Pulse.swift StatusController: `cpu` is the SYSTEM cpu
@@ -760,9 +769,12 @@ async function sample(fast = false) {
   if (appsArr.length) {
     const topCpu = appsArr.reduce((a, b) => (b.cpu > a.cpu ? b : a));
     const topMem = appsArr.reduce((a, b) => (b.mem > a.mem ? b : a));
+    const mu = process.memoryUsage();
     const st = {
       t: snapTime,
       serverMtime: SERVER_MTIME,
+      bootTrace: BOOT_TRACE,
+      memDebug: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
       cpu: top,
       // AM-style: "memory used" = used − cache (Apps + Wired + Compressed;
       // reclaimable file/purgeable cache excluded)
@@ -994,6 +1006,56 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: false }));
       }
     });
+  } else if (url === '/api/settings') {
+    const settingsPath = path.join(PULSE_DIR, 'settings.json');
+    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', 'local.pulse.monitor.plist');
+    const loadSettings = () => {
+      let raw = {};
+      try { raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) || {}; } catch { raw = {}; }
+      delete raw.statusBarGraphType;
+      return {
+        raw,
+        state: {
+          version: 1,
+          startAtLogin: typeof raw.startAtLogin === 'boolean' ? raw.startAtLogin : fs.existsSync(plistPath),
+          closeBehavior: raw.closeBehavior === 'quit' ? 'quit' : 'background',
+          keepDashboardInMemory: !!raw.keepDashboardInMemory,
+          daemonStatus: fs.existsSync(plistPath) ? 'active' : 'off',
+        },
+      };
+    };
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(loadSettings().state));
+    } else if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 1e4) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const patch = JSON.parse(body || '{}');
+          const { raw, state } = loadSettings();
+          if (typeof patch.startAtLogin === 'boolean') state.startAtLogin = patch.startAtLogin;
+          if (patch.closeBehavior === 'quit' || patch.closeBehavior === 'background') state.closeBehavior = patch.closeBehavior;
+          if (typeof patch.keepDashboardInMemory === 'boolean') state.keepDashboardInMemory = patch.keepDashboardInMemory;
+          const merged = {
+            ...raw,
+            version: 1,
+            startAtLogin: state.startAtLogin,
+            closeBehavior: state.closeBehavior,
+            keepDashboardInMemory: state.keepDashboardInMemory,
+          };
+          fs.mkdirSync(PULSE_DIR, { recursive: true });
+          fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...state }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+        }
+      });
+    } else {
+      res.writeHead(405); res.end();
+    }
   } else if (url.startsWith('/icons/')) {
     const f = path.join(ICON_DIR, path.basename(url));
     if (!f.startsWith(ICON_DIR)) { res.writeHead(400); res.end(); return; }
@@ -1037,11 +1099,34 @@ process.on('exit', () => {
   } catch { /* file already gone */ }
 });
 
+function consumePreferredPort() {
+  if (PORT !== 0 || process.env.PULSE_SELFTEST === '1') return PORT;
+  const f = path.join(PULSE_DIR, 'preferred-port');
+  try {
+    const p = Math.floor(+fs.readFileSync(f, 'utf8').trim());
+    fs.unlinkSync(f);
+    if (Number.isFinite(p) && p > 0 && p < 65536) return p;
+  } catch { /* no preferred port */ }
+  return 0;
+}
+
 (async function main() {
   // Start serving immediately — hardware identity (system_profiler, 1-3s) loads in
   // the background and fills in on the next tick.
-  server.listen(PORT, HOST, () => {
+  const bindPort = consumePreferredPort();
+  let triedFallback = false;
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE' && process.env.PULSE === '1' && !triedFallback && bindPort !== 0) {
+      triedFallback = true;
+      server.listen(0, HOST);
+      return;
+    }
+    console.error(err);
+    process.exit(1);
+  });
+  server.listen(bindPort, HOST, () => {
     actualPort = server.address().port;
+    BOOT_TRACE.listen = Date.now();
     console.log(`\n  Pulse is running →  http://${HOST}:${actualPort}\n`);
     announcePort();
   });
