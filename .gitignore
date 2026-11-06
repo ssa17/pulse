@@ -31,8 +31,9 @@ docs/distribution-setup.md
 # Node (if dependencies are ever added)
 node_modules/
 
-# Brief artifacts: the user's own dashboard capture (shows their apps) and date-stamped baselines
-docs/screenshots/dashboard.png
+# Task-brief artifacts — kept LOCAL-ONLY by user decision (useful for the maintainer and local
+# agents, but not part of the repo): the brief, both screenshots (the dashboard one shows the
+# user's own apps), and date-stamped measurement baselines
+docs/screenshots/
 docs/baseline-*/
-
-# The committed activity-monitor.png in docs/screenshots/ is intentional (it is the §2.3 evidence)
+docs/prompt-lightweight-responsiveness.md
