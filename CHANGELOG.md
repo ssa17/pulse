@@ -22,6 +22,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Process list: `kernel_task` now appears alongside other system processes
 
 ### Changed
+- Dashboard: right-clicking no longer highlights app names or any other display text (the custom context menu still opens as before)
 - Status bar: trimmed the dead space around the menu-bar icon so it sits right up next to your other menu-bar items like any of them
 - Status bar: the sparkline view and its menu toggle are gone — the item always shows the vertical bars
 - Memory card: redesigned header and 2×2 legend — removed duplicate file-cache and Free clutter, fixed header/info-button wrapping, made Wired / Compressed / Cache clickable to open the breakdown, and hid swap until 16 MB+ is in use

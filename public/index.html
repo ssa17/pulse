@@ -30,7 +30,12 @@
     color: var(--text);
     font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
     overflow: hidden;
+    /* Display-only dashboard: without this, right-clicking in the WKWebView
+       natively selects (and highlights) the word under the cursor. */
+    -webkit-user-select: none;
+    user-select: none;
   }
+  input, textarea { -webkit-user-select: text; user-select: text; } /* search still selects */
   #app { display: flex; flex-direction: column; height: 100vh; padding: 14px 18px; gap: 12px; }
 
   /* ---------- header ---------- */
