@@ -114,8 +114,3 @@ Note the confusing naming: `cpu` is the system CPU object; `topCpu` is an app.
   `./app/build.sh --notarize`) get Touch ID + password fallback, while
   unnotarized dev builds (plain `./app/build.sh`) get a Pulse-branded password
   prompt.
-- **Status-bar graph style** (`Pulse.swift`-only, not shared with the web UI): the
-  menu-bar item can render either the classic sparklines or oMLX-style vertical
-  capsule bars, toggled from its menu. The choice persists in
-  `~/.pulse/settings.json` (`{ "statusBarGraphType": "bars" | "sparkline" }`;
-  default is `sparkline`).

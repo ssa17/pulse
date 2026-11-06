@@ -11,19 +11,6 @@ import Sparkle
 
 let host = "127.0.0.1"
 let pulseDir = NSHomeDirectory() + "/.pulse"
-let settingsFile = pulseDir + "/settings.json"
-
-func readSettings() -> [String: Any] {
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: settingsFile)),
-          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
-    return obj
-}
-
-func writeSettings(_ dict: [String: Any]) {
-    guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
-    try? FileManager.default.createDirectory(atPath: pulseDir, withIntermediateDirectories: true)
-    try? data.write(to: URL(fileURLWithPath: settingsFile))
-}
 
 func urlForPort(_ port: Int, _ path: String) -> URL {
     URL(string: "http://\(host):\(port)\(path)")!
@@ -128,7 +115,7 @@ func serverIsAlive(port: Int) -> Bool {
 final class StatusController {
     // variableLength: the item hugs its graph image so macOS applies the
     // standard uniform gap to it, like every other menu-bar item. A fixed
-    // length (was 76) centred narrower images (54 in bars mode) and left a
+    // length (was 76) centred the narrower 54pt bars image and left a
     // big dead zone on each side, pushing the icon away from its neighbours.
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     var cpuHist: [Double] = []
@@ -146,7 +133,6 @@ final class StatusController {
     let memItem = NSMenuItem(title: "Memory —", action: nil, keyEquivalent: "")
     let topCpuItem = NSMenuItem(title: "Top CPU —", action: nil, keyEquivalent: "")
     let topMemItem = NSMenuItem(title: "Top Memory —", action: nil, keyEquivalent: "")
-    let barModeItem = NSMenuItem(title: "▥ Vertical Bars", action: #selector(toggleBarMode(_:)), keyEquivalent: "")
 
     init() {
         let menu = NSMenu()
@@ -160,8 +146,6 @@ final class StatusController {
         menu.addItem(memItem)
         menu.addItem(topCpuItem)
         menu.addItem(topMemItem)
-        menu.addItem(.separator())
-        menu.addItem(barModeItem)
         menu.addItem(.separator())
         let open = NSMenuItem(title: "Open Pulse", action: #selector(Shell.openApp), keyEquivalent: "")
         let quit = NSMenuItem(title: "Quit Pulse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
@@ -178,17 +162,6 @@ final class StatusController {
         if first {
             timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
         }
-    }
-
-    @objc func toggleBarMode(_ sender: NSMenuItem) {
-        let current = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
-        let next = current == "bars" ? "sparkline" : "bars"
-        var s = readSettings()
-        s["statusBarGraphType"] = next
-        writeSettings(s)
-        sender.title = next == "bars" ? "▥ Vertical Bars" : "◈ Sparklines"
-        lastRenderKey = ""
-        item.button?.image = Self.render(cpu: cpuHist, mem: memHist)  // bars with no samples → empty tracks
     }
 
     func poll() {
@@ -300,48 +273,14 @@ final class StatusController {
     /// Quantized signature of the rendered status bar graph so identical visual frames
     /// don't reassign `item.button?.image` and force redundant NSStatusBarWindow composites.
     static func renderKey(cpu: [Double], mem: [Double]) -> String {
-        let style = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
-        if style == "bars" {
-            let cBucket = Int(((min(max(cpu.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
-            let mBucket = Int(((min(max(mem.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
-            return "bars:\(cBucket):\(mBucket)"
-        }
-        let cPts = cpu.map { String(Int(((min(max($0, 0), 100) / 100.0) * 18.0).rounded())) }.joined(separator: ",")
-        let mPts = mem.map { String(Int(((min(max($0, 0), 100) / 100.0) * 18.0).rounded())) }.joined(separator: ",")
-        return "spark:\(cPts)|\(mPts)"
+        let cBucket = Int(((min(max(cpu.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
+        let mBucket = Int(((min(max(mem.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
+        return "\(cBucket):\(mBucket)"
     }
 
-    /// Status bar rendering — sparkline or vertical bar mode.
+    /// Status bar rendering — vertical capsule bars for CPU + memory.
     static func render(cpu: [Double], mem: [Double]) -> NSImage {
-        let style = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
-        if style == "bars" { return renderBars(cpu: cpu.last, mem: mem.last) }
-        return renderSparklines(cpu: cpu, mem: mem)
-    }
-
-    /// Two stacked sparklines: CPU (orange) over Memory (blue).
-    static func renderSparklines(cpu: [Double], mem: [Double]) -> NSImage {
-        let w: CGFloat = 72, h: CGFloat = 22
-        let img = NSImage(size: NSSize(width: w, height: h))
-        img.lockFocus()
-        guard let ctx = NSGraphicsContext.current?.cgContext else { img.unlockFocus(); return img }
-        func line(_ data: [Double], _ maxV: Double, _ y0: CGFloat, _ hgt: CGFloat, _ color: NSColor) {
-            guard data.count > 1 else { return }
-            ctx.setStrokeColor(color.cgColor)
-            ctx.setLineWidth(1.2)
-            ctx.setLineJoin(.round)
-            ctx.beginPath()
-            let step = (w - 8) / 39
-            for (i, v) in data.enumerated() {
-                let x = 4 + CGFloat(i) * step
-                let y = y0 + hgt - CGFloat(min(max(v, 0) / maxV, 1)) * hgt
-                i == 0 ? ctx.move(to: CGPoint(x: x, y: y)) : ctx.addLine(to: CGPoint(x: x, y: y))
-            }
-            ctx.strokePath()
-        }
-        line(cpu, 100, 11, 9, NSColor(red: 1.0, green: 0.62, blue: 0.26, alpha: 1))
-        line(mem, 100, 1, 9, NSColor(red: 0.30, green: 0.62, blue: 1.0, alpha: 1))
-        img.unlockFocus()
-        return img
+        renderBars(cpu: cpu.last, mem: mem.last)
     }
 
     /// Vertical capsule bars (oMLX-style): a stacked letter column beside a thin
@@ -353,16 +292,24 @@ final class StatusController {
         guard let ctx = NSGraphicsContext.current?.cgContext else { img.unlockFocus(); return img }
         let barW: CGFloat = 9, barH: CGFloat = 18
         let barY: CGFloat = (h - barH) / 2
+        let cellW: CGFloat = 7
+        // Monospaced, so every letter has an identical size + advance (the old
+        // proportional font left ragged widths); each glyph is then centred in
+        // an identical uniform cell, so the stack reads as evenly formed.
         let letterAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 6.5, weight: .semibold),
+            .font: NSFont.monospacedSystemFont(ofSize: 6.5, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.9),
         ]
         func metric(_ x: CGFloat, _ label: String, _ value: Double?, _ color: NSColor) {
-            // stacked letters, top-aligned with the bar, one per line
+            // stacked letters, one per uniform cell spanning the bar's height
             let lineH = barH / CGFloat(label.count)
             for (j, ch) in label.enumerated() {
-                (String(ch) as NSString).draw(
-                    in: NSRect(x: x, y: barY + barH - lineH * CGFloat(j + 1), width: 7, height: lineH),
+                let s = String(ch) as NSString
+                let sz = s.size(withAttributes: letterAttrs)
+                let cellY = barY + barH - lineH * CGFloat(j + 1)
+                s.draw(
+                    at: NSPoint(x: x + (cellW - sz.width) / 2,
+                                y: cellY + (lineH - sz.height) / 2),
                     withAttributes: letterAttrs)
             }
             // slightly-rounded track
@@ -502,13 +449,6 @@ final class Shell: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
         if let menu = status?.item.menu {
             for mi in menu.items where mi.title == "Open Pulse" { mi.target = self }
-            // Wire up bar mode toggle
-            if let mi = status?.barModeItem {
-                let cur = (readSettings()["statusBarGraphType"] as? String) ?? "sparkline"
-                mi.title = cur == "bars" ? "▥ Vertical Bars" : "◈ Sparklines"
-                mi.target = status
-                mi.action = #selector(StatusController.toggleBarMode(_:))
-            }
         }
 
         // Prevent App Nap from throttling live menu-bar polling & sampling while

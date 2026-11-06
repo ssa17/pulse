@@ -15,14 +15,15 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
   discardable buffers and reports exactly how much RAM came back
 - Memory card: info button explaining what wired / compressed / file cache
   actually are, with live sparklines and how to free each of them
-- Status bar: vertical bar mode alongside the sparklines (toggle from the
-  item's menu; the choice persists)
+- Status bar: vertical bar mode — the menu-bar item shows capsule bars for CPU
+  and memory, with the letters evenly sized and spaced
 - Dashboard: right-click a row or process for quick Quit, Force Quit, Terminate, and Force Kill actions (also in the details sheet); quitting apps show a "closing…" tag while exiting, and stubborn processes escalate to Force Kill
 - Search & navigation: press ⌘F or `/` to jump to search, and Esc to dismiss context menus, popovers, the details sheet, or active search step by step
 - Process list: `kernel_task` now appears alongside other system processes
 
 ### Changed
 - Status bar: trimmed the dead space around the menu-bar icon so it sits right up next to your other menu-bar items like any of them
+- Status bar: the sparkline view and its menu toggle are gone — the item always shows the vertical bars
 - Memory card: redesigned header and 2×2 legend — removed duplicate file-cache and Free clutter, fixed header/info-button wrapping, made Wired / Compressed / Cache clickable to open the breakdown, and hid swap until 16 MB+ is in use
 - Network card: headline now shows combined ↓ + ↑ throughput matching its sparkline, with download and upload split in the subtitle
 - Quit app no longer asks for confirmation for regular apps (they get a polite
