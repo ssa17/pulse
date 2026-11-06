@@ -77,7 +77,7 @@ open dist/Pulse.app
 # confirm() wiring + the menu-bar item, prints SELFTEST: {...} and exits:
 PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse
 # Unit tests (off-line, no macOS dependencies):
-node server.test.js              # 106 parser unit tests — fast feedback loop
+node server.test.js              # 136 parser unit tests — fast feedback loop
 ```
 
 The self-test verifies: the page rendered (machine/cpu/mem populated), rows exist,

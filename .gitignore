@@ -30,3 +30,9 @@ docs/distribution-setup.md
 
 # Node (if dependencies are ever added)
 node_modules/
+
+# Brief artifacts: the user's own dashboard capture (shows their apps) and date-stamped baselines
+docs/screenshots/dashboard.png
+docs/baseline-*/
+
+# The committed activity-monitor.png in docs/screenshots/ is intentional (it is the §2.3 evidence)
