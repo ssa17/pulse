@@ -3,13 +3,30 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.1</title>
-            <pubDate>Mon, 02 Nov 2026 20:10:03 +0000</pubDate>
-            <sparkle:version>1.1</sparkle:version>
-            <sparkle:shortVersionString>1.1</sparkle:shortVersionString>
+            <title>1.2</title>
+            <pubDate>Fri, 06 Nov 2026 19:21:38 +0000</pubDate>
+            <sparkle:version>1.2</sparkle:version>
+            <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.1/Pulse-1.1.zip" length="1322970" type="application/octet-stream" sparkle:edSignature="3+hywCGWeA4fzHwAkuMdVd2uIcCaoqo4fY6s7O+DR1oO9a9nnSDu6S4CcnBtBo4slJKKT1wwUfa0D4ZOdpRkAQ=="/>
+            <description sparkle:format="markdown"><![CDATA[
+### Added
+- Background mode & Settings (`⌘,` or the header **Settings** button): closing the window now keeps Pulse sampling in the menu bar by default; customize **Start at login** (runs a background sampler so data is warm right after boot), **When the window is closed**, and **Keep dashboard in memory** from the in-dashboard Settings modal, the native Settings window, or the menu-bar quick toggles
+- Memory explainer & "Purge disk cache": click `i` on the Memory card (or any pool in the legend) to see live wired, compressed, and file-cache sparklines and clear reclaimable disk cache via Touch ID or password
+- Quick actions & keyboard navigation: right-click any app or process for Quit, Force Quit, Terminate, and Force Kill; press `⌘F` or `/` to search and `Esc` to dismiss menus, popovers, the drawer, or active search
+- Process list now includes `kernel_task` alongside other system processes
+
+### Changed
+- Much lighter background footprint: releasing the web view on window close and tuning the sampler cuts background RAM to ~80 MB while reopening in under 0.2 seconds
+- Redesigned Memory and Network cards: memory figures now match Activity Monitor ("Memory Used", per-app footprint, and Cached Files) with a 2×2 legend, and Network shows combined ↓ + ↑ throughput
+- Menu-bar item now always displays compact vertical CPU and memory capsule bars with tighter spacing
+
+### Fixed
+- Cold launches show an immediate connecting skeleton without main-thread stalls, and the dashboard and background sampler stay in sync across app updates
+- Fixed compressed-memory reporting, CPU card blips after process actions, battery charging-bolt state on AC hold, and right-click text selection
+
+]]></description>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.2/Pulse-1.2.zip" length="1426378" type="application/octet-stream" sparkle:edSignature="ctPMeZU+/C0m+MSALZ/r5S4exVdF9VOb0Pj4zH0DPGK2jIsdq3T3D9nqyQt+UMAPPQacO1vWT641JnQ8CkaOAw=="/>
         </item>
     </channel>
 </rss>
