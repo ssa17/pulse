@@ -588,7 +588,7 @@ final class LaunchAgentManager {
 /// never resizes as values tick every 2 s.
 ///
 /// Rows stay ENABLED on purpose: AppKit dims the custom view of a disabled
-/// menu item, which would grey out the values and bars; an enabled no-action
+/// menu item, which would grey out the values and bars. An enabled no-action
 /// row just closes the menu when clicked.
 final class StatRowView: NSView {
     static let rowWidth: CGFloat = 250
@@ -694,7 +694,7 @@ final class StatusController: NSObject {
     var onStaleBackend: (() -> Void)?
 
     // All stat rows are display-only (Open Pulse opens the dashboard) and stay
-    // enabled so AppKit doesn't dim the custom views.
+    // enabled so AppKit doesn't dim their custom views.
     let cpuItem = NSMenuItem(title: "CPU", action: nil, keyEquivalent: "")
     let gpuItem = NSMenuItem(title: "GPU", action: nil, keyEquivalent: "")
     let memItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
@@ -742,32 +742,15 @@ final class StatusController: NSObject {
         quitItem.target = shell
         menu.addItem(quitItem)
 
-        // The system would present `item.menu` left-anchored under the button and
-        // slide the whole menu left if it overflowed the screen edge — a wide
-        // menu can then appear to open *beside* the button. Present it ourselves,
-        // centered under the button (clamped to the screen).
-        item.target = self
-        item.action = #selector(presentMenu)
+        // Attach the menu to the item and let the SYSTEM present it. The built-in
+        // click-to-toggle (click = open, click again = close) is guaranteed by
+        // AppKit and is how every other menu-bar app behaves; a custom popUp()
+        // bypassed that logic and re-opened on every re-click.
+        item.menu = menu
         item.button?.image = Self.render(cpu: [], mem: [], gpu: [], net: [],
                                          netText: Self.netText(down: 0, up: 0),
                                          menu: PulseSettings.defaultMenuRows,
                                          bar: PulseSettings.defaultBarRows)
-    }
-
-    /// The two-line number pair for the network capsule (down over up).
-
-    @objc private func presentMenu() {
-        guard let b = item.button, let win = b.window else { return }
-        // Window → GLOBAL screen coordinates (bottom-left origin). `convert(_:to: nil)`
-        // alone would give window-relative coords and the menu would land at the
-        // bottom edge of the screen.
-        let f = win.convertToScreen(b.frame)
-        let mw = menu.size.width
-        var x = f.midX - mw / 2
-        if let s = win.screen ?? NSScreen.main {
-            x = min(max(x, s.frame.minX + 4), s.frame.maxX - mw - 4)
-        }
-        menu.popUp(positioning: nil, at: NSPoint(x: x, y: f.minY - 2), in: nil)
     }
 
     /// Show/hide the status-menu update row (hidden item keeps its slot — no rebuild needed).
@@ -809,6 +792,7 @@ final class StatusController: NSObject {
         }
     }
 
+    /// The two-line number pair for the network capsule (down over up).
     func netText() -> String { Self.netText(down: lastNet.down, up: lastNet.up) }
 
     /// Human rate from bytes/s — mirrors the dashboard's `fmtBytes` ladder
