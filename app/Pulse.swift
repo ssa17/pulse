@@ -8,7 +8,7 @@ import Sparkle
 //   else spawns one on a dynamic port
 // - window close keeps Pulse running in the menu bar by default (configurable in Settings),
 //   releasing the WKWebView by default so WebKit XPC processes exit while closed
-// - live menu-bar status item with CPU + memory bars and quick settings toggles
+// - live menu-bar status item with CPU + memory bars, Settings, and Quit
 // - native Settings window + LaunchAgent "Start at login" daemon management
 // - native confirm/alert/prompt dialogs (WKUIDelegate)
 
@@ -106,11 +106,22 @@ final class BootTracer {
  *  Migrates legacy `statusBarGraphType` while preserving unknown keys.
  * ================================================================== */
 final class PulseSettings {
-    static let currentVersion = 1
+    static let currentVersion = 2
+    /// Canonical order of the status-menu rows; a subset of `menuRows` = hidden.
+    static let allMenuRows = ["cpu", "gpu", "memory", "thermal", "network", "uptime"]
+    /// Thermal is off by default — pmset reports a bare word, no value to bar.
+    static let defaultMenuRows = ["cpu", "gpu", "memory", "network", "uptime"]
+    /// Status-bar button ids — only the continuously-valued stats have capsules
+    /// (thermal is a state word, uptime a counter; both are menu-only).
+    static let allBarRows = ["cpu", "gpu", "memory", "network"]
+    static let defaultBarRows = ["cpu", "gpu", "memory", "network"]
     let filePath: String
     var startAtLogin: Bool = false
     var closeBehavior: String = "background" // "background" | "quit"
     var keepDashboardInMemory: Bool = false
+    var menuRows: [String] = PulseSettings.defaultMenuRows
+    var barRows: [String] = PulseSettings.defaultBarRows
+    var layoutGen: Int = 0 // settings-file revision (bumped on each layout write)
     private var storage: [String: Any] = [:]
 
     init(path: String = pulseDir + "/settings.json") {
@@ -133,11 +144,29 @@ final class PulseSettings {
                 closeBehavior = "background"
             }
             keepDashboardInMemory = (obj["keepDashboardInMemory"] as? Bool) ?? false
+            layoutGen = obj["layoutGen"] as? Int ?? 0
+            if let mr = obj["menuRows"] as? [String] {
+                var v: [String] = []
+                for id in mr where Self.allMenuRows.contains(id) && !v.contains(id) { v.append(id) }
+                menuRows = v  // may be empty — "all hidden" is a valid layout
+            } else {
+                menuRows = Self.defaultMenuRows
+            }
+            if let br = obj["barRows"] as? [String] {
+                var v: [String] = []
+                for id in br where Self.allBarRows.contains(id) && !v.contains(id) { v.append(id) }
+                barRows = v  // may be empty — the button falls back to a static “P”
+            } else {
+                barRows = menuRows.filter { Self.allBarRows.contains($0) }
+            }
         } else {
             storage = [:]
             startAtLogin = false
             closeBehavior = "background"
             keepDashboardInMemory = false
+            menuRows = Self.defaultMenuRows
+            barRows = Self.defaultBarRows
+            layoutGen = 0
         }
         if needsSave && persistMigration {
             save()
@@ -145,11 +174,19 @@ final class PulseSettings {
     }
 
     func save() {
+        // If another writer (the web fallback POSTs straight to the file) advanced
+        // the revision since we loaded, adopt its state FIRST — a full-object write
+        // from a stale in-memory copy would otherwise silently revert their change.
+        mergeFromDisk()
         storage.removeValue(forKey: "statusBarGraphType")
         storage["version"] = Self.currentVersion
         storage["startAtLogin"] = startAtLogin
         storage["closeBehavior"] = closeBehavior
         storage["keepDashboardInMemory"] = keepDashboardInMemory
+        storage["menuRows"] = menuRows
+        storage["barRows"] = barRows
+        layoutGen += 1  // this write advances the revision (any field, any writer)
+        storage["layoutGen"] = layoutGen
         try? FileManager.default.createDirectory(atPath: (filePath as NSString).deletingLastPathComponent,
                                                  withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: storage, options: [.prettyPrinted, .sortedKeys]) {
@@ -157,6 +194,18 @@ final class PulseSettings {
             out.append(0x0A)
             try? out.write(to: URL(fileURLWithPath: filePath), options: .atomic)
         }
+    }
+
+    /// Adopt the file's state when it has been written by someone else since we
+    /// last loaded (the web settings fallback POSTs directly to the file, bypassing
+    /// this in-memory copy). Returns true when anything was adopted.
+    @discardableResult
+    func mergeFromDisk() -> Bool {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["layoutGen"] as? Int ?? 0) > layoutGen else { return false }
+        reload(persistMigration: false)
+        return true
     }
 
     var shouldQuitOnClose: Bool { closeBehavior == "quit" }
@@ -465,7 +514,42 @@ final class LaunchAgentManager {
         return .success(())
     }
 
-    /// Stop the running daemon for this session without deleting the plist ("Quit Pulse & Stop Background", Sparkle relaunch).
+    /// Force-restart an already-loaded daemon (`launchctl kickstart -k`). A rebuild
+    /// changes server.js / the UI, which the plist (node path + bundle version) does
+    /// NOT track — a loaded daemon would otherwise keep serving stale code forever.
+    @discardableResult
+    func kickstart() -> Bool {
+        let (code, err) = runLaunchctl(["kickstart", "-k", serviceTarget])
+        if code == 0 {
+            lastError = nil
+            if Thread.isMainThread { cachedIsLoaded = true }
+            else { DispatchQueue.main.async { self.cachedIsLoaded = true } }
+            return true
+        }
+        lastError = err.isEmpty ? "launchctl kickstart failed" : err
+        return false
+    }
+
+    /// One-shot blocking GET of the daemon's status (utility-queue only — launchctl
+    /// calls block the same way). Returns the daemon's `serverMtime`, or nil if it
+    /// isn't answering (dead / still binding its socket).
+    func probeServerMtime(port: Int, timeout: TimeInterval = 1.0) -> Int? {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/status") else { return nil }
+        let req = URLRequest(url: url, timeoutInterval: timeout)
+        let sem = DispatchSemaphore(value: 0)
+        var mtime: Int?
+        URLSession.shared.dataTask(with: req) { d, _, _ in
+            if let d, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                mtime = o["serverMtime"] as? Int
+            }
+            sem.signal()
+        }.resume()
+        _ = sem.wait(timeout: .now() + timeout + 0.5)
+        return mtime
+    }
+
+    /// Stop the running daemon for this session without deleting the plist (status-menu
+    /// "Quit Pulse", Sparkle relaunch) — "Start at login" is preserved.
     @discardableResult
     func bootoutSessionOnly() -> Bool {
         let (c1, _) = runLaunchctl(["bootout", serviceTarget])
@@ -495,12 +579,111 @@ final class LaunchAgentManager {
 }
 
 /* ================================================================== *
- *  Menu-bar status item: live CPU + memory graphs + quick settings
+ *  Menu-bar status item: live CPU / GPU / memory rows + quick actions
  * ================================================================== */
-final class StatusController: NSObject, NSMenuDelegate {
+
+/// One stats row in the status menu, laid out like the Stats app:
+/// `label` (left) … `value` (right, at the row's end) with a proportional
+/// utilization bar below, evenly padded on both sides. Fixed size so the menu
+/// never resizes as values tick every 2 s.
+///
+/// Rows stay ENABLED on purpose: AppKit dims the custom view of a disabled
+/// menu item, which would grey out the values and bars; an enabled no-action
+/// row just closes the menu when clicked.
+final class StatRowView: NSView {
+    static let rowWidth: CGFloat = 250
+    static let pad: CGFloat = 8
+    static let labelW: CGFloat = 92
+    static let cpuColor = NSColor(srgbRed: 1.0, green: 159.0 / 255, blue: 67.0 / 255, alpha: 1)  // --cpu #ff9f43
+    static let memColor = NSColor(srgbRed: 77.0 / 255, green: 159.0 / 255, blue: 1.0, alpha: 1) // --mem #4d9fff
+    static let gpuColor = NSColor(srgbRed: 52.0 / 255, green: 199.0 / 255, blue: 89.0 / 255, alpha: 1) // --gpu #34c759
+    static let netColor = NSColor(srgbRed: 191.0 / 255, green: 90.0 / 255, blue: 242.0 / 255, alpha: 1) // --net #bf5af2
+
+    let valueField = NSTextField(labelWithString: "—")
+    let bar = StatBarView()
+
+    init(label: String) {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 30))
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = NSFont.menuFont(ofSize: 0)
+        labelField.textColor = .secondaryLabelColor
+        labelField.frame = NSRect(x: Self.pad, y: 12, width: Self.labelW, height: 14)
+        addSubview(labelField)
+        valueField.font = NSFont.menuFont(ofSize: 0)
+        valueField.alignment = .right
+        valueField.frame = NSRect(x: Self.pad + Self.labelW, y: 12, width: Self.rowWidth - 2 * Self.pad - Self.labelW, height: 14)
+        valueField.lineBreakMode = .byTruncatingHead // keep the tail (units / GB) visible
+        addSubview(valueField)
+        bar.frame = NSRect(x: Self.pad, y: 4, width: Self.rowWidth - 2 * Self.pad, height: 4)
+        addSubview(bar)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func set(value: String, frac: Double, color: NSColor) {
+        valueField.stringValue = value
+        valueField.textColor = color
+        bar.frac = frac
+        bar.barColor = color
+    }
+}
+
+/// Plain `label … value` row (Uptime) — no bar, value at the end.
+final class InfoRowView: NSView {
+    static let rowWidth = StatRowView.rowWidth
+    let valueField = NSTextField(labelWithString: "—")
+
+    init(label: String) {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 22))
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = NSFont.menuFont(ofSize: 0)
+        labelField.textColor = .secondaryLabelColor
+        labelField.frame = NSRect(x: StatRowView.pad, y: 4, width: StatRowView.labelW, height: 14)
+        addSubview(labelField)
+        valueField.font = NSFont.menuFont(ofSize: 0)
+        valueField.alignment = .right
+        valueField.frame = NSRect(x: StatRowView.pad + StatRowView.labelW, y: 4,
+                                  width: Self.rowWidth - 2 * StatRowView.pad - StatRowView.labelW, height: 14)
+        valueField.lineBreakMode = .byTruncatingHead
+        addSubview(valueField)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func set(value: String, color: NSColor = .labelColor) {
+        valueField.stringValue = value
+        valueField.textColor = color
+    }
+}
+
+/// Small rounded horizontal fill (4 pt tall) over a dim track.
+final class StatBarView: NSView {
+    var frac: Double = 0 { didSet { needsDisplay = true } }
+    var barColor: NSColor = .clear { didSet { needsDisplay = true } }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.labelColor.withAlphaComponent(0.12).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        let r = max(0, min(1, frac))
+        guard r > 0 else { return }
+        barColor.setFill()
+        // Never a stub narrower than the pill radius — clamp to a minimum width.
+        let w = max(bounds.height, bounds.width * CGFloat(r))
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: w, height: bounds.height),
+                      xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+    }
+}
+
+final class StatusController: NSObject {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let menu = NSMenu()
     var cpuHist: [Double] = []
     var memHist: [Double] = []
+    var gpuHist: [Double] = []
+    var netHist: [Double] = []
+    var lastNet: (down: Double, up: Double) = (0, 0)
+    var lastMenuRows: [String] = PulseSettings.defaultMenuRows
+    var lastBarRows: [String] = PulseSettings.defaultBarRows
+    var lastBarKey = ""
+    var localLayoutGen = 0 // revision of the last layout WE wrote — stale polls are skipped
     var lastRenderKey = ""
     var timer: Timer?
     var samples = 0
@@ -510,82 +693,137 @@ final class StatusController: NSObject, NSMenuDelegate {
     var lastPurgeId = 0  // dedupe: the `purge` flag stays in /api/status until settled
     var onStaleBackend: (() -> Void)?
 
-    let cpuItem = NSMenuItem(title: "CPU —", action: nil, keyEquivalent: "")
-    let memItem = NSMenuItem(title: "Memory —", action: nil, keyEquivalent: "")
-    let topCpuItem = NSMenuItem(title: "Top CPU —", action: nil, keyEquivalent: "")
-    let topMemItem = NSMenuItem(title: "Top Memory —", action: nil, keyEquivalent: "")
+    // All stat rows are display-only (Open Pulse opens the dashboard) and stay
+    // enabled so AppKit doesn't dim the custom views.
+    let cpuItem = NSMenuItem(title: "CPU", action: nil, keyEquivalent: "")
+    let gpuItem = NSMenuItem(title: "GPU", action: nil, keyEquivalent: "")
+    let memItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
+    let cpuRow = StatRowView(label: "CPU")
+    let gpuRow = StatRowView(label: "GPU")
+    let memRow = StatRowView(label: "Memory")
+    let thermalItem = NSMenuItem(title: "Thermal", action: nil, keyEquivalent: "")
+    let netItem = NSMenuItem(title: "Network", action: nil, keyEquivalent: "")
+    let uptimeItem = NSMenuItem(title: "Uptime", action: nil, keyEquivalent: "")
+    let updateItem = NSMenuItem(title: "Update…", action: nil, keyEquivalent: "")
+    let thermalRow = StatRowView(label: "Thermal")  // bar fills per thermal level
+    let netRow = StatRowView(label: "Network")
+    let uptimeRow = InfoRowView(label: "Uptime")
+    var statItems: [String: NSMenuItem] = [:]  // populated in init (member refs aren't allowed in initializers)
+    let statSep = NSMenuItem.separator()
+    var lastMenuKey = ""
 
-    let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(Shell.toggleStartAtLoginMenu), keyEquivalent: "")
-    let keepRunningItem = NSMenuItem(title: "Keep Running When Closed", action: #selector(Shell.toggleKeepRunningMenu), keyEquivalent: "")
-    let keepMemItem = NSMenuItem(title: "Keep Dashboard in Memory", action: #selector(Shell.toggleKeepDashboardInMemoryMenu), keyEquivalent: "")
-    let daemonErrorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let settingsItem = NSMenuItem(title: "Settings…", action: #selector(Shell.openSettings), keyEquivalent: ",")
     let openItem = NSMenuItem(title: "Open Pulse", action: #selector(Shell.openApp), keyEquivalent: "")
-    let quitItem = NSMenuItem(title: "Quit Pulse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
-    let quitAndStopBgItem = NSMenuItem(title: "Quit Pulse & Stop Background", action: #selector(Shell.quitAndStopBackground), keyEquivalent: "")
+    let quitItem = NSMenuItem(title: "Quit Pulse", action: #selector(Shell.quitAndStopBackground), keyEquivalent: "")
 
     weak var shell: Shell?
 
     init(shell: Shell) {
         self.shell = shell
         super.init()
-        let menu = NSMenu()
+        statItems = ["cpu": cpuItem, "gpu": gpuItem, "memory": memItem, "thermal": thermalItem, "network": netItem, "uptime": uptimeItem]
         menu.autoenablesItems = false
-        menu.delegate = self
-        let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-        let title = NSMenuItem(title: "Pulse v\(ver)", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        menu.addItem(.separator())
-        for mi in [cpuItem, memItem, topCpuItem, topMemItem] {
-            mi.isEnabled = false
-            menu.addItem(mi)
+        for (it, row) in [(cpuItem, cpuRow), (gpuItem, gpuRow), (memItem, memRow),
+                           (thermalItem, thermalRow), (netItem, netRow), (uptimeItem, uptimeRow)] {
+            it.view = row
         }
-        menu.addItem(.separator())
-        for mi in [startAtLoginItem, keepRunningItem, keepMemItem, settingsItem, openItem, quitAndStopBgItem] {
-            mi.target = shell
-        }
-        daemonErrorItem.isEnabled = false
-        daemonErrorItem.isHidden = true
-        menu.addItem(startAtLoginItem)
-        menu.addItem(keepRunningItem)
-        menu.addItem(keepMemItem)
-        menu.addItem(daemonErrorItem)
-        menu.addItem(.separator())
+        applyMenuLayout(menu: PulseSettings.defaultMenuRows, bar: PulseSettings.defaultBarRows)
+        settingsItem.target = shell
+        openItem.target = shell
+        // Update row sits at the top of the actions (below the stats): a persistent, low-key
+        // “vX is available” affordance while one is pending. Hidden otherwise.
+        updateItem.isHidden = true
+        updateItem.target = shell
+        updateItem.action = #selector(Shell.checkForUpdates)
+        menu.addItem(updateItem)
         menu.addItem(openItem)
         menu.addItem(settingsItem)
         menu.addItem(.separator())
+        quitItem.target = shell
         menu.addItem(quitItem)
-        quitAndStopBgItem.isHidden = true
-        menu.addItem(quitAndStopBgItem)
 
-        item.menu = menu
-        item.button?.image = Self.render(cpu: [], mem: [])
-        refreshToggleStates(queryLaunchctl: false)
+        // The system would present `item.menu` left-anchored under the button and
+        // slide the whole menu left if it overflowed the screen edge — a wide
+        // menu can then appear to open *beside* the button. Present it ourselves,
+        // centered under the button (clamped to the screen).
+        item.target = self
+        item.action = #selector(presentMenu)
+        item.button?.image = Self.render(cpu: [], mem: [], gpu: [], net: [],
+                                         netText: Self.netText(down: 0, up: 0),
+                                         menu: PulseSettings.defaultMenuRows,
+                                         bar: PulseSettings.defaultBarRows)
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        refreshToggleStates(queryLaunchctl: false)
-        LaunchAgentManager.shared.refreshStatusAsync { [weak self] _ in
-            self?.refreshToggleStates(queryLaunchctl: false)
+    /// The two-line number pair for the network capsule (down over up).
+
+    @objc private func presentMenu() {
+        guard let b = item.button, let win = b.window else { return }
+        // Window → GLOBAL screen coordinates (bottom-left origin). `convert(_:to: nil)`
+        // alone would give window-relative coords and the menu would land at the
+        // bottom edge of the screen.
+        let f = win.convertToScreen(b.frame)
+        let mw = menu.size.width
+        var x = f.midX - mw / 2
+        if let s = win.screen ?? NSScreen.main {
+            x = min(max(x, s.frame.minX + 4), s.frame.maxX - mw - 4)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: x, y: f.minY - 2), in: nil)
+    }
+
+    /// Show/hide the status-menu update row (hidden item keeps its slot — no rebuild needed).
+    func showUpdateRow(_ version: String?) {
+        if let v = version { updateItem.title = "Update to v\(v)…" }
+        updateItem.isHidden = version == nil
+    }
+
+    /// (Re)builds the dropdown stat block from `menu` (ordered visible ids;
+    /// absent id = hidden) and the status-bar button capsules from `bar` (a set —
+    /// capsules follow the menu's row order). Particles refresh only on change.
+    func applyMenuLayout(menu: [String], bar: [String]) {
+        let known = PulseSettings.allMenuRows
+        let visible = menu.filter { known.contains($0) }
+        if visible.joined(separator: ",") != lastMenuKey {
+            lastMenuKey = visible.joined(separator: ",")
+            for (_, it) in statItems {
+                let i = self.menu.index(of: it)
+                if i >= 0 { self.menu.removeItem(at: i) }
+            }
+            let si = self.menu.index(of: statSep)
+            if si >= 0 { self.menu.removeItem(at: si) }
+            for (i, id) in visible.enumerated() {
+                self.menu.insertItem(statItems[id]!, at: i)
+            }
+            if !visible.isEmpty { self.menu.insertItem(statSep, at: visible.count) }
+        }
+        lastMenuRows = visible
+        lastBarRows = bar.filter { PulseSettings.allBarRows.contains($0) }
+        let barKey = lastBarRows.joined(separator: ",")
+        if barKey != lastBarKey { lastBarKey = barKey }
+        // One source of truth for “did the button change” (values OR layout).
+        let key = Self.renderKey(cpu: cpuHist, mem: memHist, gpu: gpuHist, net: netHist,
+                                 netText: netText(), menu: lastMenuRows, bar: lastBarRows)
+        if key != lastRenderKey {
+            lastRenderKey = key
+            self.item.button?.image = Self.render(cpu: cpuHist, mem: memHist, gpu: gpuHist, net: netHist,
+                                                  netText: netText(), menu: lastMenuRows, bar: lastBarRows)
         }
     }
 
-    func refreshToggleStates(queryLaunchctl: Bool = false) {
-        guard let shell else { return }
-        let mgr = LaunchAgentManager.shared
-        let daemonActive = queryLaunchctl ? mgr.isLoaded() : mgr.cachedIsLoaded
-        let loginOn = mgr.isTransitioning ? shell.settings.startAtLogin : (daemonActive || mgr.plistExists)
-        startAtLoginItem.state = loginOn ? .on : .off
-        keepRunningItem.state = shell.settings.shouldQuitOnClose ? .off : .on
-        keepMemItem.state = shell.settings.keepDashboardInMemory ? .on : .off
-        quitAndStopBgItem.isHidden = !daemonActive
-        if let err = mgr.lastError, !err.isEmpty {
-            daemonErrorItem.title = "Background error: \(err.prefix(48))"
-            daemonErrorItem.isHidden = false
-        } else {
-            daemonErrorItem.isHidden = true
-        }
+    func netText() -> String { Self.netText(down: lastNet.down, up: lastNet.up) }
+
+    /// Human rate from bytes/s — mirrors the dashboard's `fmtBytes` ladder
+    /// (1024-based, B/KB/MB/GB/TB) so the menu and the app always agree, down to
+    /// the byte level. A bare number has no scale; even "512 B/s" is honest.
+    static func rate(_ bps: Double) -> String {
+        let u = ["B", "KB", "MB", "GB", "TB"]
+        var i = 0, v = bps
+        while v >= 1024, i < u.count - 1 { v /= 1024; i += 1 }
+        let s = v >= 100 ? String(format: "%.0f", v) : v >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v)
+        return s + " " + u[i]
+    }
+
+    static func netText(down: Double, up: Double) -> String {
+        return "\(Self.rate(down))\n\(Self.rate(up))"  // ↓ over ↑, icons drawn by the cell
     }
 
     func start(port: Int) {
@@ -619,6 +857,22 @@ final class StatusController: NSObject, NSMenuDelegate {
             DispatchQueue.main.async {
                 self.pollFails = 0
                 guard obj["cpu"] != nil else { return } // still warming up (<250ms after spawn)
+                if let mr = obj["menuRows"] as? [String] {
+                    // Skip layouts the server read from disk before our own latest
+                    // write — otherwise the old capsule set blinks back on for a
+                    // cycle (off → on → off) after a toggle.
+                    let gen = obj["layoutGen"] as? Int ?? 0
+                    if gen >= self.localLayoutGen {
+                        let br = (obj["barRows"] as? [String]) ?? self.lastBarRows
+                        self.applyMenuLayout(menu: mr, bar: br)
+                        // If a DIFFERENT writer (the web) advanced the file, sync
+                        // our in-memory settings + the Settings card to match.
+                        if let sh = self.shell, sh.settings.layoutGen < gen {
+                            sh.settings.mergeFromDisk()
+                            sh.syncAllSettingsUI()
+                        }
+                    }
+                }
                 if let diskMtime = expectedServerMtime(), (obj["serverMtime"] as? Int) != diskMtime {
                     self.onStaleBackend?()
                     return
@@ -637,13 +891,23 @@ final class StatusController: NSObject, NSMenuDelegate {
                         self.cpuHist.append(t)
                     }
                     if let m = obj["memPct"] as? Double { self.memHist.append(m) }
+                    if let g = obj["gpuPct"] as? Double { self.gpuHist.append(g) }
+                    if let n = obj["net"] as? [String: Any] {
+                        let d = n["down"] as? Double ?? 0, u = n["up"] as? Double ?? 0
+                        self.lastNet = (d, u)
+                        self.netHist.append(min(100, (d + u) / 1.25e8 * 100))  // 1 Gbps reference
+                    }
                     if self.cpuHist.count > 40 { self.cpuHist.removeFirst(self.cpuHist.count - 40) }
                     if self.memHist.count > 40 { self.memHist.removeFirst(self.memHist.count - 40) }
+                    if self.gpuHist.count > 40 { self.gpuHist.removeFirst(self.gpuHist.count - 40) }
+                    if self.netHist.count > 40 { self.netHist.removeFirst(self.netHist.count - 40) }
                 }
-                let key = Self.renderKey(cpu: self.cpuHist, mem: self.memHist)
+                let key = Self.renderKey(cpu: self.cpuHist, mem: self.memHist, gpu: self.gpuHist, net: self.netHist,
+                                         netText: self.netText(), menu: self.lastMenuRows, bar: self.lastBarRows)
                 if key != self.lastRenderKey {
                     self.lastRenderKey = key
-                    self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist)
+                    self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist, gpu: self.gpuHist, net: self.netHist,
+                                                          netText: self.netText(), menu: self.lastMenuRows, bar: self.lastBarRows)
                 }
                 self.updateMenu(obj)
                 if let pid = obj["purge"] as? Int, pid != self.lastPurgeId {
@@ -656,19 +920,44 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func updateMenu(_ o: [String: Any]) {
-        let gb: (Double) -> String = { String(format: "%.1f GB", $0 / 1_073_741_824) }
+        let gb: (Double) -> String = { let g = $0 / 1_073_741_824; return g >= 10 ? String(format: "%.0f GB", g) : String(format: "%.1f GB", g) }
         if let c = o["cpu"] as? [String: Any], let t = c["total"] as? Double {
-            cpuItem.title = String(format: "CPU  %.1f%%   (user %.1f / sys %.1f)",
-                                   t, c["user"] as? Double ?? 0, c["sys"] as? Double ?? 0)
+            cpuItem.title = String(format: "CPU %.1f%%", t)
+            cpuRow.set(value: String(format: "%.1f%%", t), frac: t / 100, color: StatRowView.cpuColor)
         }
-        if let p = o["memPct"] as? Double, let u = o["memUsed"] as? Double, let tt = o["memTotal"] as? Double {
-            memItem.title = String(format: "Memory  %.0f%%   (%@ of %@)", p, gb(u), gb(tt))
+        if let p = o["gpuPct"] as? Double {
+            gpuItem.title = String(format: "GPU %.0f%%", p)
+            gpuRow.set(value: String(format: "%.0f%%", p), frac: p / 100, color: StatRowView.gpuColor)
+        } else {
+            // Non-Apple-Silicon machine: keep the row, show nothing.
+            gpuRow.set(value: "—", frac: 0, color: .clear)
         }
-        if let t = o["topCpu"] as? [String: Any], let n = t["name"] as? String {
-            topCpuItem.title = "Top CPU  \(n)  (\(String(format: "%.1f%%", t["cpu"] as? Double ?? 0)))"
+        if let p = o["memPct"] as? Double, let u = o["memUsed"] as? Double, let tt = o["memTotal"] as? Double, tt > 0 {
+            let v = "\(gb(u)) / \(gb(tt)) · \(Int(p.rounded()))%"
+            memItem.title = "Memory " + v
+            memRow.set(value: v, frac: p / 100, color: StatRowView.memColor)
         }
-        if let t = o["topMem"] as? [String: Any], let n = t["name"] as? String, let m = t["mem"] as? Double {
-            topMemItem.title = "Top Memory  \(n)  (\(gb(m)))"
+        if let th = o["thermal"] as? [String: Any] {
+            let lvl = th["level"] as? Int ?? 0
+            let state = (th["state"] as? String) ?? "nominal"
+            let pretty = String(state.prefix(1)).uppercased() + String(state.dropFirst())
+            thermalItem.title = "Thermal \(pretty)"
+            // pmset gives a discrete level (0..3), not a temperature — the bar
+            // fills in thirds as the machine heats up.
+            thermalRow.set(value: pretty, frac: min(1.0, Double(lvl) / 3),
+                           color: lvl == 0 ? .labelColor : (lvl == 1 ? NSColor.systemOrange : NSColor.systemRed))
+        }
+        if let n = o["net"] as? [String: Any] {
+            let d = n["down"] as? Double ?? 0, u = n["up"] as? Double ?? 0
+            // Dominant direction; the unit travels with the figure (B/KB/MB/GB,
+            // same ladder as the dashboard card, so the two surfaces agree).
+            netRow.set(value: d >= u ? "↓ \(Self.rate(d))/s" : "↑ \(Self.rate(u))/s",
+                       frac: min(1, (d + u) / 1.25e8), color: StatRowView.netColor)  // 1 Gbps reference
+        }
+        if let bt = o["bootTime"] as? Int, bt > 0 {
+            let up = max(0, Int(Date().timeIntervalSince1970) - bt)
+            let d = up / 86_400, h = (up % 86_400) / 3_600, m = (up % 3_600) / 60
+            uptimeRow.set(value: d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m")
         }
     }
 
@@ -696,31 +985,63 @@ final class StatusController: NSObject, NSMenuDelegate {
         "do shell script \"/usr/sbin/purge\" with prompt \"Pulse wants to clear the disk cache. " +
         "You will be asked for Touch ID or your password.\" with administrator privileges"
 
-    static func renderKey(cpu: [Double], mem: [Double]) -> String {
-        let cBucket = Int(((min(max(cpu.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
-        let mBucket = Int(((min(max(mem.last ?? 0, 0), 100) / 100.0) * 36.0).rounded())
-        return "\(cBucket):\(mBucket)"
+    /// Status-bar button: one capsule per stat visible in BOTH the menu and the
+    /// bar set, in the menu's row order. With nothing visible, fall back to a
+    /// static “P” so the item stays findable. (Thermal / uptime have no capsule;)
+    /// network shows its ↓/↑ numbers instead of a bar.)
+    struct Metric { let label: String; let value: Double?; let color: NSColor; var text: String? = nil }
+
+    static func renderKey(cpu: [Double], mem: [Double], gpu: [Double], net: [Double],
+                          netText: String, menu: [String], bar: [String]) -> String {
+        let b: (Double?) -> Int = { Int(((min(max($0 ?? 0, 0), 100) / 100.0) * 36.0).rounded()) }
+        // The net numbers only matter while the NET capsule is actually visible.
+        let netPart = bar.contains("network") ? netText : ""
+        return "\(b(cpu.last)):\(b(mem.last)):\(b(gpu.last)):\(netPart):\(menu.joined(separator: ","))|\(bar.joined(separator: ","))"
     }
 
-    static func render(cpu: [Double], mem: [Double]) -> NSImage {
-        renderBars(cpu: cpu.last, mem: mem.last)
+    static func render(cpu: [Double], mem: [Double], gpu: [Double], net: [Double],
+                       netText: String, menu: [String], bar: [String]) -> NSImage {
+        let all: [String: Metric] = [
+            "cpu": Metric(label: "CPU", value: cpu.last, color: NSColor(red: 1.0, green: 0.62, blue: 0.26, alpha: 1)),
+            "gpu": Metric(label: "GPU", value: gpu.last, color: NSColor(red: 0.20, green: 0.78, blue: 0.35, alpha: 1)),
+            "memory": Metric(label: "MEM", value: mem.last, color: NSColor(red: 0.30, green: 0.62, blue: 1.0, alpha: 1)),
+            "network": Metric(label: "NET", value: net.last, color: NSColor(red: 0.75, green: 0.35, blue: 0.95, alpha: 1), text: netText),
+        ]
+        let vis = menu.compactMap { id -> Metric? in guard bar.contains(id) else { return nil }; return all[id] }
+        return renderBars(vis)
     }
 
-    static func renderBars(cpu: Double?, mem: Double?) -> NSImage {
-        let w: CGFloat = 54, h: CGFloat = 22
+    static func renderBars(_ metrics: [Metric]) -> NSImage {
+        let barCell: CGFloat = 28, textCell: CGFloat = 58  // sized for "1023 KB" beside its arrow
+        let w: CGFloat = metrics.isEmpty ? 22 : 8 + metrics.reduce(0) { $0 + ($1.text == nil ? barCell : textCell) }
+        let h: CGFloat = 22
         let img = NSImage(size: NSSize(width: w, height: h))
         img.lockFocus()
-        guard let ctx = NSGraphicsContext.current?.cgContext else { img.unlockFocus(); return img }
+        defer { img.unlockFocus() }
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return img }
+        let white = NSColor.white.withAlphaComponent(0.9)
+        if metrics.isEmpty {
+            // No stats visible — static monogram keeps the item findable.
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+                .foregroundColor: white,
+            ]
+            let s = "P" as NSString
+            let sz = s.size(withAttributes: attrs)
+            s.draw(at: NSPoint(x: (w - sz.width) / 2, y: (h - sz.height) / 2), withAttributes: attrs)
+            return img
+        }
         let barW: CGFloat = 9, barH: CGFloat = 18
         let barY: CGFloat = (h - barH) / 2
         let cellW: CGFloat = 7
         let letterAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 6.5, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.9),
+            .foregroundColor: white,
         ]
-        func metric(_ x: CGFloat, _ label: String, _ value: Double?, _ color: NSColor) {
-            let lineH = barH / CGFloat(label.count)
-            for (j, ch) in label.enumerated() {
+        func metric(_ x: CGFloat, _ m: Metric) {
+            let cw = m.text == nil ? barCell : textCell
+            let lineH = barH / CGFloat(max(1, m.label.count))
+            for (j, ch) in m.label.enumerated() {
                 let s = String(ch) as NSString
                 let sz = s.size(withAttributes: letterAttrs)
                 let cellY = barY + barH - lineH * CGFloat(j + 1)
@@ -730,24 +1051,70 @@ final class StatusController: NSObject, NSMenuDelegate {
                     withAttributes: letterAttrs)
             }
             let bx = x + 8
-            let cr: CGFloat = 2
-            ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.3).cgColor)
-            ctx.setLineWidth(1)
-            NSBezierPath(roundedRect: NSRect(x: bx, y: barY, width: barW, height: barH),
-                         xRadius: cr, yRadius: cr).stroke()
-            if let v = value, v > 0 {
-                let fh = CGFloat(min(v, 100) / 100) * barH
-                if fh > 0 {
-                    let fr = min(cr, fh / 2, barW / 2)
-                    let fill = NSBezierPath(roundedRect: NSRect(x: bx, y: barY, width: barW, height: fh),
-                                             xRadius: fr, yRadius: fr)
-                    ctx.setFillColor(color.cgColor)
-                    fill.fill()
+            if let t = m.text {
+                // Fixed geometry so changing digit counts don't jitter: the arrow
+                // sits in a pinned left column, the figure is right-aligned to a
+                // fixed edge — only the figure's left edge moves as it grows.
+                let numAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .semibold),
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.95),
+                ]
+                let bw = cw - 8 - 2
+                let left = bx + 2
+                let right = bx + bw - 2
+                let iconSize: CGFloat = 7
+                let lines = t.components(separatedBy: "\n")
+                for (j, line) in lines.enumerated() {
+                    let ns = line as NSString
+                    let nsz = ns.size(withAttributes: numAttrs)
+                    let lineH = barH / 2
+                    let gy = barY + barH - lineH * CGFloat(j + 1)
+                    if let icon = Self.tintedSymbol(j == 0 ? "arrow.down" : "arrow.up", size: iconSize, color: m.color) {
+                        icon.draw(in: NSRect(x: left, y: gy + (lineH - icon.size.height) / 2,
+                                             width: icon.size.width, height: icon.size.height))
+                    }
+                    // Right-align; clamp if the figure is wider than the space left of the edge.
+                    let avail = max(0, right - (left + iconSize + 2))
+                    let w = min(nsz.width, avail)
+                    ns.draw(at: NSPoint(x: right - w, y: gy + (lineH - nsz.height) / 2),
+                            withAttributes: numAttrs)
+                }
+            } else {
+                let cr: CGFloat = 2
+                ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.3).cgColor)
+                ctx.setLineWidth(1)
+                NSBezierPath(roundedRect: NSRect(x: bx, y: barY, width: barW, height: barH),
+                             xRadius: cr, yRadius: cr).stroke()
+                if let v = m.value, v > 0 {
+                    let fh = CGFloat(min(v, 100) / 100) * barH
+                    if fh > 0 {
+                        let fr = min(cr, fh / 2, barW / 2)
+                        let fill = NSBezierPath(roundedRect: NSRect(x: bx, y: barY, width: barW, height: fh),
+                                                 xRadius: fr, yRadius: fr)
+                        ctx.setFillColor(m.color.cgColor)
+                        fill.fill()
+                    }
                 }
             }
         }
-        metric(4, "CPU", cpu, NSColor(red: 1.0, green: 0.62, blue: 0.26, alpha: 1))
-        metric(32, "MEM", mem, NSColor(red: 0.30, green: 0.62, blue: 1.0, alpha: 1))
+        var x: CGFloat = 4
+        for m in metrics {
+            metric(x, m)
+            x += m.text == nil ? barCell : textCell
+        }
+        return img
+    }
+
+    /// A template SF Symbol tinted with `color`, for the menu-bar bitmap.
+    static func tintedSymbol(_ name: String, size: CGFloat, color: NSColor) -> NSImage? {
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil),
+              let sym = base.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: .bold)) else { return nil }
+        let img = NSImage(size: sym.size)
+        img.lockFocus()
+        color.set()
+        let r = NSRect(origin: .zero, size: sym.size)
+        sym.draw(in: r)
+        r.fill(using: .sourceAtop)
         img.unlockFocus()
         return img
     }
@@ -775,6 +1142,15 @@ final class SettingsWindowController: NSObject {
     let loginStatusLabel = NSTextField(labelWithString: "")
     let closeBehaviorSeg: NSSegmentedControl
     let keepMemSwitch = NSSwitch()
+    private var menuRowSwitches: [String: NSSwitch] = [:]
+    private var menuRowBarSwitches: [String: NSSwitch] = [:]
+    private var menuRowBarWords: [String: NSTextField] = [:]
+    private let updateStatusLabel = NSTextField(labelWithString: "Up to date")
+    private let updateCheckButton = NSButton(title: "Check for Updates…", target: nil, action: nil)
+    private var menuRowLabels: [String: NSTextField] = [:]
+    private var menuRowFull: [String] = PulseSettings.allMenuRows // all rows, UI order (hidden included)
+    private var menuRowHidden = Set(PulseSettings.allMenuRows).subtracting(PulseSettings.defaultMenuRows)
+    private var menuRowBarOn = Set(PulseSettings.defaultBarRows)
 
     private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
     private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
@@ -786,7 +1162,9 @@ final class SettingsWindowController: NSObject {
 
     init(shell: Shell) {
         self.shell = shell
-        let rect = NSRect(x: 0, y: 0, width: 468, height: 318)
+        updateCheckButton.target = shell
+        updateCheckButton.action = #selector(Shell.checkForUpdates)
+        let rect = NSRect(x: 0, y: 0, width: 468, height: 660)
         window = NSWindow(contentRect: rect,
                           styleMask: [.titled, .closable],
                           backing: .buffered, defer: false)
@@ -914,7 +1292,107 @@ final class SettingsWindowController: NSObject {
         keepMemSwitch.setContentHuggingPriority(.required, for: .horizontal)
         let card3 = makeCard(s3Row)
 
-        for card in [card1, card2, card3] {
+        // 4. Status menu rows card — [switch] name … [↑][↓]
+        let s4Col = NSStackView()
+        s4Col.orientation = .vertical
+        s4Col.alignment = .leading
+        s4Col.spacing = 6
+        s4Col.addArrangedSubview(makeTitle("Status bar & menu"))
+        s4Col.addArrangedSubview(makeNote("Which stats appear in the dropdown and in the button capsule. Capsules follow the menu's row order; Thermal & Uptime are menu-only."))
+        let rowsBox = NSStackView()
+        rowsBox.orientation = .vertical
+        rowsBox.alignment = .leading
+        rowsBox.spacing = 5
+        let rowLabels: [String: String] = ["cpu": "CPU", "gpu": "GPU", "memory": "Memory", "thermal": "Thermal", "network": "Network", "uptime": "Uptime"]
+        for (si, id) in PulseSettings.allMenuRows.enumerated() {
+            let barCapable = PulseSettings.allBarRows.contains(id)
+            let sw = NSSwitch()
+            sw.target = self
+            sw.action = #selector(onMenuRowSwitch)
+            let bsw = NSSwitch()
+            bsw.target = self
+            bsw.action = #selector(onMenuRowBarSwitch)
+            bsw.isEnabled = barCapable
+            for s in [sw, bsw] {
+                s.translatesAutoresizingMaskIntoConstraints = false
+                s.widthAnchor.constraint(equalToConstant: 38).isActive = true
+                s.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            }
+            // Each switch carries its own word — no unlabeled adjacent toggles.
+            let mkWord = { (t: String) -> NSTextField in
+                let w = NSTextField(labelWithString: t)
+                w.font = .systemFont(ofSize: 11)
+                w.textColor = self.dimCol
+                w.translatesAutoresizingMaskIntoConstraints = false
+                w.widthAnchor.constraint(equalToConstant: 28).isActive = true
+                return w
+            }
+            let lbl = NSTextField(labelWithString: rowLabels[id] ?? id)
+            lbl.font = .systemFont(ofSize: 12)
+            lbl.textColor = textCol
+            let up = NSButton(title: "", target: self, action: #selector(onMenuRowUp))
+            let dn = NSButton(title: "", target: self, action: #selector(onMenuRowDown))
+            up.tag = si
+            dn.tag = si
+            up.image = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Move up")
+            dn.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Move down")
+            for b in [up, dn] {
+                b.imagePosition = .imageOnly
+                b.isBordered = false
+                b.bezelStyle = .regularSquare
+                b.contentTintColor = dimCol
+                b.translatesAutoresizingMaskIntoConstraints = false
+                b.widthAnchor.constraint(equalToConstant: 22).isActive = true
+                b.heightAnchor.constraint(equalToConstant: 20).isActive = true
+            }
+            let wordM = mkWord("Menu")
+            let wordB = mkWord("Bar")
+            let row = NSStackView(views: [lbl, sw, wordM, bsw, wordB, up, dn])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.distribution = .fill
+            row.spacing = 8
+            for v in [sw, bsw, up, dn] {
+                v.setContentHuggingPriority(.required, for: .horizontal)
+                v.setContentCompressionResistancePriority(.required, for: .horizontal)
+            }
+            // The name takes the slack so the labeled controls stay right-aligned.
+            lbl.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            lbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            menuRowSwitches[id] = sw
+            menuRowBarSwitches[id] = bsw
+            menuRowBarWords[id] = wordB
+            menuRowLabels[id] = lbl
+            rowsBox.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: rowsBox.widthAnchor).isActive = true
+        }
+        s4Col.addArrangedSubview(rowsBox)
+        let card4 = makeCard(s4Col)
+
+        // 5. Updates card — status + an explicit “Check for Updates…” affordance.
+        let s5Left = NSStackView()
+        s5Left.orientation = .vertical
+        s5Left.alignment = .leading
+        s5Left.spacing = 3
+        let s5Header = NSStackView()
+        s5Header.orientation = .horizontal
+        s5Header.alignment = .centerY
+        s5Header.spacing = 8
+        updateStatusLabel.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        updateStatusLabel.textColor = dimCol
+        s5Header.addArrangedSubview(makeTitle("Updates"))
+        s5Header.addArrangedSubview(updateStatusLabel)
+        s5Left.addArrangedSubview(s5Header)
+        s5Left.addArrangedSubview(makeNote("Checks at launch. A declined update is offered again on next launch, and stays marked (thin green strip, menu row) until installed."))
+        let s5Row = NSStackView(views: [s5Left, updateCheckButton])
+        s5Row.orientation = .horizontal
+        s5Row.alignment = .top
+        s5Row.distribution = .fill
+        s5Row.spacing = 14
+        updateCheckButton.setContentHuggingPriority(.required, for: .horizontal)
+        let card5 = makeCard(s5Row)
+
+        for card in [card1, card2, card3, card4, card5] {
             stack.addArrangedSubview(card)
             card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -947,6 +1425,27 @@ final class SettingsWindowController: NSObject {
         }
         closeBehaviorSeg.selectedSegment = shell.settings.shouldQuitOnClose ? 1 : 0
         keepMemSwitch.state = shell.settings.keepDashboardInMemory ? .on : .off
+        let vis = shell.settings.menuRows
+        let known = PulseSettings.allMenuRows
+        let prevHidden = menuRowFull.filter { menuRowHidden.contains($0) && !vis.contains($0) }
+        let hidden = prevHidden + known.filter { !vis.contains($0) && !prevHidden.contains($0) }
+        menuRowHidden = Set(hidden)
+        // Keep each row's slot stable: only adopt the incoming order when the
+        // visible projection actually differs (external change / first open).
+        let projected = menuRowFull.filter { !menuRowHidden.contains($0) }
+        if projected != vis {
+            menuRowFull = vis + hidden
+        }
+        let bar = shell.settings.barRows
+        if Set(bar) != menuRowBarOn { menuRowBarOn = Set(bar) }
+        if let ver = shell.pendingUpdateVersion {
+            updateStatusLabel.stringValue = "v\(ver) available"
+            updateStatusLabel.textColor = accentGreen
+        } else {
+            updateStatusLabel.stringValue = "Up to date"
+            updateStatusLabel.textColor = dimCol
+        }
+        rebuildMenuRowsUI()
     }
 
     func show() {
@@ -967,11 +1466,67 @@ final class SettingsWindowController: NSObject {
     @objc func onKeepMemChanged() {
         shell?.setKeepDashboardInMemory(keepMemSwitch.state == .on)
     }
+
+    @objc private func onMenuRowSwitch(_ sender: NSControl) {
+        for (id, sw) in menuRowSwitches where sw === sender {
+            if menuRowHidden.contains(id) { menuRowHidden.remove(id) } else { menuRowHidden.insert(id) }
+        }
+        rebuildMenuRowsUI()
+        pushMenuRows()
+    }
+
+    @objc private func onMenuRowBarSwitch(_ sender: NSControl) {
+        for (id, sw) in menuRowBarSwitches where sw === sender {
+            if menuRowBarOn.contains(id) { menuRowBarOn.remove(id) } else { menuRowBarOn.insert(id) }
+        }
+        rebuildMenuRowsUI()
+        pushMenuRows()
+    }
+
+    @objc private func onMenuRowUp(_ sender: NSControl) { moveMenuRow((sender as? NSButton)?.tag, -1) }
+
+    @objc private func onMenuRowDown(_ sender: NSControl) { moveMenuRow((sender as? NSButton)?.tag, 1) }
+
+    private func moveMenuRow(_ si: Int?, _ dir: Int) {
+        guard let si, PulseSettings.allMenuRows.indices.contains(si) else { return }
+        let id = PulseSettings.allMenuRows[si]
+        guard let i = menuRowFull.firstIndex(of: id) else { return }
+        let j = i + dir
+        guard menuRowFull.indices.contains(j) else { return }
+        menuRowFull.swapAt(i, j)
+        rebuildMenuRowsUI()
+        pushMenuRows()
+    }
+
+    private func rebuildMenuRowsUI() {
+        for (id, sw) in menuRowSwitches {
+            sw.state = menuRowHidden.contains(id) ? .off : .on
+            menuRowLabels[id]?.textColor = menuRowHidden.contains(id) ? dimCol : textCol
+        }
+        for (id, sw) in menuRowBarSwitches {
+            sw.state = menuRowBarOn.contains(id) ? .on : .off
+            sw.isEnabled = PulseSettings.allBarRows.contains(id)
+            menuRowBarWords[id]?.alphaValue = PulseSettings.allBarRows.contains(id) ? 1 : 0.4
+        }
+    }
+
+    private func pushMenuRows() {
+        shell?.setMenuLayout(
+            menu: menuRowFull.filter { !menuRowHidden.contains($0) },
+            bar: PulseSettings.allBarRows.filter { menuRowBarOn.contains($0) })
+    }
 }
 
 /* ================================================================== *
  *  App shell
  * ================================================================== */
+/// Clickable view — the update strip's 4px edge needs a pointer cursor + a click target.
+final class ClickableView: NSView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
 final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, SPUUpdaterDelegate {
     var window: NSWindow!
     var web: WKWebView?
@@ -987,6 +1542,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var serverPort: Int?
     var status: StatusController?
     var updater: SPUStandardUpdaterController!
+    var pendingUpdateVersion: String?   // newest appcast version not yet installed
+    let updateStrip = ClickableView()
     var activityToken: NSObjectProtocol?
     let darkBg = NSColor(red: 0.043, green: 0.055, blue: 0.07, alpha: 1)
 
@@ -1019,6 +1576,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         }
         window.contentView = w
         web = w
+        syncUpdateStrip()
         return w
     }
 
@@ -1033,6 +1591,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         placeholder.wantsLayer = true
         placeholder.layer?.backgroundColor = darkBg.cgColor
         window.contentView = placeholder
+        syncUpdateStrip()
         web = nil
         loaded = false
     }
@@ -1102,6 +1661,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             "startAtLogin": configured,
             "closeBehavior": settings.closeBehavior,
             "keepDashboardInMemory": settings.keepDashboardInMemory,
+            "menuRows": settings.menuRows,
+            "barRows": settings.barRows,
             "daemonStatus": daemonStatus,
             "daemonError": mgr.lastError ?? "",
         ]
@@ -1115,32 +1676,19 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     func syncAllSettingsUI() {
-        status?.refreshToggleStates(queryLaunchctl: false)
         settingsController?.syncFromState()
         pushSettingsToWeb()
     }
 
-    @objc func toggleStartAtLoginMenu() {
-        let mgr = LaunchAgentManager.shared
-        let currentlyOn = mgr.isTransitioning ? settings.startAtLogin : mgr.actualStartAtLoginState()
-        setStartAtLogin(!currentlyOn)
-    }
-
-    @objc func toggleKeepRunningMenu() {
-        setCloseBehavior(settings.shouldQuitOnClose ? "background" : "quit")
-    }
-
-    @objc func toggleKeepDashboardInMemoryMenu() {
-        setKeepDashboardInMemory(!settings.keepDashboardInMemory)
-    }
-
     func setCloseBehavior(_ mode: String) {
+        settings.mergeFromDisk()
         settings.closeBehavior = (mode == "quit") ? "quit" : "background"
         settings.save()
         syncAllSettingsUI()
     }
 
     func setKeepDashboardInMemory(_ keep: Bool) {
+        settings.mergeFromDisk()
         settings.keepDashboardInMemory = keep
         settings.save()
         if !keep && !window.isVisible {
@@ -1149,11 +1697,28 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         syncAllSettingsUI()
     }
 
+    func setMenuLayout(menu: [String], bar: [String]) {
+        settings.mergeFromDisk()
+        var mv: [String] = []
+        for id in menu where PulseSettings.allMenuRows.contains(id) && !mv.contains(id) { mv.append(id) }
+        settings.menuRows = mv  // may be empty — "all hidden" is a valid layout
+        var bv: [String] = []
+        for id in bar where PulseSettings.allBarRows.contains(id) && !bv.contains(id) { bv.append(id) }
+        settings.barRows = bv  // may be empty — the button shows the static “P”
+        settings.save()  // save() advances layoutGen
+        status?.localLayoutGen = settings.layoutGen
+        // Switch state first, capsule second — the assigned state settles before
+        // the button visibly changes.
+        syncAllSettingsUI()
+        status?.applyMenuLayout(menu: settings.menuRows, bar: settings.barRows)
+    }
+
     func setStartAtLogin(_ enabled: Bool) {
         let mgr = LaunchAgentManager.shared
         mgr.lastError = nil
         mgr.isTransitioning = true
         switchingBackend = true
+        settings.mergeFromDisk()
         settings.startAtLogin = enabled
         settings.save()
         syncAllSettingsUI()
@@ -1244,6 +1809,15 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if alive {
                     let samePortAndLoaded = (self.serverPort == p && self.loaded)
                     self.switchingBackend = false
+                    // If we spawned our own backend while waiting for the daemon, release it
+                    // before adopting — the port file can point at only one backend. (The
+                    // dying backend only removes the port file if it still owns it, so the
+                    // daemon's entry survives.)
+                    if self.spawnedNode, self.serverPort != p, let dying = self.nodeProc {
+                        self.nodeProc = nil
+                        self.spawnedNode = false
+                        if dying.isRunning { dying.terminate() }
+                    }
                     self.serverPort = p
                     self.spawnedNode = false
                     self.status?.start(port: p)
@@ -1277,6 +1851,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         }
     }
 
+    /// The status menu's single Quit: stops the background sampler (LaunchAgent
+    /// daemon) for this session, then terminates. App-spawned backends are
+    /// cleaned up in applicationShouldTerminate; the plist (Start at login) stays.
     @objc func quitAndStopBackground() {
         quitting = true
         _ = LaunchAgentManager.shared.bootoutSessionOnly()
@@ -1287,12 +1864,63 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         updater.checkForUpdates(nil)
     }
 
+    /// Re-parent the strip onto whatever the current content view is — the content view
+    /// is replaced when the web opens/closes/reopens.
+    func syncUpdateStrip() {
+        guard let cv = window.contentView else { return }
+        updateStrip.frame = NSRect(x: 0, y: cv.frame.maxY - 4, width: cv.frame.width, height: 4)
+        cv.addSubview(updateStrip)
+    }
+
+    /// Reflect the update state on every surface: the thin top strip, the status-menu row,
+    /// the native Settings card, and the dashboard.
+    func setUpdateIndicators() {
+        let v = pendingUpdateVersion
+        updateStrip.isHidden = v == nil
+        updateStrip.toolTip = v.map { "Pulse \($0) is available — click to update" }
+        syncUpdateStrip()
+        status?.showUpdateRow(v)
+        settingsController?.syncFromState()
+        pushUpdateToWeb()
+    }
+
+    func pushUpdateToWeb() {
+        guard let w = web, loaded else { return }
+        let payload: [String: Any] = ["available": pendingUpdateVersion ?? NSNull()]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        w.evaluateJavaScript("window.__pulseUpdate && window.__pulseUpdate(\(json))", completionHandler: nil)
+    }
+
     // MARK: Sparkle delegate — restart LaunchAgent on auto-update so it never serves an old bundle
     func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
         quitting = true
         if LaunchAgentManager.shared.cachedIsLoaded || LaunchAgentManager.shared.plistExists {
             _ = LaunchAgentManager.shared.bootoutSessionOnly()
         }
+    }
+
+    // Update availability. Declining dismisses the sheet for now — Sparkle re-offers on the
+    // next launch — and the quiet strip/menu row remain as a persistent signal until the
+    // installed version actually changes.
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        pendingUpdateVersion = item.displayVersionString
+        setUpdateIndicators()
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        pendingUpdateVersion = nil
+        setUpdateIndicators()
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        // A failed check is not “up to date” — keep the previous state.
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice, forUpdate item: SUAppcastItem, state: SPUUserUpdateState) {
+        if choice == .install { pendingUpdateVersion = nil }  // installing → relaunch; the new build re-checks
+        // Dismiss / Skip: keep the indicators — a quiet “install it any time” signal.
+        setUpdateIndicators()
     }
 
     // MARK: WKScriptMessageHandler — receive page trace stages & in-dashboard settings changes
@@ -1321,6 +1949,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if let val = body["value"] as? String { setCloseBehavior(val) }
             case "setKeepDashboardInMemory":
                 if let val = body["value"] as? Bool { setKeepDashboardInMemory(val) }
+            case "setMenuRows":
+                if let val = body["rows"] as? [String] { setMenuLayout(menu: val, bar: body["bar"] as? [String] ?? settings.barRows) }
+            case "checkForUpdates":
+                checkForUpdates()
             default:
                 break
             }
@@ -1362,9 +1994,18 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         window.delegate = self
         window.backgroundColor = darkBg
 
+        // Very thin strip along the top edge — the quiet, persistent “an update is
+        // available, click to install” indicator (hidden until one is).
+        updateStrip.wantsLayer = true
+        updateStrip.layer?.backgroundColor = NSColor(red: 0.17, green: 0.83, blue: 0.65, alpha: 1).cgColor  // --net
+        updateStrip.isHidden = true
+        updateStrip.autoresizingMask = [.width, .minYMargin]
+        updateStrip.onClick = { [weak self] in self?.checkForUpdates() }
+
         // Kick off backend discovery / spawn immediately so it runs in parallel with
         // WKWebView, menu bar, and Sparkle initialization on the main thread.
         status = StatusController(shell: self)
+        status?.localLayoutGen = settings.layoutGen
         status?.onStaleBackend = { [weak self] in self?.handleStaleBackend() }
         startServer()
 
@@ -1546,9 +2187,19 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                         }
                     }
                 } else {
+                    // Daemon is loaded with the current plist — but a rebuild changes the
+                    // CODE (server.js), which the plist doesn't track. Probe the daemon's
+                    // serverMtime and kickstart it if stale, so we adopt ONE fresh backend
+                    // instead of spawning a second one beside a stale daemon.
+                    var kicked = false
+                    if let p = readPortFile(), let disk = expectedServerMtime(),
+                       let sm = agent.probeServerMtime(port: p), sm != disk {
+                        kicked = agent.kickstart()
+                    }
                     DispatchQueue.main.async {
-                        // Daemon is loaded with current plist (e.g. still finishing its first sample right after boot).
-                        self?.attachToDaemonPort(attemptsLeft: 20)
+                        // Give the (re)started daemon a moment to bind and serve fresh data
+                        // (e.g. still finishing its first sample right after boot).
+                        self?.attachToDaemonPort(attemptsLeft: kicked ? 25 : 20)
                     }
                 }
             }
@@ -1738,7 +2389,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         var settingsRoundTripOk = false
         if let savedData = try? Data(contentsOf: URL(fileURLWithPath: settingsFile)),
            let savedObj = try? JSONSerialization.jsonObject(with: savedData) as? [String: Any] {
-            let verOk = (savedObj["version"] as? Int) == 1
+            let verOk = (savedObj["version"] as? Int) == PulseSettings.currentVersion
             let migratedOk = savedObj["statusBarGraphType"] == nil
             let preservedOk = (savedObj["customPreservedKey"] as? String) == "keep-me"
             let toggledOk = (savedObj["keepDashboardInMemory"] as? Bool) == true

@@ -17,6 +17,7 @@
     --mem: #4d9fff;
     --net: #2dd4a7;
     --disk: #b07cff;
+    --gpu: #34c759;
     --wired: #ff6b6b;
     --comp: #b07cff;
     --cache: #2dd4a7;
@@ -61,7 +62,7 @@
   .hdr-btn svg { flex-shrink: 0; opacity: .85; }
 
   /* ---------- stat cards ---------- */
-  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-height: 112px;
@@ -83,6 +84,8 @@
   .card.mem .big, .card.mem .label { color: var(--mem); }
   .card.net .big, .card.net .label { color: var(--net); }
   .card.disk .big, .card.disk .label { color: var(--disk); }
+  .card.gpu .big, .card.gpu .label { color: var(--gpu); }
+  .card .sub .hot, .card .sub .hot b { color: var(--wired); }
 
   .membar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: var(--free); margin-top: auto; }
   .membar .seg { height: 100%; }
@@ -204,6 +207,24 @@
   .mempop .mp-tip { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1f2b; font-size: 11px; color: var(--faint); }
 
   /* ---------- settings modal ---------- */
+  #menu-rows { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+  #menu-rows .mr-row { display: flex; align-items: center; gap: 10px; cursor: grab; border-radius: 7px; }
+  #menu-rows .mr-row:active { cursor: grabbing; }
+  #menu-rows .mr-row.dragging { opacity: 0.45; }
+  #menu-rows .mr-grip { width: 10px; height: 14px; fill: var(--dim); flex: none; }
+  #menu-rows .mr-ctl { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+  #menu-rows .mr-ctl.dis { opacity: 0.4; }
+  #menu-rows .mr-ctl-word { font-size: 11px; color: var(--dim); width: 28px; flex: none; }
+  button.sw:disabled { cursor: not-allowed; opacity: 0.35; }
+  #menu-rows .mr-name { flex: 1; font-size: 12.5px; color: var(--fg); }
+  #menu-rows .mr-name.dim { color: var(--dim); }
+  #menu-rows .mr-btn {
+    border: 1px solid var(--line); background: transparent; color: var(--dim);
+    width: 22px; height: 20px; border-radius: 5px; cursor: pointer;
+    font-size: 11px; line-height: 1; padding: 0;
+  }
+  #menu-rows .mr-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--dim); }
+  #menu-rows .mr-btn:disabled { opacity: 0.3; cursor: default; }
   #settings-scrim {
     position: fixed; inset: 0; background: rgba(6, 8, 12, .72);
     display: none; align-items: center; justify-content: center; padding: 20px; z-index: 160;
@@ -212,6 +233,9 @@
   .s-modal {
     width: 100%; max-width: 472px; background: var(--panel); border: 1px solid var(--border);
     border-radius: 14px; box-shadow: 0 20px 54px rgba(0,0,0,.6); overflow: hidden;
+    /* short windows: scroll instead of clipping — the status-rows card must stay
+       reachable (a fixed, centered, overflow:hidden modal gets cut off-screen) */
+    max-height: calc(100vh - 40px); overflow-y: auto;
   }
   .s-head {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -264,6 +288,15 @@
   button.sw:hover { border-color: #495673; }
   button.sw[aria-checked="true"]:hover { border-color: #4ce3b8; }
   /* segmented control */
+  .s-act {
+    background: none; border: 1px solid var(--border); color: var(--dim);
+    border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: color .14s, background .14s, border-color .14s;
+  }
+  .s-act:hover { color: var(--text); border-color: #2f384c; }
+  .s-act.accent { color: var(--net); border-color: rgba(45,212,167,.4); }
+  .s-act.accent:hover { background: rgba(45,212,167,.1); }
+  #st-update-row .s-desc b { color: var(--text); }
   .s-seg {
     display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
     background: #10131b; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
@@ -410,6 +443,11 @@
       <div class="big" id="disk-big">—</div>
       <canvas class="spark" id="spark-disk"></canvas>
     </div>
+    <div class="card gpu">
+      <div class="top"><span class="label">GPU</span><span class="sub" id="gpu-sub"></span></div>
+      <div class="big" id="gpu-big">—</div>
+      <canvas class="spark" id="spark-gpu"></canvas>
+    </div>
   </section>
 
   <section class="toolbar">
@@ -501,6 +539,17 @@
           </div>
           <button class="sw" id="sw-login" role="switch" aria-checked="false" aria-label="Start at login"><span class="knob"></span></button>
         </div>
+        <div class="s-row" id="st-update-row" hidden>
+          <div class="s-info">
+            <div class="s-title">Update available <span class="s-pill" id="st-update-badge">…</span></div>
+            <div class="s-desc">Pulse <b id="st-update-ver"></b> is ready — install it any time.</div>
+          </div>
+          <button class="s-act accent" id="st-update-btn">Update…</button>
+        </div>
+        <div class="s-row">
+          <div class="s-info"><div class="s-desc" style="margin-top:10px">Check for updates</div></div>
+          <button class="s-act" id="st-check-btn">Check</button>
+        </div>
       </div>
       <div class="s-card">
         <div class="s-info">
@@ -523,6 +572,13 @@
           </div>
           <button class="sw" id="sw-keepmem" role="switch" aria-checked="false" aria-label="Keep dashboard in memory when closed"><span class="knob"></span></button>
         </div>
+      </div>
+      <div class="s-card">
+        <div class="s-info">
+          <div class="s-title">Status bar &amp; menu</div>
+          <div class="s-desc">Which stats appear in the menu-bar dropdown and in the button itself — drag a row to reorder the menu. Capsules follow menu order; thermal &amp; uptime are menu-only.</div>
+        </div>
+        <div id="menu-rows"></div>
       </div>
     </div>
     <div class="s-foot">
@@ -558,7 +614,7 @@
 const S = {
   sys: null,
   apps: new Map(),          // key → { data, cpuHist: [], memHist: [] }
-  sysHist: { cpu: [], net: [], disk: [], wired: [], comp: [], cache: [] },
+  sysHist: { cpu: [], net: [], disk: [], gpu: [], wired: [], comp: [], cache: [] },
   search: '',
   showAll: { cpu: false, mem: false },
   drawerKey: null,
@@ -1172,11 +1228,21 @@ function renderSys() {
     $('#h-batt').className = s.batt.charging ? 'batt-charging' : '';
   } else bw.style.display = 'none';
 
-  // cpu card
+  // cpu card — thermal state is a warning: only shown when NOT nominal
   $('#cpu-big').textContent = fmtPct(s.cpu.total);
-  $('#cpu-sub').innerHTML = `<span>user <b>${s.cpu.user.toFixed(1)}%</b></span><span>sys <b>${s.cpu.sys.toFixed(1)}%</b></span>`;
+  const therm = s.thermal;
+  const hot = therm && therm.state !== 'nominal';
+  $('#cpu-sub').innerHTML = `<span>user <b>${s.cpu.user.toFixed(1)}%</b></span><span>sys <b>${s.cpu.sys.toFixed(1)}%</b></span>` +
+    (hot ? `<span class="hot">thermal <b>${therm.state}</b></span>` : '');
   pushHist(S.sysHist.cpu, s.cpu.total);
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
+
+  // gpu card (Apple Silicon ioreg — "—" on machines without an AGX GPU node)
+  const g = s.gpu;
+  $('#gpu-big').textContent = g && g.pct != null ? fmtPct(g.pct) : '—';
+  $('#gpu-sub').innerHTML = `<span>${esc((g && g.name) || '—')}${g && g.cores ? ` · ${g.cores} cores` : ''}</span>`;
+  pushHist(S.sysHist.gpu, g && g.pct != null ? g.pct : 0);
+  drawSpark($('#spark-gpu'), S.sysHist.gpu, '#34c759');
 
   // memory card — Activity Monitor's "Memory Used" (Apps + Wired + Compressed,
   // excluding reclaimable file cache) as the headline, with the 4 active pools
@@ -1453,16 +1519,185 @@ const settingsState = {
   startAtLogin: false,
   closeBehavior: 'background',
   keepDashboardInMemory: false,
+  menuRows: ['cpu', 'gpu', 'memory', 'uptime'], // visible status-menu rows, in order
+  menuRowsFull: ['cpu', 'gpu', 'memory', 'thermal', 'network', 'uptime'], // all rows, UI order (hidden included)
+  menuHidden: ['thermal'],
+  barRows: ['cpu', 'gpu', 'memory', 'network'], // visible status-bar capsules (menu order applies)
   daemonStatus: 'off', // 'active' | 'busy' | 'error' | 'stopped' | 'off'
   daemonError: '',
 };
 
+const ALL_MENU_ROWS = [
+  ['cpu', 'CPU', true], ['gpu', 'GPU', true], ['memory', 'Memory', true],
+  ['thermal', 'Thermal', false], ['network', 'Network', true],
+  ['uptime', 'Uptime', false],
+  // 3rd = the stat can appear as a status-bar button capsule (thermal is a state
+  // word, uptime a counter — neither has a capsule; they're menu-only).
+];
+const BAR_CAPABLE = ALL_MENU_ROWS.filter(([, , cap]) => cap).map(([id]) => id);
+
+// The server/app send the VISIBLE ordered menu rows + the visible bar capsules.
+// Update hidden membership while keeping each row's SLOT in the list stable —
+// turning a row off must not move it (re-enabling brings it back to the same
+// slot, and the same holds in the menu). Only when the visible order actually
+// changed externally (another Pulse, first load) is it adopted.
+function applyLayoutFromServer(menuArr, barArr) {
+  const known = ALL_MENU_ROWS.map(([id]) => id);
+  const vis = [];
+  if (Array.isArray(menuArr)) for (const id of menuArr) if (known.includes(id) && !vis.includes(id)) vis.push(id);
+  const visSet = new Set(vis);
+  const prevHidden = settingsState.menuRowsFull.filter((id) => !visSet.has(id));
+  settingsState.menuHidden = [...prevHidden, ...known.filter((id) => !visSet.has(id) && !prevHidden.includes(id))];
+  settingsState.menuRows = vis;
+  const projected = settingsState.menuRowsFull.filter((id) => !settingsState.menuHidden.includes(id));
+  if (!(projected.length === vis.length && projected.every((id, i) => id === vis[i]))) {
+    settingsState.menuRowsFull = [...vis, ...settingsState.menuHidden];
+  }
+  // Bar set: an old backend never sent it, in which case it follows the menu.
+  if (Array.isArray(barArr)) {
+    const b = [];
+    for (const id of barArr) if (BAR_CAPABLE.includes(id) && !b.includes(id)) b.push(id);
+    settingsState.barRows = b;
+  } else {
+    settingsState.barRows = vis.filter((id) => BAR_CAPABLE.includes(id));
+  }
+}
+
+function renderMenuRowsUI() {
+  const box = $('#menu-rows');
+  box.innerHTML = '';
+  settingsState.menuRowsFull.forEach((id, i) => {
+    const spec = ALL_MENU_ROWS.find(([r]) => r === id);
+    const label = spec?.[1] ?? id;
+    const barCapable = spec?.[2] ?? false;
+    const visible = !settingsState.menuHidden.includes(id);
+    const row = document.createElement('div');
+    row.className = 'mr-row';
+    row.dataset.id = id;
+    row.draggable = true;  // drag to reorder — ↑/↓ below stay as the accessible fallback
+    const grip = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    grip.setAttribute('viewBox', '0 0 10 14');
+    grip.classList.add('mr-grip');
+    grip.setAttribute('aria-hidden', 'true');
+    for (let d = 0; d < 6; d++) {
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', 2.5 + (d % 2) * 5);
+      c.setAttribute('cy', 2 + Math.floor(d / 2) * 5);
+      c.setAttribute('r', 1.4);
+      grip.append(c);
+    }
+    const mkSw = (on, ariaLabel, disabled, onClick) => {
+      const sw = document.createElement('button');
+      sw.className = 'sw';
+      sw.setAttribute('role', 'switch');
+      sw.setAttribute('aria-checked', on ? 'true' : 'false');
+      sw.setAttribute('aria-label', ariaLabel);
+      if (disabled) sw.disabled = true;
+      const knob = document.createElement('span');
+      knob.className = 'knob';
+      sw.append(knob);
+      sw.addEventListener('click', onClick);
+      return sw;
+    };
+    const sw = mkSw(visible, `${label} row in the menu`, false, () => {
+      if (visible) settingsState.menuHidden.push(id);
+      else settingsState.menuHidden.splice(settingsState.menuHidden.indexOf(id), 1);
+      renderMenuRowsUI(); pushMenuRows();
+    });
+    const barOn = barCapable && settingsState.barRows.includes(id);
+    const bsw = mkSw(barOn, `${label} capsule in the status bar`, !barCapable, () => {
+      const bi = settingsState.barRows.indexOf(id);
+      if (bi >= 0) settingsState.barRows.splice(bi, 1);
+      else settingsState.barRows.push(id);
+      renderMenuRowsUI(); pushMenuRows();
+    });
+    // Each switch carries its own word, so no two unlabeled toggles sit side by side.
+    const ctl = (swx, word, dimmed) => {
+      const w = document.createElement('span');
+      w.className = 'mr-ctl' + (dimmed ? ' dis' : '');
+      const l = document.createElement('span');
+      l.className = 'mr-ctl-word';
+      l.textContent = word;
+      w.append(swx, l);
+      return w;
+    };
+    if (!barCapable) bsw.title = 'Menu only — no status-bar representation';
+    const name = document.createElement('span');
+    name.className = 'mr-name' + (visible ? '' : ' dim');
+    name.textContent = label;
+    const mkBtn = (glyph, dir, enabled) => {
+      const b = document.createElement('button');
+      b.className = 'mr-btn'; b.textContent = glyph; b.disabled = !enabled;
+      b.title = dir < 0 ? 'Move up' : 'Move down';
+      b.addEventListener('click', () => {
+        const f = settingsState.menuRowsFull;
+        const j = i + dir;
+        if (!f[j]) return;
+        [f[i], f[j]] = [f[j], f[i]];
+        renderMenuRowsUI(); pushMenuRows();
+      });
+      return b;
+    };
+    row.append(grip, name, ctl(sw, 'Menu'), ctl(bsw, 'Bar', !barCapable),
+               mkBtn('↑', -1, i > 0), mkBtn('↓', 1, i < settingsState.menuRowsFull.length - 1));
+    box.append(row);
+  });
+}
+
+// Drag-to-reorder for the menu-rows list (event delegation — rows are re-created
+// on every render, so the handlers live on the static container).
+let mrDragEl = null;
+function wireMenuRowsDrag() {
+  const box = $('#menu-rows');
+  box.addEventListener('dragstart', (e) => {
+    const row = e.target.closest('.mr-row');
+    if (!row) return;
+    mrDragEl = row;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', row.dataset.id); } catch { /* some webviews */ }
+  });
+  box.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (!mrDragEl) return;
+    const over = e.target.closest('.mr-row');
+    if (!over || over === mrDragEl) return;
+    const rect = over.getBoundingClientRect();
+    const before = (e.clientY - rect.top) < rect.height / 2;
+    box.insertBefore(mrDragEl, before ? over : over.nextSibling);
+  });
+  box.addEventListener('dragend', () => {
+    if (!mrDragEl) return;
+    mrDragEl.classList.remove('dragging');
+    mrDragEl = null;
+    const order = [...box.children].map((el) => el.dataset.id).filter(Boolean);
+    if (order.length !== settingsState.menuRowsFull.length) return;
+    if (order.every((id, i) => id === settingsState.menuRowsFull[i])) return;
+    settingsState.menuRowsFull = order;
+    pushMenuRows();
+  });
+}
+
+function pushMenuRows() {
+  const rows = settingsState.menuRowsFull.filter((id) => !settingsState.menuHidden.includes(id));
+  settingsState.menuRows = rows;
+  settingsState.barRows = settingsState.barRows.filter((id) => BAR_CAPABLE.includes(id));
+  if (!postNativeSetting({ action: 'setMenuRows', rows, bar: settingsState.barRows })) {
+    saveSettingsFallback({ menuRows: rows, barRows: settingsState.barRows });
+  }
+  renderSettingsUI();
+}
+
+wireMenuRowsDrag(); // once — the handlers are delegated on the static container
+
 function renderSettingsUI() {
+  applyLayoutFromServer(settingsState.menuRows, settingsState.barRows);
   $('#sw-login').setAttribute('aria-checked', settingsState.startAtLogin ? 'true' : 'false');
   $('#sw-keepmem').setAttribute('aria-checked', settingsState.keepDashboardInMemory ? 'true' : 'false');
   document.querySelectorAll('#seg-close button').forEach((b) => {
     b.classList.toggle('on', b.dataset.val === settingsState.closeBehavior);
   });
+  renderMenuRowsUI();
   const badge = $('#st-daemon-badge');
   const txt = $('#st-daemon-text');
   const errEl = $('#st-daemon-err');
@@ -1564,6 +1799,19 @@ $('#mem-info').addEventListener('click', (e) => {
   setMemPop(!memPop);
 });
 $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
+window.__pulseUpdate = (d) => {
+  const row = $('#st-update-row');
+  if (d && d.available) {
+    row.hidden = false;
+    $('#st-update-ver').textContent = String(d.available);
+    $('#st-update-badge').textContent = 'v' + d.available;
+  } else {
+    row.hidden = true;
+  }
+};
+$('#st-update-btn').addEventListener('click', () => postNativeSetting({ action: 'checkForUpdates' }));
+$('#st-check-btn').addEventListener('click', () => postNativeSetting({ action: 'checkForUpdates' }));
+
 $('#settings-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   setSettingsModal(!settingsOpen);

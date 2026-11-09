@@ -3,7 +3,7 @@
  * Pulse — real-time macOS resource dashboard.
  *
  * Zero-dependency Node.js backend:
- *  - samples the whole system every second (ps, vm_stat, sysctl, top, netstat, iostat, pmset)
+ *  - samples the whole system every second (ps, vm_stat, sysctl, top, netstat, iostat, pmset, ioreg)
  *  - groups every process into the app it belongs to (bundle detection + parent-chain walk)
  *  - streams a full snapshot to the browser over Server-Sent Events
  *
@@ -317,6 +317,82 @@ function parseBatt(out) {
   return r;
 }
 
+/**
+ * `pmset -g batt -g therm` → thermal state. pmset is the one root-free source
+ * of the SMC thermal warning level: "No … has been recorded" means level 0
+ * (Nominal); an active throttle prints "… thermal level N" (1 = slowed,
+ * ≥2 = throttled). Only the MAX level across the three sensors matters. It's a
+ * discrete state, not a reading — no temperature value is available without
+ * root, so UIs render it as a state bar, not a gauge.
+ */
+function parseTherm(out) {
+  let level = 0;
+  if (out) {
+    for (const m of out.matchAll(/(?:thermal|performance) level (\d+)/g)) level = Math.max(level, +m[1]);
+  }
+  const state = level === 0 ? 'nominal' : level === 1 ? 'slowed' : 'throttled';
+  return { level, state };
+}
+
+/**
+ * `ioreg -r -l -c AGXDeviceUserClient` → pid → { name, ns }.
+ * Each Apple Silicon GPU client exposes AppUsage with `accumulatedGPUTime`
+ * (cumulative nanoseconds) — the only root-free GPU utilization source (see
+ * docs/gotchas.md). Parsed per node block: the plist prints `AppUsage`
+ * BEFORE `IOUserClientCreator` (alphabetical), so a flat scan would attribute
+ * a node's usage to the previous node's pid.
+ */
+function parseIoregGpu(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const block of out.split(/<class AGXDeviceUserClient[^\n]*/g)) {
+    const c = block.match(/"IOUserClientCreator" = "pid (\d+), (\S+)"/);
+    if (!c) continue;
+    let ns = 0;
+    for (const u of block.matchAll(/"accumulatedGPUTime"=(\d+)/g)) ns += +u[1];
+    const e = map.get(c[1]);
+    if (e) e.ns += ns;
+    else map.set(c[1], { name: c[2], ns });
+  }
+  return map;
+}
+
+// Status-menu row ids. settings.json stores an ordered SUBSET under `menuRows`
+// (missing id = hidden row); the /api/status payload carries it so the app can
+// rebuild its stat block. Thermal is off by default — pmset reports a bare word
+// (nominal/slowed/throttled) with no value to build a bar from.
+const MENU_ROW_IDS = ['cpu', 'gpu', 'memory', 'thermal', 'network', 'uptime'];
+// Thermal is off by default (bare pmset word, no bar); network is on — it has
+// a real value (MB/s) and a 1 Gbps reference scale.
+const DEFAULT_MENU_ROWS = ['cpu', 'gpu', 'memory', 'network', 'uptime'];
+function normalizeMenuRows(v) {
+  if (Array.isArray(v)) {
+    const out = [];
+    for (const id of v) if (MENU_ROW_IDS.includes(id) && !out.includes(id)) out.push(id);
+    return out; // may be empty — "all hidden" is a valid layout
+  }
+  return [...DEFAULT_MENU_ROWS];
+}
+// Status-BAR button ids — only the continuously-valued stats have capsules
+// (thermal is a state word, uptime a counter; both are menu-only).
+const BAR_ROW_IDS = ['cpu', 'gpu', 'memory', 'network'];
+function normalizeBarRows(v, menuRows) {
+  if (Array.isArray(v)) {
+    const out = [];
+    for (const id of v) if (BAR_ROW_IDS.includes(id) && !out.includes(id)) out.push(id);
+    return out; // may be empty — the button falls back to a static “P”
+  }
+  // Key absent → follow the menu's visible set (capsules in the menu's order).
+  return menuRows.filter((id) => BAR_ROW_IDS.includes(id));
+}
+let lastMenuRows = [...DEFAULT_MENU_ROWS];
+let lastBarRows = [...BAR_ROW_IDS];
+// Settings-file revision. Bumped on every layout write (app or web); the app
+// uses it to ignore /api/status layouts that were read from disk BEFORE its own
+// latest write — otherwise a stale poll re-applies the old capsule set for one
+// cycle and the toggled stat blinks back on (off → on → off).
+let lastLayoutGen = 0;
+
 async function getHardware() {
   const hw = { model: os.hostname(), chip: null, memLabel: null };
   const out = await run('system_profiler', ['SPHardwareDataType'], 20000);
@@ -523,6 +599,14 @@ let netRate = { down: 0, up: 0 };
 let netBusy = false;
 let lastBattOut = null;
 let lastBattT = 0;
+// GPU: cumulative per-client accumulatedGPUTime from the previous tick (the
+// delta over the real interval is utilization). Apple Silicon only — on other
+// machines ioreg returns nothing and the card shows "—".
+let prevGpu = new Map();
+let lastGpuT = 0;
+let gpuPct = null;
+let gpuHw = { name: null, cores: 0, mgpus: 1 };
+let lastTherm = { level: 0, state: 'nominal' };
 
 function kickNetstat() {
   if (netBusy || (netCounters && Date.now() - netCounters.t < 4500)) return;
@@ -559,31 +643,34 @@ async function sample(fast = false) {
   kickNetstat(); // background — never blocks the sample
 
   let topOut = null, iostatOut = null;
-  let psMain, psArgs, vmOut, sysOut, battOut;
+  let psMain, psArgs, vmOut, sysOut, battOut, gpuOut;
   const needBatt = !lastBattOut || Date.now() - lastBattT >= 4500;
   if (useFast) {
-    [psMain, psArgs, vmOut, sysOut, topOut, battOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, topOut, battOut, gpuOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
       run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
       run('top', ['-F', '-l', '1', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem'], 4000),
-      needBatt ? run('pmset', ['-g', 'batt']) : Promise.resolve(lastBattOut),
+      needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
+      run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
     ]);
   } else {
     [topOut, iostatOut] = await Promise.all([
       run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1'], 6000),
       run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
     ]);
-    [psMain, psArgs, vmOut, sysOut, battOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
       run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
-      needBatt ? run('pmset', ['-g', 'batt']) : Promise.resolve(lastBattOut),
+      needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
+      run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
     ]);
   }
   if (needBatt && battOut) { lastBattOut = battOut; lastBattT = Date.now(); }
+  if (battOut) lastTherm = parseTherm(battOut); // state changes slowly; the 4.5s cache is fine
 
   // Never overwrite live data with empty/zero parser fallbacks if a core tool failed.
   if (!psMain || !vmOut || !sysOut) return;
@@ -614,6 +701,27 @@ async function sample(fast = false) {
     }
   }
   if (iostatOut) { lastDiskMbps = parseIostat(iostatOut); lastDiskT = Date.now(); }
+
+  // ---- GPU (Apple Silicon, root-free; see docs/gotchas.md) ----
+  // Delta of cumulative accumulatedGPUTime over the real interval, normalized
+  // by the number of MGPU units. The first tick only establishes the baseline.
+  if (gpuOut != null) {
+    const now = parseIoregGpu(gpuOut);
+    if (now.size) {
+      if (prevGpu.size) {
+        const gdt = Math.max((psNow - lastGpuT) / 1000, 0.2);
+        let dNs = 0;
+        for (const [pid, cur] of now) {
+          const prev = prevGpu.get(pid);
+          if (prev == null || cur.ns < prev.ns) continue; // counter reset (client re-registered)
+          dNs += cur.ns - prev.ns;
+        }
+        gpuPct = Math.min(100, (dNs / 1e9 / gdt / gpuHw.mgpus) * 100);
+      }
+      lastGpuT = psNow;
+      prevGpu = now;
+    }
+  }
   const topProcs = lastTopProcs;
   const seen = new Set();
   for (const p of procs.values()) {
@@ -744,6 +852,12 @@ async function sample(fast = false) {
       net: { down: netDown, up: netUp },
       disk: { mbps: diskMbps },
       batt,
+      gpu: {
+        pct: gpuPct == null ? null : +gpuPct.toFixed(1),
+        name: gpuHw.name,
+        cores: gpuHw.cores,
+      },
+      thermal: lastTherm,   // { level, state } from `pmset -g therm`
       procCount: procs.size,
       appCount: groups.size,
     },
@@ -762,31 +876,43 @@ async function sample(fast = false) {
   lastPayloadTime = snapTime;
   if (!BOOT_TRACE.firstSnapshot) BOOT_TRACE.firstSnapshot = snapTime;
 
+  // Status-bar layout for the menu (dropdown rows + button capsules) —
+  // settings.json is a few hundred bytes, so one read per second is negligible
+  // next to the ps/vm_stat fan-out.
+  try {
+    const sRaw = JSON.parse(fs.readFileSync(path.join(PULSE_DIR, 'settings.json'), 'utf8'));
+    lastMenuRows = normalizeMenuRows(sRaw.menuRows);
+    lastBarRows = normalizeBarRows(sRaw.barRows, lastMenuRows);
+    lastLayoutGen = typeof sRaw.layoutGen === 'number' ? sRaw.layoutGen : 0;
+  } catch { /* no/invalid settings file → keep the last known layout */ }
+
   // Lightweight status for the menu-bar item (avoids shipping the full snapshot).
   // Contract with app/Pulse.swift StatusController: `cpu` is the SYSTEM cpu
-  // object (user/sys/idle/total from top); `topCpu`/`topMem` are top apps.
-  const appsArr = payload.apps;
-  if (appsArr.length) {
-    const topCpu = appsArr.reduce((a, b) => (b.cpu > a.cpu ? b : a));
-    const topMem = appsArr.reduce((a, b) => (b.mem > a.mem ? b : a));
-    const mu = process.memoryUsage();
-    const st = {
-      t: snapTime,
-      serverMtime: SERVER_MTIME,
-      bootTrace: BOOT_TRACE,
-      memDebug: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
-      cpu: top,
-      // AM-style: "memory used" = used − cache (Apps + Wired + Compressed;
-      // reclaimable file/purgeable cache excluded)
-      memPct: memTotal ? +((inUse / memTotal) * 100).toFixed(1) : 0,
-      memUsed: inUse,
-      memTotal,
-      topCpu: { name: topCpu.name, cpu: +topCpu.cpu.toFixed(1) },
-      topMem: { name: topMem.name, mem: topMem.mem },
-    };
-    if (purgeQueue) st.purge = purgeQueue.id;  // the app shell runs the in-process prompt
-    lastStatus = JSON.stringify(st);
-  }
+  // object (user/sys/idle/total from top); the rest are menu-row fields.
+  const mu = process.memoryUsage();
+  // netDown / netUp are the aggregate network rates (bytes/s) already computed
+  // from the netstat counters above — the status payload reports them as MB/s.
+  const st = {
+    t: snapTime,
+    serverMtime: SERVER_MTIME,
+    bootTrace: BOOT_TRACE,
+    memDebug: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
+    cpu: top,
+    // AM-style: "memory used" = used − cache (Apps + Wired + Compressed;
+    // reclaimable file/purgeable cache excluded)
+    memPct: memTotal ? +((inUse / memTotal) * 100).toFixed(1) : 0,
+    memUsed: inUse,
+    memTotal,
+    gpuPct: gpuPct == null ? null : +gpuPct.toFixed(1),
+    thermal: lastTherm,      // { level, state } — level 0..3 drives the state bar
+    net: { down: netDown, up: netUp }, // bytes/s — same scale as snapshot.sys.net; each side formats B/KB/MB/GB
+    bootTime: sysc.bootTime, // epoch sec — the menu computes uptime
+    menuRows: lastMenuRows,  // ordered visible row ids (settings.json) — menu layout
+    barRows: lastBarRows,    // visible status-bar capsules (menu order applies)
+    layoutGen: lastLayoutGen,     // settings-file revision — the app skips layouts older than its own last write
+  };
+  if (purgeQueue) st.purge = purgeQueue.id;  // the app shell runs the in-process prompt
+  lastStatus = JSON.stringify(st);
 
   for (const res of clients) {
     try { res.write('data: ' + lastPayload + '\n\n'); } catch { /* client gone */ }
@@ -1016,10 +1142,13 @@ const server = http.createServer((req, res) => {
       return {
         raw,
         state: {
-          version: 1,
+          version: 2,
           startAtLogin: typeof raw.startAtLogin === 'boolean' ? raw.startAtLogin : fs.existsSync(plistPath),
           closeBehavior: raw.closeBehavior === 'quit' ? 'quit' : 'background',
           keepDashboardInMemory: !!raw.keepDashboardInMemory,
+          menuRows: normalizeMenuRows(raw.menuRows),
+          barRows: normalizeBarRows(raw.barRows, normalizeMenuRows(raw.menuRows)),
+          layoutGen: typeof raw.layoutGen === 'number' ? raw.layoutGen : 0,
           daemonStatus: fs.existsSync(plistPath) ? 'active' : 'off',
         },
       };
@@ -1037,12 +1166,18 @@ const server = http.createServer((req, res) => {
           if (typeof patch.startAtLogin === 'boolean') state.startAtLogin = patch.startAtLogin;
           if (patch.closeBehavior === 'quit' || patch.closeBehavior === 'background') state.closeBehavior = patch.closeBehavior;
           if (typeof patch.keepDashboardInMemory === 'boolean') state.keepDashboardInMemory = patch.keepDashboardInMemory;
+          if (patch.menuRows !== undefined) state.menuRows = normalizeMenuRows(patch.menuRows);
+          if (patch.barRows !== undefined) state.barRows = normalizeBarRows(patch.barRows, state.menuRows);
+          state.layoutGen = (typeof raw.layoutGen === 'number' ? raw.layoutGen : 0) + 1; // any settings write advances the revision
           const merged = {
             ...raw,
-            version: 1,
+            version: 2,
             startAtLogin: state.startAtLogin,
             closeBehavior: state.closeBehavior,
             keepDashboardInMemory: state.keepDashboardInMemory,
+            menuRows: state.menuRows,
+            barRows: state.barRows,
+            layoutGen: state.layoutGen,
           };
           fs.mkdirSync(PULSE_DIR, { recursive: true });
           fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n');
@@ -1134,6 +1269,24 @@ function consumePreferredPort() {
     hardware = h;
     console.log(`  ${hardware.model} · ${hardware.chip || ''} · ${hardware.memLabel || ''}\n`);
   });
+  // GPU identity (name / core count / MGPU units) — best effort, one-shot.
+  (async function probeGpu() {
+    try {
+      const tree = await run('ioreg', ['-p', 'IOService'], 5000);
+      const cls = new Set();
+      for (const m of (tree || '').matchAll(/<class ([A-Za-z0-9]+Accelerator[A-Za-z0-9]*)/g)) cls.add(m[1]);
+      const accel = [...cls].find((c) => c.startsWith('AGX')) || [...cls][0];
+      if (!accel) return; // no IOKit GPU node (e.g. headless) — gpu stays unavailable
+      const node = await run('ioreg', ['-r', '-l', '-c', accel], 5000);
+      const g = (re) => { const m = (node || '').match(re); return m ? m[1] : null; };
+      gpuHw = {
+        name: g(/"model" = "([^"]+)"/) || null,
+        cores: +(g(/"gpu-core-count" = "?(\d+)"?/)) || 0,
+        mgpus: +(g(/"num_mgpus"=(\d+)/)) || 1,
+      };
+      if (gpuHw.name) console.log(`  GPU: ${gpuHw.name} (${gpuHw.cores} cores, ${gpuHw.mgpus} mgpu)`);
+    } catch { /* leave defaults — the card shows "—" */ }
+  })();
   await triggerSample(true); // fast first sample (~250ms) — awaited so it never overlaps loop()
   (function loop() {
     const started = Date.now();

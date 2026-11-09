@@ -9,9 +9,17 @@ quirk of a macOS tool, verified against live output.
   own pcpu (a lifetime average); new processes fall back to pcpu.
 - **iostat** `-c 2` prints two blocks: the first is a cumulative average since boot
   (useless for a live rate) — the parser sums only the most recent block.
-- **netstat -ib** prints each interface once per address with identical counters;
-  the parser dedupes by name, preferring the 10-column link row (the Address
-  column is absent there, which shifts the column indices).
+- **netstat -ib** columns: `Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll`.
+  A full row has 11 fields, but a link row with an EMPTY Address loses a field
+  on whitespace split → 10 fields, shifting Ibytes/Obytes one column left
+  (hence `a = isLink ? 5 : 6`). Each interface also prints one row per address
+  with identical (repeated) counters — dedupe by name, preferring the link row,
+  or traffic double-counts. Per-address rows may print `-` where counters are
+  not applicable (`+x || 0` absorbs it). Counters are BYTES: `netRate` is
+  bytes/s with TWO consumers — the snapshot's `sys.net` and `/api/status` both
+  ship bytes/s; the dashboard formats via `fmtBytes` and the app via its own
+  1024-based ladder, so neither converts in band (a conversion is how the
+  GB-figure bug happened).
 - **App attribution**: the *outermost* .app bundle in the exe path wins (nested
   helper bundles resolve to the real app); otherwise walk up to 8 parent levels
   (so a `node` spawned by VS Code shows up under VS Code).
@@ -53,3 +61,22 @@ quirk of a macOS tool, verified against live output.
 - **Icons** are extracted with `sips` and cached in `~/.pulse/icons` keyed by
   md5(bundle path); the cache is never invalidated (a moved/renamed bundle simply
   gets a new key).
+- **GPU utilization comes from `ioreg -r -l -c AGXDeviceUserClient`** (Apple
+  Silicon only, root-free — `powermetrics` needs superuser and the `gpu_util`
+  sampler is gone on current macOS). Each GPU client node carries `AppUsage` with
+  `accumulatedGPUTime` (cumulative nanoseconds); utilization = delta over the real
+  interval ÷ number of MGPU units (from the accelerator node's
+  `GPUConfigurationVariable`, e.g. 4 on an M4 Max). Quirks: the plist prints
+  `AppUsage` BEFORE `IOUserClientCreator` (alphabetical), so the parser works per
+  node block, never with a flat scan; a process may hold several contexts (sum
+  them); the class name is AGX-specific, so machines without one simply report
+  `gpu.pct: null` and the card shows "—". The accelerator node (discovered by
+  class-name scan of `ioreg -p IOService`) also supplies `"model"` and
+  `"gpu-core-count"` for the card's caption.
+- **Thermal state comes from `pmset -g batt -g therm`** (root-free): "No … has
+  been recorded" means level 0 (nominal); an active throttle prints
+  "… thermal level N". The parser takes the MAX level across the sensors
+  (0 = nominal, 1 = slowed, ≥2 = throttled) and rides on the existing 4.5 s
+  battery refresh. pmset reports a discrete state only — no temperature value
+  is available without root — so the UIs render it as a three-step state bar.
+  Uptime is `kern.boottime` (already in the sysctl batch).

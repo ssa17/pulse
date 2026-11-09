@@ -177,6 +177,30 @@ function parseBatt(out) {
   return r;
 }
 
+function parseTherm(out) {
+  let level = 0;
+  if (out) {
+    for (const m of out.matchAll(/(?:thermal|performance) level (\d+)/g)) level = Math.max(level, +m[1]);
+  }
+  const state = level === 0 ? 'nominal' : level === 1 ? 'slowed' : 'throttled';
+  return { level, state };
+}
+
+function parseIoregGpu(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const block of out.split(/<class AGXDeviceUserClient[^\n]*/g)) {
+    const c = block.match(/"IOUserClientCreator" = "pid (\d+), (\S+)"/);
+    if (!c) continue;
+    let ns = 0;
+    for (const u of block.matchAll(/"accumulatedGPUTime"=(\d+)/g)) ns += +u[1];
+    const e = map.get(c[1]);
+    if (e) e.ns += ns;
+    else map.set(c[1], { name: c[2], ns });
+  }
+  return map;
+}
+
 function bundleOf(exePath) {
   if (!exePath) return null;
   const m = exePath.match(/^(.*?\.app)(\/|$)/);
@@ -599,6 +623,68 @@ assert(bt3.charging === true, 'still charging');
 
 assert(parseBatt(null).pct === null, 'null input');
 
+/* ── parseTherm ─────────────────────────────────────────────────────────── */
+console.log('\n--- parseTherm ---');
+
+const thermNominal = [
+  'Now using power: Battery Power',
+  'Note: No thermal warning level has been recorded',
+  'Note: No performance warning level has been recorded',
+  'Note: No CPU power status has been recorded',
+].join('\n');
+const th1 = parseTherm(thermNominal);
+assert(th1.level === 0 && th1.state === 'nominal', 'all clear → nominal');
+
+const thermHot = [
+  'Now using power: Battery Power',
+  'CPU SMC0  thermal level 1  performance level 1',
+  'CPU PEC0  thermal level 2  performance level 2',
+  'CPU PPMC0 thermal level 1',
+].join('\n');
+const th2 = parseTherm(thermHot);
+assert(th2.level === 2, 'max level wins');
+assert(th2.state === 'throttled', '≥2 → throttled');
+
+const th3 = parseTherm('CPU SMC0  thermal level 1');
+assert(th3.level === 1 && th3.state === 'slowed', 'level 1 → slowed');
+assert(parseTherm(null).state === 'nominal', 'null input → nominal');
+
+/* ── parseIoregGpu ──────────────────────────────────────────────────────── */
+console.log('\n--- parseIoregGpu ---');
+
+// AppUsage prints BEFORE the creator line (alphabetical plist order) — the
+// parser must attribute usage per node block, not via a flat scan.
+const gpuOut = [
+  '+-o AGXDeviceUserClient  <class AGXDeviceUserClient, id 0x1000010cb, !registered, active, retain 5>',
+  '    {',
+  '      "AppUsage" = ()',
+  '      "IOUserClientCreator" = "pid 408, WindowServer"',
+  '    }',
+  '    ',
+  '    +-o AGXDeviceUserClient  <class AGXDeviceUserClient, id 0x1000010d2, !registered, active, retain 5>',
+  '    |   {',
+  '    |     "AppUsage" = ({"API"="Metal","lastSubmittedTime"=85015529304416,"accumulatedGPUTime"=1559895244541},{"API"="Metal","lastSubmittedTime"=56777239584291,"accumulatedGPUTime"=6544208})',
+  '    |     "IOUserClientCreator" = "pid 408, WindowServer"',
+  '    |     "CommandQueueCount" = 2',
+  '    |   }',
+  '    ',
+  '    +-o AGXDeviceUserClient  <class AGXDeviceUserClient, id 0x1000011f0, !registered, active, retain 5>',
+  '        {',
+  '          "AppUsage" = ({"API"="Metal","lastSubmittedTime"=123,"accumulatedGPUTime"=999})',
+  '          "IOUserClientCreator" = "pid 641, MenuBarAgent"',
+  '        }',
+].join('\n');
+const gm = parseIoregGpu(gpuOut);
+assert(gm.size === 2, 'two pids');
+// pid 408 appears in two nodes — its usage is the sum, attributed to ITSELF,
+// not to whatever node came before.
+assert(gm.get('408').ns === 1559895244541 + 6544208, 'usage attributed to own pid');
+assert(gm.get('408').name === 'WindowServer', 'name');
+assert(gm.get('641').ns === 999, 'second pid');
+assert(gm.get('641').name === 'MenuBarAgent', 'second name');
+assert(parseIoregGpu('').size === 0, 'empty output → empty map');
+assert(parseIoregGpu(null).size === 0, 'null input');
+
 /* ── bundleOf ───────────────────────────────────────────────────────────── */
 console.log('\n--- bundleOf ---');
 
@@ -751,6 +837,55 @@ assert(computePurged(pvBefore, pvAfter3) === 6 * 2 ** 30, 'free grew even more (
 assert(computePurged(pvBefore, pvBefore) === 0, 'no change → 0');
 const pvNeg = { free: 1 * 2 ** 30, filebacked: 7 * 2 ** 30, purgeable: 1 * 2 ** 30 };
 assert(computePurged(pvBefore, pvNeg) === 0, 'free shrank & cache grew (noise) → clamped to 0');
+
+// ---------------------------------------------------------------------------
+//  parseNetstat (copied from server.js — kept in sync; see docs/gotchas.md)
+//
+//  Real macOS `netstat -ib` columns:
+//    Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+//  A full row has 11 fields; a link row with an EMPTY address loses one field
+//  on whitespace split → 10 fields, shifting Ibytes/Obytes one column left.
+//  Loopback (lo*) is not real traffic; each interface's <Link#> row is its
+//  aggregate (the per-address rows would double-count it).
+// ---------------------------------------------------------------------------
+
+function parseNetstat(out) {
+  let ib = 0, ob = 0;
+  if (!out) return { ib, ob };
+  const byName = new Map(); // name → { ib, ob, isLink }
+  for (const line of out.split('\n').slice(1)) {
+    const c = line.trim().split(/\s+/);
+    if (c.length < 10) continue;
+    const name = c[0];
+    if (name.startsWith('lo')) continue; // loopback is not real network traffic
+    const isLink = c.length === 10;
+    const a = isLink ? 5 : 6; // Ibytes column
+    const b = isLink ? 8 : 9; // Obytes column
+    const cur = byName.get(name);
+    if (!cur || isLink) byName.set(name, { ib: +c[a] || 0, ob: +c[b] || 0 });
+  }
+  for (const v of byName.values()) { ib += v.ib; ob += v.ob; }
+  return { ib, ob };
+}
+
+// 11-field rows (Network + Address both present): Ibytes=6, Obytes=9.
+// 10-field link rows (empty Address dropped by the whitespace split): Ibytes=5, Obytes=8.
+const fakeNet = [
+  'Iface Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll',
+  'lo0 16384 <Link#1>  9571204 0 83852940610 9571204 0 83852940610 0', // loopback — excluded
+  'en0 1500 10.0.0.0 10.0.0.108 12345 0 987654321 23456 0 123456789 0', // full row
+  'utun0 1280 <Link#2>  55 0 409600 66 0 512000 0', // 10-field link row
+].join('\n');
+{
+  const r = parseNetstat(fakeNet);
+  assert(r.ib === 987654321 + 409600, 'netstat: Ibytes summed across interfaces (loopback excluded, link rows win over per-address rows)');
+  assert(r.ob === 123456789 + 512000, 'netstat: Obytes summed the same way');
+  assert(parseNetstat(null).ib === 0, 'netstat: null output → zero, not NaN');
+  // Dash values (per-address rows print '-' for Ierrs/Obytes) must not poison the sum.
+  const dashRow = 'en0 1500 10.0.0.0 10.0.0.108 12 0 555 13 - 666 -';
+  const r2 = parseNetstat('hdr' + '\n' + dashRow);
+  assert(r2.ib === 555 && r2.ob === 666, 'netstat: non-numeric fields coerce to 0, counters still read');
+}
 
 // ---------------------------------------------------------------------------
 //  Wrap up

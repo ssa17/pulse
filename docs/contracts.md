@@ -38,6 +38,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     net:  { down, up },         // bytes/sec
     disk: { mbps },             // MB/s, read + write
     batt: { pct, charging },        // pct null when on AC / no battery
+    gpu:  { pct, name, cores },      // Apple Silicon only (ioreg AGX); pct null elsewhere.
+                                     // pct = delta of accumulatedGPUTime ÷ window ÷ MGPU units;
+                                     // name/cores from the GPU node
+    thermal: { level, state },      // `pmset -g therm`; level 0..3, state: nominal | slowed | throttled
     procCount, appCount
   },
   apps: [{
@@ -63,25 +67,50 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   memDebug: { rss, heapTotal, heapUsed, external }, // Node V8 memory telemetry (bytes)
   cpu: { user, sys, idle, total },   // SYSTEM cpu (from top) — NOT an app
   memPct, memUsed, memTotal,         // AM-style: memUsed = used − file cache
-  topCpu: { name, cpu },             // top app by cpu
-  topMem: { name, mem },
+  gpuPct,                            // Apple Silicon GPU utilization %; null if unavailable
+  thermal: { level, state },         // pmset thermal level 0..3 + nominal|slowed|throttled
+  net: { down, up },                 // bytes/s summed across all interfaces — the SAME
+                                     // scale as the snapshot's sys.net; each side formats
+                                     // B/KB/MB/GB on its own (no in-band conversion)
+  bootTime: <sec epoch>,             // menu computes uptime from it
+  menuRows: [ <id>, ... ],           // ordered VISIBLE dropdown row ids
+                                     // (cpu, gpu, memory, thermal, network,
+                                     // uptime) —
+                                     // absent id = hidden; the menu rebuilds
+  barRows: [ <id>, ... ],            // VISIBLE status-bar capsules (cpu, gpu,
+                                     // memory, network); capsules follow
+                                     // menuRows order; empty = static “P” button
+  layoutGen: <int>,                   // settings-file revision; the app skips
+                                     // layouts older than its own last write
   purge: <id> }                      // OPTIONAL — only while a purge is queued;
                                      // the app shell runs the in-process prompt
                                      // and reports via /api/purge-result
 ```
 
 `Pulse.swift` (`StatusController.poll`) reads: `cpu.total`, `cpu.user`,
-`cpu.sys`, `memPct`, `memUsed`, `memTotal`, `topCpu.name/cpu`, `topMem.name/mem`,
-plus `bootTrace.firstSnapshot` for the startup trace.
-Note the naming: `cpu` is the system CPU object; `topCpu` is an app.
+`cpu.sys`, `memPct`, `memUsed`, `memTotal`, `gpuPct`, `thermal`, `bootTime`,
+and `menuRows`/`barRows`, plus `bootTrace.firstSnapshot` for the startup trace.
+The menu renders each stat row display-only (value at the row's end, proportional
+bar below — the thermal row fills in thirds per pmset level); `menuRows` drives
+dropdown row order/visibility and `barRows` the status-bar button, which shows one
+capsule per stat visible in BOTH (in menu order — a static “P” if none; thermal
+& uptime are menu-only); all rows stay enabled so AppKit doesn't dim them;
+`Open Pulse` is the only opener. Note the naming: `cpu` is the system CPU object,
+not an app.
 
 ## Cross-component protocols
 
-- **Port discovery**: the backend writes `~/.pulse/port` on startup and removes it
-  on any exit (signal, orphan watchdog, crash). A new launch (app or web) reuses a
+- **Port discovery**: the backend writes `~/.pulse/port` on startup and removes it on
+  exit (only if the file still points at ITSELF — another live backend may have
+  overwritten it since). A new launch (app or web) reuses a
   running backend only if that port answers `/api/snapshot` with a fresh Pulse
   payload matching `serverMtime` (`checkServerAlive` in `Pulse.swift` runs
-  asynchronously with a 1.0s cap so it never blocks the main thread).
+  asynchronously with a 1.0s cap so it never blocks the main thread). If the
+  LaunchAgent daemon is loaded but serving a STALE `server.js` (a rebuild changes
+  the code, which the plist doesn't track), the app restarts the daemon
+  (`launchctl kickstart -k`) before attaching instead of spawning a parallel
+  backend of its own — and when it adopts the daemon it releases any backend it
+  spawned while waiting, so exactly one sampler ever runs.
 - **App-spawned vs LaunchAgent backend**:
   * **App-spawned**: when no daemon is running, `Pulse.swift` resolves `node`
     (`findNodeFast` → async login-shell fallback) and spawns `node server.js`
@@ -115,20 +144,32 @@ Note the naming: `cpu` is the system CPU object; `topCpu` is an app.
   `WKScriptMessageHandler` and falling back to `GET`/`POST /api/settings` in web
   mode), from the app menu (`Settings…` / `⌘,`), or from the menu-bar status item
   (which opens the dark-themed native `SettingsWindowController` when the dashboard
-  window is closed, plus checkmark quick-toggles directly in the status menu).
+  window is closed). The status menu itself offers the stat rows (order and
+  visibility configurable in Settings via `menuRows`, below) plus Open Pulse,
+  Settings, and Quit — every setting lives in the dashboard modal / native Settings window.
   All `launchctl` operations run asynchronously on `LaunchAgentManager.workQueue`
   and hand off the active port via `~/.pulse/preferred-port` so toggling "Start at
   login" never blocks the main thread or reloads the dashboard. Persisted at
   `~/.pulse/settings.json`:
   ```json
   {
-    "version": 1,
+    "version": 2,
     "startAtLogin": false,
     "closeBehavior": "background",
-    "keepDashboardInMemory": false
+    "keepDashboardInMemory": false,
+    "menuRows": ["cpu", "gpu", "memory", "network", "uptime"],
+    "barRows": ["cpu", "gpu", "memory", "network"]
   }
   ```
-  Unversioned files migrate to `version: 1` by dropping the legacy
+  `menuRows` is the ordered list of VISIBLE dropdown row ids from
+  `cpu, gpu, memory, thermal, network, uptime` — absent id = hidden row (default
+  hides thermal). `barRows` is the set of VISIBLE status-bar capsules from
+  `cpu, gpu, memory, network` (thermal/uptime have no capsule); an ABSENT key
+  derives from `menuRows`, and an EMPTY array is a valid layout for either (menu:
+  actions only; button: static “P”). A missing/non-array value falls back to
+  the defaults. Hidden rows keep their slot in the settings list, so
+  re-enabling restores their original position.
+  Unversioned (or v1) files migrate to `version: 2` by dropping the legacy
   `statusBarGraphType` key while preserving any unknown keys. The "Start at
   login" toggle always reflects actual `launchctl` / plist state.
 - **Startup & reopen trace (`~/.pulse/boot-trace.log`)**:
