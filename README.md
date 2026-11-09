@@ -1,6 +1,6 @@
-# Pulse — real-time Mac resource dashboard
+# Pulse: real-time Mac resource dashboard
 
-See, in real time, exactly which apps are eating your CPU and memory — and manage them.
+See, in real time, exactly which apps are eating your CPU and memory, and manage them.
 
 **[Download .dmg](https://github.com/ssa17/pulse/releases/latest/download/Pulse.dmg)** · [All releases](https://github.com/ssa17/pulse/releases)
 
@@ -12,7 +12,7 @@ See, in real time, exactly which apps are eating your CPU and memory — and man
 2. Open it and drag **Pulse** into your **Applications** folder
 3. Launch Pulse from Applications
 
-Pulse checks for updates automatically and installs them — you never need to re-download.
+Pulse checks for updates automatically and installs them. You never need to re-download.
 
 > **Private by design.** Pulse runs entirely on your machine: it samples local system
 > data and serves the dashboard over `127.0.0.1`. Nothing is sent anywhere, and it
@@ -20,21 +20,21 @@ Pulse checks for updates automatically and installs them — you never need to r
 
 ## What you get
 
-- **Top CPU / Top Memory panels** — every process grouped into its app (Chrome's 30
+- **Top CPU / Top Memory panels:** every process grouped into its app (Chrome's 30
   helper processes become one "Google Chrome" row), with real app icons, a bar showing
   the share of your *total* resources, live values, and sparklines.
-- **Memory explainer** — an info button on the Memory card explains what the
+- **Memory explainer:** an info button on the Memory card explains what the
   kernel-managed buckets are (wired / compressed / file cache), why they grow,
-  with live sparklines — and how each one goes away (quit the hogs, reboot for
+  with live sparklines, and how each one goes away (quit the hogs, reboot for
   the kernel's share, `sudo purge` for the file cache).
-- **System cards** — CPU (user/sys/idle), memory breakdown (apps / wired / compressed /
+- **System cards:** CPU (user/sys/idle), memory breakdown (apps / wired / compressed /
   cache / free + swap), network, disk, Apple Silicon GPU utilization, battery, thermal state, uptime.
-- **Detail drawer** — click any app to see every process behind it: its role (web page /
-  GPU / helper…), full command line, CPU, memory, state, start time — plus **kill** and
+- **Detail drawer:** click any app to see every process behind it: its role (web page /
+  GPU / helper…), full command line, CPU, memory, state, start time, plus **kill** and
   **Quit app** buttons.
-- **Search** — filter by app name, bundle path, or any process/command.
-- **Menu-bar item & dropdown** — live status-bar capsules (CPU, GPU, Memory, Network ↓/↑)
-  and a dropdown menu with colored utilization bars, thermal state, and uptime — all
+- **Search:** filter by app name, bundle path, or any process/command.
+- **Menu-bar item & dropdown:** live status-bar capsules (CPU, GPU, Memory, Network ↓/↑)
+  and a dropdown menu with colored utilization bars, thermal state, and uptime, all
   individually toggleable and reorderable in Settings.
 
 <p align="center">
@@ -43,15 +43,15 @@ Pulse checks for updates automatically and installs them — you never need to r
 
 ## Requirements
 
-- macOS 13 (Ventura) or later — Apple Silicon
-- [Node.js](https://nodejs.org) — the dashboard backend runs on your system Node
+- macOS 13 (Ventura) or later, Apple Silicon
+- [Node.js](https://nodejs.org): the dashboard backend runs on your system Node
   (`brew install node` if you don't have it). No other dependencies.
 
 ---
 
 ## License
 
-**Pulse is free to use and free to modify — but not for sale.**
+**Pulse is free to use and free to modify, but not for sale.**
 
 You may use, study, and modify this software for personal or non-commercial purposes. You may distribute modified versions, provided you also distribute them for free and do not charge money for them or bundle them into a paid product.
 
@@ -69,7 +69,7 @@ UI, no build step). No npm packages anywhere.
 
 ```bash
 ./app/build.sh              # builds dist/Pulse.app (needs Xcode CLT: swiftc, + Node)
-./app/build.sh --notarize   # + notarize & staple — enables Touch ID on "Purge disk cache"
+./app/build.sh --notarize   # + notarize & staple (enables Touch ID on "Purge disk cache")
 open dist/Pulse.app
 ```
 
@@ -79,7 +79,7 @@ re-notarizes automatically once the previous build was (pass
 `--no-notarize` to opt out); in web mode the prompt is password-only.
 
 `Pulse.app` is a small native Swift shell (WKWebView) that:
-- is **single-instance**: launching it again focuses the existing window instead of
+- is **single-instance**: launching it again focuses the existing window rather than
   spawning a duplicate
 - **reuses a running backend** via `~/.pulse/port` (works across app ↔ web mode),
   otherwise spawns one on a **dynamic free port** (no fixed port, no conflicts)
@@ -93,7 +93,7 @@ interaction self-test (with `PULSE_AUTOCONFIRM=1` to auto-approve dialogs) and e
 
 **Footprint:** the `.app` is ~3.6 MB on disk (mostly the bundled Sparkle update
 framework; the app itself is tiny and uses your system Node, not a bundled runtime).
-At runtime it uses ~300–400 MB, most of it WebKit's own processes (the webview UI);
+At runtime it uses ~300–400 MB, mostly WebKit's own processes (the webview UI);
 the Node backend is heap-capped to stay lean. Shared state (port file, icon cache)
 lives in `~/.pulse/`, never inside the bundle.
 
@@ -117,7 +117,7 @@ node server.js          # → http://127.0.0.1:8787
 
 **App intelligence:** a process is attributed to an app if its executable lives inside
 a `.app` bundle (outermost bundle wins, so nested helper bundles resolve to the real
-app), or if any ancestor (up to 8 levels) does — so a `node` process spawned by
+app), or if any ancestor (up to 8 levels) does, so a `node` process spawned by
 VS Code shows up under VS Code. Everything else is grouped by executable name and
 tagged `system` or `user`. Common daemons (WindowServer, mdworker, kernel_task, …)
 carry a one-line explanation in the detail view.
