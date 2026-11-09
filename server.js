@@ -222,6 +222,34 @@ function parseTop(out) {
 }
 
 /**
+ * Compute system-wide CPU percentages { user, sys, idle, total } from two
+ * `os.cpus()` snapshots (`host_processor_info` tick counters). Used when the
+ * dashboard has no active viewers so background menu-bar sampling doesn't need
+ * to spawn `/usr/bin/top` (which walks every process's Mach VM map).
+ */
+function computeHostCpuDelta(prevCpus, curCpus) {
+  if (!Array.isArray(prevCpus) || !Array.isArray(curCpus) || !prevCpus.length || prevCpus.length !== curCpus.length) {
+    return null;
+  }
+  let dUser = 0, dSys = 0, dIdle = 0;
+  for (let i = 0; i < curCpus.length; i++) {
+    const p = prevCpus[i] && prevCpus[i].times;
+    const c = curCpus[i] && curCpus[i].times;
+    if (!p || !c) return null;
+    dUser += Math.max(0, (c.user - p.user) + (c.nice - p.nice));
+    dSys += Math.max(0, (c.sys - p.sys) + (c.irq - p.irq));
+    dIdle += Math.max(0, c.idle - p.idle);
+  }
+  const sum = dUser + dSys + dIdle;
+  if (sum <= 0) return null;
+  const user = +((dUser / sum) * 100).toFixed(2);
+  const sys = +((dSys / sum) * 100).toFixed(2);
+  const idle = +((dIdle / sum) * 100).toFixed(2);
+  const total = +Math.max(0, Math.min(100, 100 - idle)).toFixed(2);
+  return { user, sys, idle, total };
+}
+
+/**
  * top -F -l 2 -n 800 -o mem -stats pid,cpu,mem → pid → { mem, cpu }.
  * The MEM column is the kernel's phys_footprint — the same number Activity
  * Monitor shows: RSS with shared file pages (dyld shared cache, app bundles)
@@ -583,10 +611,14 @@ let lastPayloadTime = 0;
 let lastStatus = null;
 let sampleCount = 0;
 let sampleInFlight = null;
+let pendingFastSample = false;
 let lastTopProcs = new Map(); // pid → { mem, cpu } from most recent valid `top`
 let lastTopCpu = { user: 0, sys: 0, idle: 100, total: 0 };
 let lastKernelCpu = 0; // raw %CPU for PID 0 from most recent 2-sample `top`
 let lastTopCpuT = 0;
+let lastFullSampleTime = 0;
+let lastSnapshotReq = 0;
+let prevHostCpus = os.cpus();
 let lastDiskMbps = 0;
 let lastDiskT = 0;
 const clients = new Set();
@@ -627,8 +659,17 @@ function kickNetstat() {
 }
 
 function triggerSample(fast = false) {
-  if (sampleInFlight) return sampleInFlight;
-  sampleInFlight = sample(fast).finally(() => { sampleInFlight = null; });
+  if (sampleInFlight) {
+    if (fast) pendingFastSample = true;
+    return sampleInFlight;
+  }
+  sampleInFlight = sample(fast).finally(() => {
+    sampleInFlight = null;
+    if (pendingFastSample) {
+      pendingFastSample = false;
+      triggerSample(true).catch(() => {});
+    }
+  });
   return sampleInFlight;
 }
 
@@ -639,6 +680,7 @@ async function sample(fast = false) {
   // the 1s window commands FIRST and read ps/vm_stat/sysctl/pmset right as that
   // window finishes — so every metric in the snapshot is <30ms fresh when sent.
   const useFast = fast || sampleCount++ === 0;
+  const activeViewer = useFast || clients.size > 0 || (Date.now() - lastSnapshotReq < 3000);
   refreshUiMtime();
   kickNetstat(); // background — never blocks the sample
 
@@ -655,11 +697,25 @@ async function sample(fast = false) {
       needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
     ]);
-  } else {
+  } else if (activeViewer) {
     [topOut, iostatOut] = await Promise.all([
       run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1'], 6000),
       run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
     ]);
+    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut] = await Promise.all([
+      run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
+      run('ps', ['-axo', 'pid=,args=']),
+      run('vm_stat'),
+      run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
+      needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
+      run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
+    ]);
+  } else {
+    // Background menu-bar mode (no open dashboard): skip `top` (which walks
+    // ~576k VM map entries in the kernel for ~0.43s sys CPU/s) and `iostat`.
+    // Sleep 1s to preserve the 1s delta window and read system CPU in-process
+    // via os.cpus() (host_processor_info).
+    await new Promise((r) => setTimeout(r, 1000));
     [psMain, psArgs, vmOut, sysOut, battOut, gpuOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
@@ -683,13 +739,20 @@ async function sample(fast = false) {
   const dt = Math.max((psNow - prevSampleT) / 1000, 0.2);
   prevSampleT = psNow;
 
+  const curHostCpus = os.cpus();
+  const hostCpu = computeHostCpuDelta(prevHostCpus, curHostCpus);
+  prevHostCpus = curHostCpus;
+
   // ---- processes + real-time CPU (delta of cumulative cpu time) ----
   const procs = parsePsMain(psMain);
   if (!procs.size) return;
   const argsMap = parsePsArgs(psArgs);
   if (topOut) {
     const parsedTop = parseTopProcs(topOut);
-    if (parsedTop.size) lastTopProcs = parsedTop;
+    if (parsedTop.size) {
+      lastTopProcs = parsedTop;
+      lastFullSampleTime = Date.now();
+    }
     // The `CPU usage:` line (and PID 0's %CPU) are RATES: with a single-shot
     // sample (-l 1 fast path) they reflect average-SINCE-BOOT / 0, not current
     // load — only the 2nd sample of `-l 2` is a real window. Never let the fast
@@ -698,7 +761,13 @@ async function sample(fast = false) {
       lastTopCpu = parseTop(topOut);
       lastKernelCpu = parsedTop.get(0)?.cpu || 0;
       lastTopCpuT = Date.now();
+    } else if (hostCpu) {
+      lastTopCpu = hostCpu;
+      lastTopCpuT = Date.now();
     }
+  } else if (hostCpu) {
+    lastTopCpu = hostCpu;
+    lastTopCpuT = Date.now();
   }
   if (iostatOut) { lastDiskMbps = parseIostat(iostatOut); lastDiskT = Date.now(); }
 
@@ -1043,15 +1112,19 @@ const server = http.createServer((req, res) => {
       'X-Accel-Buffering': 'no',
     });
     res.write('retry: 1500\n\n');
+    clients.add(res);
     if (lastPayload && Date.now() - lastPayloadTime < 4000) {
       res.write('data: ' + lastPayload + '\n\n');
+      if (Date.now() - lastFullSampleTime > 4000) {
+        triggerSample(true).catch(() => {});
+      }
     } else {
       triggerSample(true).catch(() => {});
     }
-    clients.add(res);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* noop */ } }, 15000);
     req.on('close', () => { clearInterval(ping); clients.delete(res); });
   } else if (url === '/api/snapshot') {
+    lastSnapshotReq = Date.now();
     const wantFresh = (req.url || '').includes('fresh=1');
     const stale = !lastPayload || Date.now() - lastPayloadTime > 4000;
     const reply = () => {

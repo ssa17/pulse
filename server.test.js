@@ -887,6 +887,47 @@ const fakeNet = [
   assert(r2.ib === 555 && r2.ob === 666, 'netstat: non-numeric fields coerce to 0, counters still read');
 }
 
+/* ── computeHostCpuDelta (in-process os.cpus() delta for background menu bar) ── */
+console.log('\n--- computeHostCpuDelta ---');
+
+function computeHostCpuDelta(prevCpus, curCpus) {
+  if (!Array.isArray(prevCpus) || !Array.isArray(curCpus) || !prevCpus.length || prevCpus.length !== curCpus.length) {
+    return null;
+  }
+  let dUser = 0, dSys = 0, dIdle = 0;
+  for (let i = 0; i < curCpus.length; i++) {
+    const p = prevCpus[i] && prevCpus[i].times;
+    const c = curCpus[i] && curCpus[i].times;
+    if (!p || !c) return null;
+    dUser += Math.max(0, (c.user - p.user) + (c.nice - p.nice));
+    dSys += Math.max(0, (c.sys - p.sys) + (c.irq - p.irq));
+    dIdle += Math.max(0, c.idle - p.idle);
+  }
+  const sum = dUser + dSys + dIdle;
+  if (sum <= 0) return null;
+  const user = +((dUser / sum) * 100).toFixed(2);
+  const sys = +((dSys / sum) * 100).toFixed(2);
+  const idle = +((dIdle / sum) * 100).toFixed(2);
+  const total = +Math.max(0, Math.min(100, 100 - idle)).toFixed(2);
+  return { user, sys, idle, total };
+}
+
+{
+  const prev = [
+    { times: { user: 1000, nice: 0, sys: 500, idle: 8500, irq: 0 } },
+    { times: { user: 2000, nice: 0, sys: 1000, idle: 7000, irq: 0 } },
+  ];
+  const cur = [
+    { times: { user: 1200, nice: 0, sys: 600, idle: 9200, irq: 0 } }, // +200 user, +100 sys, +700 idle
+    { times: { user: 2100, nice: 0, sys: 1100, idle: 7800, irq: 0 } }, // +100 user, +100 sys, +800 idle
+  ];
+  const d = computeHostCpuDelta(prev, cur);
+  assert(d && d.user === 15 && d.sys === 10 && d.idle === 75 && d.total === 25,
+    'computeHostCpuDelta: 300/2000 user=15%, 200/2000 sys=10%, 1500/2000 idle=75%, total=25%');
+  assert(computeHostCpuDelta(prev, prev) === null, 'computeHostCpuDelta: zero elapsed ticks → null');
+  assert(computeHostCpuDelta(null, cur) === null, 'computeHostCpuDelta: null input → null');
+}
+
 // ---------------------------------------------------------------------------
 //  Wrap up
 // ---------------------------------------------------------------------------

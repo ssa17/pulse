@@ -9,6 +9,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Fixed
+- Lighter background menu-bar footprint: when the dashboard window is closed, the sampler reads system CPU counters in-process instead of spawning `top`/`iostat` on every tick, and status-bar views skip redundant redraws when metrics are unchanged
+
 ## [1.3] - 2026-11-09
 
 ### Added
