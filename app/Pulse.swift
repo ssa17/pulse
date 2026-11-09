@@ -620,8 +620,8 @@ final class StatRowView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func set(value: String, frac: Double, color: NSColor) {
-        valueField.stringValue = value
-        valueField.textColor = color
+        if valueField.stringValue != value { valueField.stringValue = value }
+        if valueField.textColor != color { valueField.textColor = color }
         bar.frac = frac
         bar.barColor = color
     }
@@ -649,15 +649,23 @@ final class InfoRowView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func set(value: String, color: NSColor = .labelColor) {
-        valueField.stringValue = value
-        valueField.textColor = color
+        if valueField.stringValue != value { valueField.stringValue = value }
+        if valueField.textColor != color { valueField.textColor = color }
     }
 }
 
 /// Small rounded horizontal fill (4 pt tall) over a dim track.
 final class StatBarView: NSView {
-    var frac: Double = 0 { didSet { needsDisplay = true } }
-    var barColor: NSColor = .clear { didSet { needsDisplay = true } }
+    var frac: Double = 0 {
+        didSet {
+            if abs(frac - oldValue) >= 0.002 { needsDisplay = true }
+        }
+    }
+    var barColor: NSColor = .clear {
+        didSet {
+            if barColor != oldValue { needsDisplay = true }
+        }
+    }
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.labelColor.withAlphaComponent(0.12).setFill()
@@ -672,7 +680,7 @@ final class StatBarView: NSView {
     }
 }
 
-final class StatusController: NSObject {
+final class StatusController: NSObject, NSMenuDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     var cpuHist: [Double] = []
@@ -685,6 +693,8 @@ final class StatusController: NSObject {
     var lastBarKey = ""
     var localLayoutGen = 0 // revision of the last layout WE wrote — stale polls are skipped
     var lastRenderKey = ""
+    var isMenuOpen = false
+    var lastStatusObj: [String: Any]?
     var timer: Timer?
     var samples = 0
     var port: Int?
@@ -746,11 +756,21 @@ final class StatusController: NSObject {
         // click-to-toggle (click = open, click again = close) is guaranteed by
         // AppKit and is how every other menu-bar app behaves; a custom popUp()
         // bypassed that logic and re-opened on every re-click.
+        menu.delegate = self
         item.menu = menu
         item.button?.image = Self.render(cpu: [], mem: [], gpu: [], net: [],
                                          netText: Self.netText(down: 0, up: 0),
                                          menu: PulseSettings.defaultMenuRows,
                                          bar: PulseSettings.defaultBarRows)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
+        if let o = lastStatusObj { updateMenu(o) }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
     }
 
     /// Show/hide the status-menu update row (hidden item keeps its slot — no rebuild needed).
@@ -802,12 +822,20 @@ final class StatusController: NSObject {
         let u = ["B", "KB", "MB", "GB", "TB"]
         var i = 0, v = bps
         while v >= 1024, i < u.count - 1 { v /= 1024; i += 1 }
-        let s = v >= 100 ? String(format: "%.0f", v) : v >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v)
+        let s = (i <= 1 || v >= 100) ? String(format: "%.0f", v) : v >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v)
         return s + " " + u[i]
     }
 
+    /// Status-bar capsule rate: treats sub-KB background keepalive trickle (<512 B/s)
+    /// as "0 B" and uses whole numbers for B/KB so background noise doesn't force an
+    /// NSStatusBarWindow surface redraw in WindowServer on every 2s poll.
+    static func barRate(_ bps: Double) -> String {
+        if bps < 512 { return "0 B" }
+        return rate(bps)
+    }
+
     static func netText(down: Double, up: Double) -> String {
-        return "\(Self.rate(down))\n\(Self.rate(up))"  // ↓ over ↑, icons drawn by the cell
+        return "\(Self.barRate(down))\n\(Self.barRate(up))"  // ↓ over ↑, icons drawn by the cell
     }
 
     func start(port: Int) {
@@ -893,7 +921,10 @@ final class StatusController: NSObject {
                     self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist, gpu: self.gpuHist, net: self.netHist,
                                                           netText: self.netText(), menu: self.lastMenuRows, bar: self.lastBarRows)
                 }
-                self.updateMenu(obj)
+                self.lastStatusObj = obj
+                if self.isMenuOpen || self.samples == 1 {
+                    self.updateMenu(obj)
+                }
                 if let pid = obj["purge"] as? Int, pid != self.lastPurgeId {
                     self.lastPurgeId = pid
                     let p = self.port
@@ -1089,8 +1120,12 @@ final class StatusController: NSObject {
         return img
     }
 
-    /// A template SF Symbol tinted with `color`, for the menu-bar bitmap.
+    private static var symbolCache: [String: NSImage] = [:]
+
+    /// A template SF Symbol tinted with `color`, for the menu-bar bitmap (cached).
     static func tintedSymbol(_ name: String, size: CGFloat, color: NSColor) -> NSImage? {
+        let key = "\(name):\(size):\(color.description)"
+        if let cached = symbolCache[key] { return cached }
         guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil),
               let sym = base.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: .bold)) else { return nil }
         let img = NSImage(size: sym.size)
@@ -1100,6 +1135,7 @@ final class StatusController: NSObject {
         sym.draw(in: r)
         r.fill(using: .sourceAtop)
         img.unlockFocus()
+        symbolCache[key] = img
         return img
     }
 }

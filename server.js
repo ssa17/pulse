@@ -656,9 +656,16 @@ async function sample(fast = false) {
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
     ]);
   } else {
+    // When no dashboard SSE client is connected, only run the expensive 2000-process
+    // phys_footprint walk (`top -n 2000`) and `iostat` every 10th tick; on the other
+    // 9 ticks, `top -F -l 2 -n 0 -s 1` still measures exact system-wide `CPU usage:`
+    // for the menu bar while avoiding ~1,500 kernel task_info traps/sec.
+    const needFullTop = clients.size > 0 || (sampleCount % 10 === 1);
     [topOut, iostatOut] = await Promise.all([
-      run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1'], 6000),
-      run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
+      run('top', needFullTop
+        ? ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1']
+        : ['-F', '-l', '2', '-n', '0', '-s', '1'], 6000),
+      needFullTop ? run('iostat', ['-d', '-c', '2', '-w', '1'], 6000) : Promise.resolve(null),
     ]);
     [psMain, psArgs, vmOut, sysOut, battOut, gpuOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
@@ -696,7 +703,7 @@ async function sample(fast = false) {
     // path overwrite the last real window.
     if (!useFast && topOut.includes('CPU usage:')) {
       lastTopCpu = parseTop(topOut);
-      lastKernelCpu = parsedTop.get(0)?.cpu || 0;
+      if (parsedTop.has(0)) lastKernelCpu = parsedTop.get(0)?.cpu || 0;
       lastTopCpuT = Date.now();
     }
   }
