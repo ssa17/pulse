@@ -948,11 +948,16 @@ final class StatusController: NSObject {
             }
             thermalItem.title = "Thermal \(valStr)"
             // Colour the reading on the machine's own observed range (coldest →
-            // hottest since the sampler started) — no bar, the number is the signal.
-            // No range yet (or no reading) → neutral / discrete-state fallback.
+            // hottest since the sampler started). The span is floored at 10°C so
+            // a quiet machine's few-degree range doesn't map a 1° swing onto the
+            // whole green→red ramp, and the colour uses the ROUNDED value so it
+            // always matches the number the user reads (and the dashboard's).
+            // No bar — the number is the signal.
             let color: NSColor
-            if let t = cpuTemp, let lo = th["min"] as? Double, let hi = th["max"] as? Double, hi - lo >= 2 {
-                let frac = min(1, max(0, (t - lo) / (hi - lo)))
+            if let tRaw = cpuTemp, let lo = th["min"] as? Double, let hi = th["max"] as? Double, hi - lo >= 1 {
+                let span = max(hi - lo, 10.0)
+                let rangeLo = lo - (span - (hi - lo)) / 2  // widen around the observed range
+                let frac = min(1, max(0, (Double(Int(tRaw.rounded())) - rangeLo) / span))
                 color = NSColor(hue: 1 - frac, saturation: 0.65, brightness: 0.85, alpha: 1)
             } else {
                 color = lvl == 0 ? .labelColor : (lvl == 1 ? NSColor.systemOrange : NSColor.systemRed)

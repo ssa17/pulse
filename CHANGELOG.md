@@ -10,8 +10,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ## [Unreleased]
 
 ### Added
-- Dashboard CPU card shows the live CPU die temperature (°C) alongside user/sys, coloured on the machine's own observed cold–hot range and flagging throttling — read directly from Apple Silicon sensors, no root needed
-- Menu-bar Thermal row (pinned just below CPU, no separate toggle or bar) shows the live CPU die temperature coloured the same way
+- Dashboard CPU card shows the live CPU die temperature (°C) alongside user/sys, coloured green→red by how hot the machine is (scaled on its observed cold–hot range, 10 °C minimum span) and flagging throttling — read directly from Apple Silicon sensors, no root needed
+- Menu-bar Thermal row (pinned just below CPU, no separate toggle or bar) shows the same reading, coloured identically
 
 ### Changed
 - Update checks now run hourly instead of once a day, so new releases appear within the hour

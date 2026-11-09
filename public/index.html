@@ -1216,13 +1216,17 @@ document.addEventListener('click', (e) => {
 function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }
 
 // Hue (120 = cool green → 0 = hot red) for a CPU temperature, scaled on this
-// machine's own observed range (therm.min..max, tracked by the server). Returns
-// null when there's no range to scale on yet — the caller keeps the default colour.
-function tempHue(therm, t) {
+// machine's own observed range (therm.min..max, tracked by the server). The span
+// is floored at 10°C so a quiet machine's few-degree range doesn't map a 1°
+// swing onto the whole ramp, and the colour uses the ROUNDED value so it always
+// matches the number shown (and the status menu's). Returns null only when
+// there's no range to scale on yet — the caller keeps the default colour.
+function tempHue(therm, tRaw) {
   if (!therm || typeof therm.min !== 'number' || typeof therm.max !== 'number') return null;
-  const span = therm.max - therm.min;
-  if (span < 2) return null;
-  return 120 * (1 - Math.min(1, Math.max(0, (t - therm.min) / span)));
+  if (therm.max - therm.min < 1) return null; // no spread yet — not enough history
+  const span = Math.max(therm.max - therm.min, 10);
+  const lo = therm.min - (span - (therm.max - therm.min)) / 2; // widen around the observed range
+  return 120 * (1 - Math.min(1, Math.max(0, (Math.round(tRaw) - lo) / span)));
 }
 
 function renderSys() {

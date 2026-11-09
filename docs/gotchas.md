@@ -81,6 +81,8 @@ quirk of a macOS tool, verified against live output.
   "… thermal level N" (0 = nominal, 1 = slowed, ≥2 = throttled).
   The dashboard CPU card always shows the live CPU die temperature; the
   menu-bar has a Thermal row pinned directly below CPU (no settings toggle,
-  no bar). Both colour the reading on the machine's observed low–high range,
-  which the server tracks and ships as `thermal.min`/`thermal.max`.
+  no bar). Both colour the rounded reading on the machine's observed low–high
+  range (server ships `thermal.min`/`thermal.max`) with the span floored at
+  10°C — a quiet machine's few-degree range must not paint a 1° swing across
+  the whole green→red ramp, and the rounded value keeps the two UIs in lockstep.
   Uptime is `kern.boottime` (already in the sysctl batch).

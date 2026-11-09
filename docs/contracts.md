@@ -43,7 +43,9 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
                                      // name/cores from the GPU node
     thermal: { level, state, cpu, min, max }, // level 0..3 (pmset), state: nominal|slowed|throttled; cpu: temp in °C or null;
                                               // min/max: the machine's observed cold–hot range since the sampler
-                                              // started (null until the first reading) — UIs scale the temp colour on it
+                                              // started (null until the first reading). The UIs colour the ROUNDED
+                                              // temp on a span floored at 10°C so both show the same colour for the
+                                              // same number
     procCount, appCount
   },
   apps: [{
@@ -70,7 +72,7 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   cpu: { user, sys, idle, total, temp }, // SYSTEM cpu (from top) — NOT an app; temp in °C or null
   memPct, memUsed, memTotal,         // AM-style: memUsed = used − file cache
   gpuPct,                            // Apple Silicon GPU utilization %; null if unavailable
-  thermal: { level, state, cpu, min, max }, // pmset level 0..3 + nominal|slowed|throttled; cpu temp in °C or null; min/max = observed range
+  thermal: { level, state, cpu, min, max }, // pmset level 0..3 + nominal|slowed|throttled; cpu temp in °C or null; min/max = observed range (colours use a 10°C-floored span of it)
   net: { down, up },                 // bytes/s summed across all interfaces — the SAME
                                      // scale as the snapshot's sys.net; each side formats
                                      // B/KB/MB/GB on its own (no in-band conversion)
