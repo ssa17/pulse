@@ -576,7 +576,7 @@
       <div class="s-card">
         <div class="s-info">
           <div class="s-title">Status bar &amp; menu</div>
-          <div class="s-desc">Which stats appear in the menu-bar dropdown and in the button itself — drag a row to reorder the menu. Capsules follow menu order; thermal &amp; uptime are menu-only.</div>
+          <div class="s-desc">Which stats appear in the menu-bar dropdown and in the button itself — drag a row to reorder the menu. Capsules follow menu order; uptime is menu-only, and thermal always shows with CPU.</div>
         </div>
         <div id="menu-rows"></div>
       </div>
@@ -1215,6 +1215,16 @@ document.addEventListener('click', (e) => {
 /* ================= system cards ================= */
 function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }
 
+// Hue (120 = cool green → 0 = hot red) for a CPU temperature, scaled on this
+// machine's own observed range (therm.min..max, tracked by the server). Returns
+// null when there's no range to scale on yet — the caller keeps the default colour.
+function tempHue(therm, t) {
+  if (!therm || typeof therm.min !== 'number' || typeof therm.max !== 'number') return null;
+  const span = therm.max - therm.min;
+  if (span < 2) return null;
+  return 120 * (1 - Math.min(1, Math.max(0, (t - therm.min) / span)));
+}
+
 function renderSys() {
   const s = S.sys;
   if (!s) return;
@@ -1228,12 +1238,25 @@ function renderSys() {
     $('#h-batt').className = s.batt.charging ? 'batt-charging' : '';
   } else bw.style.display = 'none';
 
-  // cpu card — thermal state is a warning: only shown when NOT nominal
+  // cpu card — show live CPU thermal reading always under CPU; highlight when throttled
   $('#cpu-big').textContent = fmtPct(s.cpu.total);
   const therm = s.thermal;
   const hot = therm && therm.state !== 'nominal';
-  $('#cpu-sub').innerHTML = `<span>user <b>${s.cpu.user.toFixed(1)}%</b></span><span>sys <b>${s.cpu.sys.toFixed(1)}%</b></span>` +
-    (hot ? `<span class="hot">thermal <b>${therm.state}</b></span>` : '');
+  const cpuTemp = therm && therm.cpu != null ? therm.cpu : (s.cpu && s.cpu.temp != null ? s.cpu.temp : null);
+  let thermHtml = '';
+  if (cpuTemp != null) {
+    // Colour the number on this machine's own observed range (coldest → hottest
+    // since the sampler started); no range yet → the default text colour.
+    const hue = tempHue(therm, cpuTemp);
+    const col = hue == null ? '' : ` style="color:hsl(${hue.toFixed(0)},65%,58%)"`;
+    const tVal = `<b${col}>${Math.round(cpuTemp)}°C</b>`;
+    thermHtml = hot
+      ? `<span class="hot" title="CPU die temperature (throttled)">thermal <b>${therm.state} ·</b> ${tVal}</span>`
+      : `<span title="CPU die temperature">temp ${tVal}</span>`;
+  } else if (hot) {
+    thermHtml = `<span class="hot">thermal <b>${therm.state}</b></span>`;
+  }
+  $('#cpu-sub').innerHTML = `<span>user <b>${s.cpu.user.toFixed(1)}%</b></span><span>sys <b>${s.cpu.sys.toFixed(1)}%</b></span>${thermHtml}`;
   pushHist(S.sysHist.cpu, s.cpu.total);
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
 
@@ -1520,8 +1543,8 @@ const settingsState = {
   closeBehavior: 'background',
   keepDashboardInMemory: false,
   menuRows: ['cpu', 'gpu', 'memory', 'uptime'], // visible status-menu rows, in order
-  menuRowsFull: ['cpu', 'gpu', 'memory', 'thermal', 'network', 'uptime'], // all rows, UI order (hidden included)
-  menuHidden: ['thermal'],
+  menuRowsFull: ['cpu', 'gpu', 'memory', 'network', 'uptime'], // all rows, UI order (hidden included)
+  menuHidden: [],
   barRows: ['cpu', 'gpu', 'memory', 'network'], // visible status-bar capsules (menu order applies)
   daemonStatus: 'off', // 'active' | 'busy' | 'error' | 'stopped' | 'off'
   daemonError: '',
@@ -1529,10 +1552,10 @@ const settingsState = {
 
 const ALL_MENU_ROWS = [
   ['cpu', 'CPU', true], ['gpu', 'GPU', true], ['memory', 'Memory', true],
-  ['thermal', 'Thermal', false], ['network', 'Network', true],
+  ['network', 'Network', true],
   ['uptime', 'Uptime', false],
-  // 3rd = the stat can appear as a status-bar button capsule (thermal is a state
-  // word, uptime a counter — neither has a capsule; they're menu-only).
+  // 3rd = the stat can appear as a status-bar button capsule (uptime is a counter,
+  // so menu-only). Thermal is not a row — it always shows with CPU.
 ];
 const BAR_CAPABLE = ALL_MENU_ROWS.filter(([, , cap]) => cap).map(([id]) => id);
 

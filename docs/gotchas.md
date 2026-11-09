@@ -73,10 +73,14 @@ quirk of a macOS tool, verified against live output.
   `gpu.pct: null` and the card shows "—". The accelerator node (discovered by
   class-name scan of `ioreg -p IOService`) also supplies `"model"` and
   `"gpu-core-count"` for the card's caption.
-- **Thermal state comes from `pmset -g batt -g therm`** (root-free): "No … has
+- **Thermal readings & state**: CPU temperature comes from Apple Silicon on-die
+  thermal sensors via the IOKit HID Event System (`app/pulse-thermal.c`, root-free),
+  sampling `PMU tdie` sensors. It runs in the background and is non-blocking.
+  Throttling warning levels come from `pmset -g batt -g therm`: "No … has
   been recorded" means level 0 (nominal); an active throttle prints
-  "… thermal level N". The parser takes the MAX level across the sensors
-  (0 = nominal, 1 = slowed, ≥2 = throttled) and rides on the existing 4.5 s
-  battery refresh. pmset reports a discrete state only — no temperature value
-  is available without root — so the UIs render it as a three-step state bar.
+  "… thermal level N" (0 = nominal, 1 = slowed, ≥2 = throttled).
+  The dashboard CPU card always shows the live CPU die temperature; the
+  menu-bar has a Thermal row pinned directly below CPU (no settings toggle,
+  no bar). Both colour the reading on the machine's observed low–high range,
+  which the server tracks and ships as `thermal.min`/`thermal.max`.
   Uptime is `kern.boottime` (already in the sysctl batch).

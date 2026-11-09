@@ -108,11 +108,12 @@ final class BootTracer {
 final class PulseSettings {
     static let currentVersion = 2
     /// Canonical order of the status-menu rows; a subset of `menuRows` = hidden.
-    static let allMenuRows = ["cpu", "gpu", "memory", "thermal", "network", "uptime"]
-    /// Thermal is off by default — pmset reports a bare word, no value to bar.
+    /// Thermal is deliberately NOT a configurable row: it is pinned directly
+    /// below CPU in the menu and shares CPU's visibility.
+    static let allMenuRows = ["cpu", "gpu", "memory", "network", "uptime"]
     static let defaultMenuRows = ["cpu", "gpu", "memory", "network", "uptime"]
     /// Status-bar button ids — only the continuously-valued stats have capsules
-    /// (thermal is a state word, uptime a counter; both are menu-only).
+    /// (uptime is a counter, and thermal has no bar, so neither gets a capsule).
     static let allBarRows = ["cpu", "gpu", "memory", "network"]
     static let defaultBarRows = ["cpu", "gpu", "memory", "network"]
     let filePath: String
@@ -619,10 +620,12 @@ final class StatRowView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func set(value: String, frac: Double, color: NSColor) {
+    func set(value: String, frac: Double?, color: NSColor) {
         if valueField.stringValue != value { valueField.stringValue = value }
         if valueField.textColor != color { valueField.textColor = color }
-        bar.frac = frac
+        // A nil frac means "no bar" (thermal): hide the track as well as the fill.
+        bar.isHidden = frac == nil
+        if let frac { bar.frac = frac }
         bar.barColor = color
     }
 }
@@ -713,7 +716,7 @@ final class StatusController: NSObject {
     let netItem = NSMenuItem(title: "Network", action: nil, keyEquivalent: "")
     let uptimeItem = NSMenuItem(title: "Uptime", action: nil, keyEquivalent: "")
     let updateItem = NSMenuItem(title: "Update…", action: nil, keyEquivalent: "")
-    let thermalRow = StatRowView(label: "Thermal")  // bar fills per thermal level
+    let thermalRow = StatRowView(label: "Thermal")  // no bar — the coloured °C number is the signal
     let netRow = StatRowView(label: "Network")
     let uptimeRow = InfoRowView(label: "Uptime")
     var statItems: [String: NSMenuItem] = [:]  // populated in init (member refs aren't allowed in initializers)
@@ -772,7 +775,10 @@ final class StatusController: NSObject {
     /// capsules follow the menu's row order). Particles refresh only on change.
     func applyMenuLayout(menu: [String], bar: [String]) {
         let known = PulseSettings.allMenuRows
-        let visible = menu.filter { known.contains($0) }
+        var visible = menu.filter { known.contains($0) }
+        // Thermal is pinned directly below CPU — part of the CPU block (shares its
+        // visibility), never a settings toggle of its own.
+        if let ci = visible.firstIndex(of: "cpu") { visible.insert("thermal", at: ci + 1) }
         if visible.joined(separator: ",") != lastMenuKey {
             lastMenuKey = visible.joined(separator: ",")
             for (_, it) in statItems {
@@ -933,11 +939,25 @@ final class StatusController: NSObject {
             let lvl = th["level"] as? Int ?? 0
             let state = (th["state"] as? String) ?? "nominal"
             let pretty = String(state.prefix(1)).uppercased() + String(state.dropFirst())
-            thermalItem.title = "Thermal \(pretty)"
-            // pmset gives a discrete level (0..3), not a temperature — the bar
-            // fills in thirds as the machine heats up.
-            thermalRow.set(value: pretty, frac: min(1.0, Double(lvl) / 3),
-                           color: lvl == 0 ? .labelColor : (lvl == 1 ? NSColor.systemOrange : NSColor.systemRed))
+            let cpuTemp = th["cpu"] as? Double
+            let valStr: String
+            if let t = cpuTemp {
+                valStr = lvl > 0 ? "\(Int(t.rounded()))°C · \(pretty)" : "\(Int(t.rounded()))°C"
+            } else {
+                valStr = pretty
+            }
+            thermalItem.title = "Thermal \(valStr)"
+            // Colour the reading on the machine's own observed range (coldest →
+            // hottest since the sampler started) — no bar, the number is the signal.
+            // No range yet (or no reading) → neutral / discrete-state fallback.
+            let color: NSColor
+            if let t = cpuTemp, let lo = th["min"] as? Double, let hi = th["max"] as? Double, hi - lo >= 2 {
+                let frac = min(1, max(0, (t - lo) / (hi - lo)))
+                color = NSColor(hue: 1 - frac, saturation: 0.65, brightness: 0.85, alpha: 1)
+            } else {
+                color = lvl == 0 ? .labelColor : (lvl == 1 ? NSColor.systemOrange : NSColor.systemRed)
+            }
+            thermalRow.set(value: valStr, frac: nil, color: color)
         }
         if let n = o["net"] as? [String: Any] {
             let d = n["down"] as? Double ?? 0, u = n["up"] as? Double ?? 0
@@ -1295,12 +1315,12 @@ final class SettingsWindowController: NSObject {
         s4Col.alignment = .leading
         s4Col.spacing = 6
         s4Col.addArrangedSubview(makeTitle("Status bar & menu"))
-        s4Col.addArrangedSubview(makeNote("Which stats appear in the dropdown and in the button capsule. Capsules follow the menu's row order; Thermal & Uptime are menu-only."))
+        s4Col.addArrangedSubview(makeNote("Which stats appear in the dropdown and in the button capsule. Thermal always shows with CPU; capsules follow the menu's row order, uptime is menu-only."))
         let rowsBox = NSStackView()
         rowsBox.orientation = .vertical
         rowsBox.alignment = .leading
         rowsBox.spacing = 5
-        let rowLabels: [String: String] = ["cpu": "CPU", "gpu": "GPU", "memory": "Memory", "thermal": "Thermal", "network": "Network", "uptime": "Uptime"]
+        let rowLabels: [String: String] = ["cpu": "CPU", "gpu": "GPU", "memory": "Memory", "network": "Network", "uptime": "Uptime"]
         for (si, id) in PulseSettings.allMenuRows.enumerated() {
             let barCapable = PulseSettings.allBarRows.contains(id)
             let sw = NSSwitch()

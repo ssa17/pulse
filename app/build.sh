@@ -70,6 +70,11 @@ swiftc -O app/Pulse.swift -o "$APP/Contents/MacOS/Pulse" \
   -F vendor/sparkle \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 
+echo "→ compiling thermal helper"
+clang -O2 app/pulse-thermal.c -o "$APP/Contents/MacOS/pulse-thermal" \
+  -target arm64-apple-macos13.0 \
+  -framework CoreFoundation -framework IOKit
+
 echo "→ building icon"
 node app/make-icon.mjs app/Pulse-1024.png
 rm -rf app/Pulse.iconset

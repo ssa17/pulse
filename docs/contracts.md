@@ -21,7 +21,7 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   sys: {
     model, chip, memLabel,      // from system_profiler; null until it finishes loading
     cores, memTotal,            // memTotal in bytes
-    cpu:  { user, sys, idle, total },   // percents; total = 100 - idle
+    cpu:  { user, sys, idle, total, temp }, // percents (total = 100 - idle); temp in °C or null
     mem:  { free, used, apps, wired, compressed, cache, inUse },  // bytes. Activity-Monitor-style:
                                                                  // wired/compressor are vm_stat measurements,
                                                                  // cache = vm_stat filebacked + purgeable (capped
@@ -41,7 +41,9 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     gpu:  { pct, name, cores },      // Apple Silicon only (ioreg AGX); pct null elsewhere.
                                      // pct = delta of accumulatedGPUTime ÷ window ÷ MGPU units;
                                      // name/cores from the GPU node
-    thermal: { level, state },      // `pmset -g therm`; level 0..3, state: nominal | slowed | throttled
+    thermal: { level, state, cpu, min, max }, // level 0..3 (pmset), state: nominal|slowed|throttled; cpu: temp in °C or null;
+                                              // min/max: the machine's observed cold–hot range since the sampler
+                                              // started (null until the first reading) — UIs scale the temp colour on it
     procCount, appCount
   },
   apps: [{
@@ -65,10 +67,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   serverMtime: <sec epoch>,          // mtime of server.js at boot (triggers live backend reload on rebuild)
   bootTrace: { start, listen, firstSnapshot }, // epoch ms timestamps for startup trace logging
   memDebug: { rss, heapTotal, heapUsed, external }, // Node V8 memory telemetry (bytes)
-  cpu: { user, sys, idle, total },   // SYSTEM cpu (from top) — NOT an app
+  cpu: { user, sys, idle, total, temp }, // SYSTEM cpu (from top) — NOT an app; temp in °C or null
   memPct, memUsed, memTotal,         // AM-style: memUsed = used − file cache
   gpuPct,                            // Apple Silicon GPU utilization %; null if unavailable
-  thermal: { level, state },         // pmset thermal level 0..3 + nominal|slowed|throttled
+  thermal: { level, state, cpu, min, max }, // pmset level 0..3 + nominal|slowed|throttled; cpu temp in °C or null; min/max = observed range
   net: { down, up },                 // bytes/s summed across all interfaces — the SAME
                                      // scale as the snapshot's sys.net; each side formats
                                      // B/KB/MB/GB on its own (no in-band conversion)

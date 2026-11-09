@@ -177,13 +177,23 @@ function parseBatt(out) {
   return r;
 }
 
-function parseTherm(out) {
+function parseTherm(out, cpuTemp = null) {
   let level = 0;
   if (out) {
     for (const m of out.matchAll(/(?:thermal|performance) level (\d+)/g)) level = Math.max(level, +m[1]);
   }
   const state = level === 0 ? 'nominal' : level === 1 ? 'slowed' : 'throttled';
-  return { level, state };
+  return { level, state, cpu: typeof cpuTemp === 'number' ? +cpuTemp.toFixed(1) : null };
+}
+
+function parseThermalJson(out) {
+  if (!out) return null;
+  try {
+    const data = JSON.parse(out);
+    return typeof data.cpu === 'number' ? data : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseIoregGpu(out) {
@@ -648,6 +658,15 @@ assert(th2.state === 'throttled', '≥2 → throttled');
 const th3 = parseTherm('CPU SMC0  thermal level 1');
 assert(th3.level === 1 && th3.state === 'slowed', 'level 1 → slowed');
 assert(parseTherm(null).state === 'nominal', 'null input → nominal');
+
+const thWithTemp = parseTherm(thermNominal, 42.34);
+assert(thWithTemp.cpu === 42.3, 'cpu temp rounded to 1 decimal');
+assert(thWithTemp.level === 0 && thWithTemp.state === 'nominal', 'level/state preserved with temp');
+
+assert(parseThermalJson('{"cpu":40.1,"max":42.5}')?.cpu === 40.1, 'valid thermal json');
+assert(parseThermalJson('{}')?.cpu === undefined, 'empty thermal json');
+assert(parseThermalJson('invalid') === null, 'invalid json returns null');
+assert(parseThermalJson(null) === null, 'null input returns null');
 
 /* ── parseIoregGpu ──────────────────────────────────────────────────────── */
 console.log('\n--- parseIoregGpu ---');

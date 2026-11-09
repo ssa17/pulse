@@ -346,20 +346,28 @@ function parseBatt(out) {
 }
 
 /**
- * `pmset -g batt -g therm` → thermal state. pmset is the one root-free source
- * of the SMC thermal warning level: "No … has been recorded" means level 0
- * (Nominal); an active throttle prints "… thermal level N" (1 = slowed,
- * ≥2 = throttled). Only the MAX level across the three sensors matters. It's a
- * discrete state, not a reading — no temperature value is available without
- * root, so UIs render it as a state bar, not a gauge.
+ * `pmset -g batt -g therm` → thermal state, combined with IOHIDEventSystem CPU temperature.
+ * pmset is the root-free source of the SMC thermal warning level: "No … has been recorded"
+ * means level 0 (Nominal); an active throttle prints "… thermal level N" (1 = slowed,
+ * ≥2 = throttled). When available, `cpuTemp` provides the live CPU die temperature (°C).
  */
-function parseTherm(out) {
+function parseTherm(out, cpuTemp = null) {
   let level = 0;
   if (out) {
     for (const m of out.matchAll(/(?:thermal|performance) level (\d+)/g)) level = Math.max(level, +m[1]);
   }
   const state = level === 0 ? 'nominal' : level === 1 ? 'slowed' : 'throttled';
-  return { level, state };
+  return { level, state, cpu: typeof cpuTemp === 'number' ? +cpuTemp.toFixed(1) : null };
+}
+
+function parseThermalJson(out) {
+  if (!out) return null;
+  try {
+    const data = JSON.parse(out);
+    return typeof data.cpu === 'number' ? data : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -387,11 +395,10 @@ function parseIoregGpu(out) {
 
 // Status-menu row ids. settings.json stores an ordered SUBSET under `menuRows`
 // (missing id = hidden row); the /api/status payload carries it so the app can
-// rebuild its stat block. Thermal is off by default — pmset reports a bare word
-// (nominal/slowed/throttled) with no value to build a bar from.
-const MENU_ROW_IDS = ['cpu', 'gpu', 'memory', 'thermal', 'network', 'uptime'];
-// Thermal is off by default (bare pmset word, no bar); network is on — it has
-// a real value (MB/s) and a 1 Gbps reference scale.
+// rebuild its stat block. Thermal is not a row here — the app pins it directly
+// below CPU (shared visibility, no toggle of its own).
+const MENU_ROW_IDS = ['cpu', 'gpu', 'memory', 'network', 'uptime'];
+// Network is on by default — it has a real value (MB/s) and a 1 Gbps reference scale.
 const DEFAULT_MENU_ROWS = ['cpu', 'gpu', 'memory', 'network', 'uptime'];
 function normalizeMenuRows(v) {
   if (Array.isArray(v)) {
@@ -402,7 +409,7 @@ function normalizeMenuRows(v) {
   return [...DEFAULT_MENU_ROWS];
 }
 // Status-BAR button ids — only the continuously-valued stats have capsules
-// (thermal is a state word, uptime a counter; both are menu-only).
+// (uptime is a counter; thermal is pinned below CPU and has no capsule).
 const BAR_ROW_IDS = ['cpu', 'gpu', 'memory', 'network'];
 function normalizeBarRows(v, menuRows) {
   if (Array.isArray(v)) {
@@ -638,7 +645,59 @@ let prevGpu = new Map();
 let lastGpuT = 0;
 let gpuPct = null;
 let gpuHw = { name: null, cores: 0, mgpus: 1 };
-let lastTherm = { level: 0, state: 'nominal' };
+let lastTherm = { level: 0, state: 'nominal', cpu: null, min: null, max: null };
+let lastCpuTemp = null;
+let lastCpuTempT = 0;
+// The machine's observed CPU temperature range (°C) since the sampler started.
+// The UIs scale the colour of a reading on it, so the ramp is machine-specific.
+let thermalMin = null;
+let thermalMax = null;
+let thermalBusy = false;
+let thermalBin = null;
+let compilingThermal = false;
+
+function getThermalBin() {
+  if (thermalBin && fs.existsSync(thermalBin)) return thermalBin;
+  const candidates = [
+    process.env.PULSE_THERMAL_BIN,
+    path.join(__dirname, '..', 'MacOS', 'pulse-thermal'),
+    path.join(__dirname, 'dist', 'Pulse.app', 'Contents', 'MacOS', 'pulse-thermal'),
+    path.join(__dirname, 'pulse-thermal'),
+    path.join(PULSE_DIR, 'pulse-thermal'),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    if (fs.existsSync(c)) { thermalBin = c; return thermalBin; }
+  }
+  const src = path.join(__dirname, 'app', 'pulse-thermal.c');
+  if (!compilingThermal && fs.existsSync(src)) {
+    compilingThermal = true;
+    const target = path.join(PULSE_DIR, 'pulse-thermal');
+    try { fs.mkdirSync(PULSE_DIR, { recursive: true }); } catch {}
+    execFile('/usr/bin/clang', ['-O2', src, '-o', target, '-framework', 'CoreFoundation', '-framework', 'IOKit'], (err) => {
+      compilingThermal = false;
+      if (!err && fs.existsSync(target)) thermalBin = target;
+    });
+  }
+  return null;
+}
+
+function kickThermal() {
+  const bin = getThermalBin();
+  if (!bin || thermalBusy || (Date.now() - lastCpuTempT < 1800)) return;
+  thermalBusy = true;
+  run(bin, [], 2000).then((out) => {
+    thermalBusy = false;
+    if (out) {
+      const parsed = parseThermalJson(out);
+      if (parsed && typeof parsed.cpu === 'number') {
+        lastCpuTemp = parsed.cpu;
+        lastCpuTempT = Date.now();
+        thermalMin = thermalMin == null ? parsed.cpu : Math.min(thermalMin, parsed.cpu);
+        thermalMax = thermalMax == null ? parsed.cpu : Math.max(thermalMax, parsed.cpu);
+      }
+    }
+  });
+}
 
 function kickNetstat() {
   if (netBusy || (netCounters && Date.now() - netCounters.t < 4500)) return;
@@ -683,6 +742,7 @@ async function sample(fast = false) {
   const activeViewer = useFast || clients.size > 0 || (Date.now() - lastSnapshotReq < 3000);
   refreshUiMtime();
   kickNetstat(); // background — never blocks the sample
+  kickThermal(); // background — never blocks the sample
 
   let topOut = null, iostatOut = null;
   let psMain, psArgs, vmOut, sysOut, battOut, gpuOut;
@@ -726,7 +786,11 @@ async function sample(fast = false) {
     ]);
   }
   if (needBatt && battOut) { lastBattOut = battOut; lastBattT = Date.now(); }
-  if (battOut) lastTherm = parseTherm(battOut); // state changes slowly; the 4.5s cache is fine
+  const curCpuTemp = Date.now() - lastCpuTempT < 15000 ? lastCpuTemp : null;
+  if (battOut || curCpuTemp !== lastTherm.cpu) {
+    // min/max are sampler-lifetime state, not pmset-derived — attach, don't parse.
+    lastTherm = { ...parseTherm(battOut || lastBattOut, curCpuTemp), min: thermalMin, max: thermalMax };
+  }
 
   // Never overwrite live data with empty/zero parser fallbacks if a core tool failed.
   if (!psMain || !vmOut || !sysOut) return;
@@ -905,7 +969,7 @@ async function sample(fast = false) {
       ...hardware,
       cores,
       memTotal,
-      cpu: top,
+      cpu: { ...top, temp: lastTherm.cpu },
       mem: { free, used, apps: appsMem, wired, compressed, cache, inUse },
       // Extra vm_stat counters (bytes), informational only — NOT part of the
       // normalized `mem` segments above (the UI's bar/sum uses those). They
@@ -926,7 +990,7 @@ async function sample(fast = false) {
         name: gpuHw.name,
         cores: gpuHw.cores,
       },
-      thermal: lastTherm,   // { level, state } from `pmset -g therm`
+      thermal: lastTherm,   // { level, state, cpu, min, max } — pmset state + observed temp range
       procCount: procs.size,
       appCount: groups.size,
     },
@@ -966,14 +1030,14 @@ async function sample(fast = false) {
     serverMtime: SERVER_MTIME,
     bootTrace: BOOT_TRACE,
     memDebug: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
-    cpu: top,
+    cpu: { ...top, temp: lastTherm.cpu },
     // AM-style: "memory used" = used − cache (Apps + Wired + Compressed;
     // reclaimable file/purgeable cache excluded)
     memPct: memTotal ? +((inUse / memTotal) * 100).toFixed(1) : 0,
     memUsed: inUse,
     memTotal,
     gpuPct: gpuPct == null ? null : +gpuPct.toFixed(1),
-    thermal: lastTherm,      // { level, state } — level 0..3 drives the state bar
+    thermal: lastTherm,      // { level, state, cpu, min, max } — cpu temp is coloured on min..max by the UIs
     net: { down: netDown, up: netUp }, // bytes/s — same scale as snapshot.sys.net; each side formats B/KB/MB/GB
     bootTime: sysc.bootTime, // epoch sec — the menu computes uptime
     menuRows: lastMenuRows,  // ordered visible row ids (settings.json) — menu layout
