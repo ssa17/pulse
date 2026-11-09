@@ -4,6 +4,8 @@ See, in real time, exactly which apps are eating your CPU and memory — and man
 
 **[Download .dmg](https://github.com/ssa17/pulse/releases/latest/download/Pulse.dmg)** · [All releases](https://github.com/ssa17/pulse/releases)
 
+![Pulse dashboard](docs/screenshots/dashboard.png)
+
 ## Install
 
 1. Download the latest **Pulse.dmg** (the link above, or the [releases page](https://github.com/ssa17/pulse/releases))
@@ -26,13 +28,18 @@ Pulse checks for updates automatically and installs them — you never need to r
   with live sparklines — and how each one goes away (quit the hogs, reboot for
   the kernel's share, `sudo purge` for the file cache).
 - **System cards** — CPU (user/sys/idle), memory breakdown (apps / wired / compressed /
-  cache / free + swap), network, disk, battery, load, uptime.
+  cache / free + swap), network, disk, Apple Silicon GPU utilization, battery, thermal state, uptime.
 - **Detail drawer** — click any app to see every process behind it: its role (web page /
   GPU / helper…), full command line, CPU, memory, state, start time — plus **kill** and
   **Quit app** buttons.
 - **Search** — filter by app name, bundle path, or any process/command.
+- **Menu-bar item & dropdown** — live status-bar capsules (CPU, GPU, Memory, Network ↓/↑)
+  and a dropdown menu with colored utilization bars, thermal state, and uptime — all
+  individually toggleable and reorderable in Settings.
 
-Updates every second; the menu-bar item shows live CPU + memory at a glance.
+<p align="center">
+  <img src="docs/screenshots/menubar.png" width="280" alt="Pulse status bar and menu" />
+</p>
 
 ## Requirements
 
