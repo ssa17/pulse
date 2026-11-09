@@ -9,25 +9,22 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+## [1.3] - 2026-11-09
+
 ### Added
-- GPU section: new GPU card (live utilization, sparkline, chip name) sampled root-free from `ioreg` on Apple Silicon; the status menu gained a GPU row
-- Status-bar menu gained Thermal and Uptime rows (hidden by default, restorable in Settings)
-- **Network joins the status menu** as a row (on by default) with a purple `NET` capsule on the button — the data is the existing per-interface netstat rates summed, no new sampling
-- **Update availability, everywhere and quietly**: when a version check finds an update, a very thin green strip runs along the top of the window (click = install), the status menu grows an “Update to vX…” row, and Settings (both dashboard and native) show an “Update available — v…” row with a button. Declining the sheet re-offers on the next launch, and the strip stays as a persistent marker until the version actually changes; a failed check leaves the previous state untouched
+- GPU section: a new GPU card (live utilization, sparkline, chip name) on Apple Silicon, plus a GPU row in the status menu
+- Updates are now visible everywhere: a thin green strip along the top of the window, an “Update to vX…” row in the status menu, and a row in Settings — declining is re-offered on the next launch
 
 ### Changed
-- Status-bar menu redesign, in the style of the Stats app: values at the row's end with a colored utilization bar beneath each; removed the version header, the settings toggles, and the Top CPU / Top Memory rows — Open Pulse, Settings, and Quit (which also stops the background sampler) are the only actions
-- Status menu: the Memory row reads `30.6 GB / 64 GB · 24%` (no "of"); row order and visibility are configurable in Settings (drag to reorder, or the switch / ↑↓), Thermal hidden by default, all six rows (incl. Network) always listed; hiding a row keeps its slot, and hiding all rows is a valid layout
-- **Separate controls for the status bar and the status menu**: Settings ("Status bar & menu") has a labeled switch per stat per surface — each toggle sits right next to its own “Menu”/“Bar” word, so nothing is ambiguous and the columns line up; thermal & uptime stay menu-only, so their bar switch is dimmed/disabled. Capsules follow the menu's row order, and hiding all of them drops the button to its static “P”
-- The button's **NET capsule** shows pinned **arrow icons with right-aligned figures** (↓ over ↑, no bar), and the figures use the same B → KB → MB → GB ladder as the dashboard — one network unit everywhere, so a quiet 512 B/s connection reads identically in the menu, the button, and the dashboard
+- Status-bar menu redesigned in the style of the Stats app: each stat is a row with a colored utilization bar, and Open Pulse, Settings, and Quit (which also stops the background sampler) are the only actions
+- Row order and visibility are configurable in Settings, with a separate switch for which rows appear in the dropdown and which show as button capsules — hiding all of them is a valid layout
+- The button's NET capsule shows pinned ↓/↑ arrows with right-aligned figures, using the same B → KB → MB → GB units as the dashboard
 
 ### Fixed
-- **Status-bar menu click-to-toggle**: clicking the button again while the menu is open now closes it — like every other menu-bar app — instead of reopening it instantly
-- **The toggle blink** (stat turned off → capsule vanished, reappeared, vanished again): the settings file now carries a revision number that both sides honor, so a stale poll can no longer re-apply an old layout for a cycle — and settings written by one side (app, web) can no longer be silently reverted when the other saves
-- The dashboard Settings dialog scrolls on short windows instead of clipping, so the status-rows card is always reachable
-- After a rebuild with "Start at login" on: the app restarted the background daemon onto the new code instead of spawning a *second* parallel sampler beside the stale daemon (that double sampling could make the menu and status bar look stuck or skewed)
-- Dashboard: the thermal chip on the CPU card is now a warning — it appears only when the machine is actually slowed/throttled
-- The NET capsule figures no longer shift as digit counts change — the arrows stay pinned and the figures align to a fixed edge
+- Status-bar menu: clicking the icon again now closes the menu — like every other menu-bar app — and clicking a stat row just closes it
+- The button no longer blinks when a stat is toggled in Settings, and settings saved in the dashboard are no longer silently reverted by the app
+- After a rebuild, the background sampler restarts onto the new code instead of leaving a second parallel one behind
+- The thermal chip on the CPU card only appears when the machine is actually being throttled
 
 ## [1.2] - 2026-11-06
 

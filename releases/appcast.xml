@@ -3,30 +3,30 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.2</title>
-            <pubDate>Fri, 06 Nov 2026 19:21:38 +0000</pubDate>
-            <sparkle:version>1.2</sparkle:version>
-            <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
+            <title>1.3</title>
+            <pubDate>Mon, 09 Nov 2026 16:47:57 +0000</pubDate>
+            <sparkle:version>1.3</sparkle:version>
+            <sparkle:shortVersionString>1.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[
 ### Added
-- Background mode & Settings (`⌘,` or the header **Settings** button): closing the window now keeps Pulse sampling in the menu bar by default; customize **Start at login** (runs a background sampler so data is warm right after boot), **When the window is closed**, and **Keep dashboard in memory** from the in-dashboard Settings modal, the native Settings window, or the menu-bar quick toggles
-- Memory explainer & "Purge disk cache": click `i` on the Memory card (or any pool in the legend) to see live wired, compressed, and file-cache sparklines and clear reclaimable disk cache via Touch ID or password
-- Quick actions & keyboard navigation: right-click any app or process for Quit, Force Quit, Terminate, and Force Kill; press `⌘F` or `/` to search and `Esc` to dismiss menus, popovers, the drawer, or active search
-- Process list now includes `kernel_task` alongside other system processes
+- GPU section: a new GPU card (live utilization, sparkline, chip name) on Apple Silicon, plus a GPU row in the status menu
+- Updates are now visible everywhere: a thin green strip along the top of the window, an “Update to vX…” row in the status menu, and a row in Settings — declining is re-offered on the next launch
 
 ### Changed
-- Much lighter background footprint: releasing the web view on window close and tuning the sampler cuts background RAM to ~80 MB while reopening in under 0.2 seconds
-- Redesigned Memory and Network cards: memory figures now match Activity Monitor ("Memory Used", per-app footprint, and Cached Files) with a 2×2 legend, and Network shows combined ↓ + ↑ throughput
-- Menu-bar item now always displays compact vertical CPU and memory capsule bars with tighter spacing
+- Status-bar menu redesigned in the style of the Stats app: each stat is a row with a colored utilization bar, and Open Pulse, Settings, and Quit (which also stops the background sampler) are the only actions
+- Row order and visibility are configurable in Settings, with a separate switch for which rows appear in the dropdown and which show as button capsules — hiding all of them is a valid layout
+- The button's NET capsule shows pinned ↓/↑ arrows with right-aligned figures, using the same B → KB → MB → GB units as the dashboard
 
 ### Fixed
-- Cold launches show an immediate connecting skeleton without main-thread stalls, and the dashboard and background sampler stay in sync across app updates
-- Fixed compressed-memory reporting, CPU card blips after process actions, battery charging-bolt state on AC hold, and right-click text selection
+- Status-bar menu: clicking the icon again now closes the menu — like every other menu-bar app — and clicking a stat row just closes it
+- The button no longer blinks when a stat is toggled in Settings, and settings saved in the dashboard are no longer silently reverted by the app
+- After a rebuild, the background sampler restarts onto the new code instead of leaving a second parallel one behind
+- The thermal chip on the CPU card only appears when the machine is actually being throttled
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.2/Pulse-1.2.zip" length="1426378" type="application/octet-stream" sparkle:edSignature="ctPMeZU+/C0m+MSALZ/r5S4exVdF9VOb0Pj4zH0DPGK2jIsdq3T3D9nqyQt+UMAPPQacO1vWT641JnQ8CkaOAw=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.3/Pulse-1.3.zip" length="1469397" type="application/octet-stream" sparkle:edSignature="IgdZwysBFgakisYdmRNWltNp5WFFIdFKYK9xDx+Wxxm7s8b6pLLtWpXJSHoCuX68ncVfm/ejV2Xrcb0U0NhuAQ=="/>
         </item>
     </channel>
 </rss>
