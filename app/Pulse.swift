@@ -658,7 +658,7 @@ final class InfoRowView: NSView {
 final class StatBarView: NSView {
     var frac: Double = 0 {
         didSet {
-            if abs(frac - oldValue) >= 0.002 { needsDisplay = true }
+            if frac != oldValue { needsDisplay = true }
         }
     }
     var barColor: NSColor = .clear {
@@ -680,7 +680,7 @@ final class StatBarView: NSView {
     }
 }
 
-final class StatusController: NSObject, NSMenuDelegate {
+final class StatusController: NSObject {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     var cpuHist: [Double] = []
@@ -693,8 +693,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     var lastBarKey = ""
     var localLayoutGen = 0 // revision of the last layout WE wrote — stale polls are skipped
     var lastRenderKey = ""
-    var isMenuOpen = false
-    var lastStatusObj: [String: Any]?
     var timer: Timer?
     var samples = 0
     var port: Int?
@@ -756,21 +754,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         // click-to-toggle (click = open, click again = close) is guaranteed by
         // AppKit and is how every other menu-bar app behaves; a custom popUp()
         // bypassed that logic and re-opened on every re-click.
-        menu.delegate = self
         item.menu = menu
         item.button?.image = Self.render(cpu: [], mem: [], gpu: [], net: [],
                                          netText: Self.netText(down: 0, up: 0),
                                          menu: PulseSettings.defaultMenuRows,
                                          bar: PulseSettings.defaultBarRows)
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        isMenuOpen = true
-        if let o = lastStatusObj { updateMenu(o) }
-    }
-
-    func menuDidClose(_ menu: NSMenu) {
-        isMenuOpen = false
     }
 
     /// Show/hide the status-menu update row (hidden item keeps its slot — no rebuild needed).
@@ -822,20 +810,12 @@ final class StatusController: NSObject, NSMenuDelegate {
         let u = ["B", "KB", "MB", "GB", "TB"]
         var i = 0, v = bps
         while v >= 1024, i < u.count - 1 { v /= 1024; i += 1 }
-        let s = (i <= 1 || v >= 100) ? String(format: "%.0f", v) : v >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v)
+        let s = v >= 100 ? String(format: "%.0f", v) : v >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v)
         return s + " " + u[i]
     }
 
-    /// Status-bar capsule rate: treats sub-KB background keepalive trickle (<512 B/s)
-    /// as "0 B" and uses whole numbers for B/KB so background noise doesn't force an
-    /// NSStatusBarWindow surface redraw in WindowServer on every 2s poll.
-    static func barRate(_ bps: Double) -> String {
-        if bps < 512 { return "0 B" }
-        return rate(bps)
-    }
-
     static func netText(down: Double, up: Double) -> String {
-        return "\(Self.barRate(down))\n\(Self.barRate(up))"  // ↓ over ↑, icons drawn by the cell
+        return "\(Self.rate(down))\n\(Self.rate(up))"  // ↓ over ↑, icons drawn by the cell
     }
 
     func start(port: Int) {
@@ -921,10 +901,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                     self.item.button?.image = Self.render(cpu: self.cpuHist, mem: self.memHist, gpu: self.gpuHist, net: self.netHist,
                                                           netText: self.netText(), menu: self.lastMenuRows, bar: self.lastBarRows)
                 }
-                self.lastStatusObj = obj
-                if self.isMenuOpen || self.samples == 1 {
-                    self.updateMenu(obj)
-                }
+                self.updateMenu(obj)
                 if let pid = obj["purge"] as? Int, pid != self.lastPurgeId {
                     self.lastPurgeId = pid
                     let p = self.port
