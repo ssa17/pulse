@@ -1208,10 +1208,19 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault(); // no native context menu anywhere in the dashboard
   closeCtxMenu();
 });
+// Dismiss on a click outside the menu. Must run in the CAPTURE phase: a click
+// propagates window → document → … → target, so only a capture listener can
+// stop it BEFORE the dashboard element under the cursor runs its own handler
+// (a bubble-phase stopPropagation is too late — the row's click listener has
+// already fired and would still open the drawer on the dismissing click).
 document.addEventListener('click', (e) => {
   const el = document.getElementById('ctx-menu');
-  if (el && !el.contains(e.target)) closeCtxMenu();
-});
+  if (el && el.classList.contains('on') && !el.contains(e.target)) {
+    closeCtxMenu();
+    e.stopPropagation(); // this click is spent dismissing — nothing else reacts
+    e.preventDefault();
+  }
+}, true);
 
 /* ================= system cards ================= */
 function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }

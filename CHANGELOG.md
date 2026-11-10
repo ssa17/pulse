@@ -15,6 +15,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ### Fixed
 - Settings no longer keeps advertising an update when you're already on the latest version (it wrongly stayed “Update” for builds whose version had been bumped ahead of the release)
 - Dashboard: the updates section re-syncs when the window re-opens, so it always agrees with the menu bar and the app's Settings
+- Dashboard: clicking outside the right-click context menu now dismisses it without also triggering whatever is underneath (the dismissing click no longer opens a drawer)
 
 ## [1.4] - 2026-11-10
 
