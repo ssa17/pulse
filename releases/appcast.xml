@@ -3,30 +3,26 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.3</title>
-            <pubDate>Mon, 09 Nov 2026 16:47:57 +0000</pubDate>
-            <sparkle:version>1.3</sparkle:version>
-            <sparkle:shortVersionString>1.3</sparkle:shortVersionString>
+            <title>1.4</title>
+            <pubDate>Tue, 10 Nov 2026 08:50:03 +0000</pubDate>
+            <sparkle:version>1.4</sparkle:version>
+            <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[
 ### Added
-- GPU section: a new GPU card (live utilization, sparkline, chip name) on Apple Silicon, plus a GPU row in the status menu
-- Updates are now visible everywhere: a thin green strip along the top of the window, an “Update to vX…” row in the status menu, and a row in Settings — declining is re-offered on the next launch
+- Live CPU die temperature (°C) on the dashboard CPU card, coloured green→red by how hot the machine is and flagging throttling, with the same reading pinned just below CPU in the menu bar
+- New status-bar dropdown visuals: dual 30s rolling wave graphs for E/P core clusters, GPU utilization vs. GPU memory, live GPU memory in use, system load averages, and a color-coded memory breakdown (Wired, Active, Compressed, Free)
 
 ### Changed
-- Status-bar menu redesigned in the style of the Stats app: each stat is a row with a colored utilization bar, and Open Pulse, Settings, and Quit (which also stops the background sampler) are the only actions
-- Row order and visibility are configurable in Settings, with a separate switch for which rows appear in the dropdown and which show as button capsules — hiding all of them is a valid layout
-- The button's NET capsule shows pinned ↓/↑ arrows with right-aligned figures, using the same B → KB → MB → GB units as the dashboard
+- Status-bar dropdown is grouped into clean CPU, GPU, MEMORY, and SYSTEM sections with centered titles and airy spacing
+- Update checks now run hourly instead of once a day
 
 ### Fixed
-- Status-bar menu: clicking the icon again now closes the menu — like every other menu-bar app — and clicking a stat row just closes it
-- The button no longer blinks when a stat is toggled in Settings, and settings saved in the dashboard are no longer silently reverted by the app
-- After a rebuild, the background sampler restarts onto the new code instead of leaving a second parallel one behind
-- The thermal chip on the CPU card only appears when the machine is actually being throttled
+- Lighter background footprint: with the dashboard closed, the sampler no longer spawns `top`/`iostat` on every tick, and the status bar skips redundant redraws
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.3/Pulse-1.3.zip" length="1469397" type="application/octet-stream" sparkle:edSignature="IgdZwysBFgakisYdmRNWltNp5WFFIdFKYK9xDx+Wxxm7s8b6pLLtWpXJSHoCuX68ncVfm/ejV2Xrcb0U0NhuAQ=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.4/Pulse-1.4.zip" length="1501722" type="application/octet-stream" sparkle:edSignature="2GdGxQCkBZv403wUfkQphC2nTpeSg8qg4xgvnCOJGZGlBYJO/03a8pAXzq2bSMZI9mekHCUfkOnPF/9wQeqOBg=="/>
         </item>
     </channel>
 </rss>

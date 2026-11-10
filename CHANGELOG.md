@@ -9,6 +9,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+## [1.4] - 2026-11-10
+
 ### Added
 - Live CPU die temperature (°C) on the dashboard CPU card, coloured green→red by how hot the machine is and flagging throttling, with the same reading pinned just below CPU in the menu bar
 - New status-bar dropdown visuals: dual 30s rolling wave graphs for E/P core clusters, GPU utilization vs. GPU memory, live GPU memory in use, system load averages, and a color-coded memory breakdown (Wired, Active, Compressed, Free)
