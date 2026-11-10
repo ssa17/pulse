@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { execFile, execFileSync } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 
 const HOST = process.env.HOST || '127.0.0.1';
 // App mode (PULSE=1) binds a dynamic port (0 → OS picks a free one) unless PORT
@@ -694,7 +694,8 @@ let lastCpuTempT = 0;
 // The UIs scale the colour of a reading on it, so the ramp is machine-specific.
 let thermalMin = null;
 let thermalMax = null;
-let thermalBusy = false;
+let thermalProc = null;
+let thermalBuf = '';
 let thermalBin = null;
 let compilingThermal = false;
 
@@ -723,22 +724,43 @@ function getThermalBin() {
   return null;
 }
 
+function ingestThermalLine(line) {
+  const parsed = parseThermalJson(line);
+  if (parsed && typeof parsed.cpu === 'number') {
+    lastCpuTemp = parsed.cpu;
+    lastCpuTempT = Date.now();
+    thermalMin = thermalMin == null ? parsed.cpu : Math.min(thermalMin, parsed.cpu);
+    thermalMax = thermalMax == null ? parsed.cpu : Math.max(thermalMax, parsed.cpu);
+  }
+}
+
 function kickThermal() {
+  if (thermalProc) return;
   const bin = getThermalBin();
-  if (!bin || thermalBusy || (Date.now() - lastCpuTempT < 1800)) return;
-  thermalBusy = true;
-  run(bin, [], 2000).then((out) => {
-    thermalBusy = false;
-    if (out) {
-      const parsed = parseThermalJson(out);
-      if (parsed && typeof parsed.cpu === 'number') {
-        lastCpuTemp = parsed.cpu;
-        lastCpuTempT = Date.now();
-        thermalMin = thermalMin == null ? parsed.cpu : Math.min(thermalMin, parsed.cpu);
-        thermalMax = thermalMax == null ? parsed.cpu : Math.max(thermalMax, parsed.cpu);
+  if (!bin) return;
+  try {
+    const child = spawn(bin, ['--watch', '2500'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    thermalProc = child;
+    thermalBuf = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      thermalBuf += chunk;
+      let nl;
+      while ((nl = thermalBuf.indexOf('\n')) !== -1) {
+        const line = thermalBuf.slice(0, nl).trim();
+        thermalBuf = thermalBuf.slice(nl + 1);
+        if (line) ingestThermalLine(line);
       }
-    }
-  });
+    });
+    const clear = () => {
+      if (thermalProc === child) thermalProc = null;
+    };
+    child.on('error', clear);
+    child.on('close', clear);
+    if (typeof child.unref === 'function') child.unref();
+  } catch {
+    thermalProc = null;
+  }
 }
 
 function kickNetstat() {
