@@ -8,6 +8,7 @@ in the auto-update dialog), then resets the section to a fresh empty bucket.
 Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
+- The thermal state word (nominal / slowed / throttled) is now colored by the actual SMC throttle level — nominal reads neutral instead of red — while the CPU temperature keeps its own green→red ramp, on both the dashboard CPU card and the menu bar
 
 ### Added
 - Settings: the Updates card now shows your current version and the latest one, with an “Available” badge when a newer build is out

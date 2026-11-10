@@ -85,7 +85,7 @@
   .card.net .big, .card.net .label { color: var(--net); }
   .card.disk .big, .card.disk .label { color: var(--disk); }
   .card.gpu .big, .card.gpu .label { color: var(--gpu); }
-  .card .sub .hot, .card .sub .hot b { color: var(--wired); }
+  .card .sub .hot, .card .sub .hot b { color: var(--wired); } /* applied only when the SMC is actually throttling */
 
   .membar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: var(--free); margin-top: auto; }
   .membar .seg { height: 100%; }
@@ -1276,14 +1276,18 @@ function renderSys() {
   const cpuTemp = therm && therm.cpu != null ? therm.cpu : (s.cpu && s.cpu.temp != null ? s.cpu.temp : null);
   let thermHtml = '';
   if (cpuTemp != null) {
-    // Colour the number on this machine's own observed range (coldest → hottest
-    // since the sampler started); no range yet → the default text colour.
+    // Colour the NUMBER on this machine's own observed range (coldest → hottest
+    // since the sampler started); no range yet → the default text colour. That
+    // ramp answers "how hot is my die?" — it has nothing to do with the SMC
+    // state word, which answers "is the system throttling?" (nominal = the
+    // system is not acting, whatever the die temp happens to be).
     const hue = tempHue(therm, cpuTemp);
     const col = hue == null ? '' : ` style="color:hsl(${hue.toFixed(0)},65%,58%)"`;
     const tVal = `<b${col}>${Math.round(cpuTemp)}°C</b>`;
-    thermHtml = hot
-      ? `<span class="hot" title="CPU die temperature (throttled)">thermal <b>${therm.state} ·</b> ${tVal}</span>`
-      : `<span title="CPU die temperature">temp ${tVal}</span>`;
+    const stTag = hot
+      ? `<b class="hot" title="${therm.state === 'slowed' ? 'CPU is being slowed to cool down' : 'CPU is being throttled to cool down'}">${therm.state}</b>`
+      : `<b title="No throttling — the system is at its normal speed">${therm.state}</b>`;
+    thermHtml = `<span title="CPU die temperature · ${therm.state}">${stTag} · ${tVal}</span>`;
   } else if (hot) {
     thermHtml = `<span class="hot">thermal <b>${therm.state}</b></span>`;
   }

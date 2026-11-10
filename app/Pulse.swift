@@ -917,6 +917,25 @@ final class InfoRowView: NSView {
         if valueField.stringValue != value { valueField.stringValue = value }
         if valueField.textColor != color { valueField.textColor = color }
     }
+
+    /// Attributed variant for the thermal row: the state word in `stateColor`
+    /// (SMC throttle state — nominal reads neutral, so "Nominal" is never red)
+    /// and the temperature in `valueColor` (its own green→red ramp), both
+    /// right-aligned like plain values.
+    func set(state: String, value: String, stateColor: NSColor, valueColor: NSColor) {
+        let p = NSMutableParagraphStyle(); p.alignment = .right
+        let attr = NSMutableAttributedString(string: state, attributes: [
+            .font: valueField.font as Any,
+            .foregroundColor: stateColor,
+            .paragraphStyle: p,
+        ])
+        attr.append(NSAttributedString(string: " \u{00B7} " + value, attributes: [
+            .font: valueField.font as Any,
+            .foregroundColor: valueColor,
+            .paragraphStyle: p,
+        ]))
+        valueField.attributedStringValue = attr
+    }
 }
 
 /// Small rounded horizontal fill (4 pt tall) over a dim track.
@@ -1334,19 +1353,18 @@ final class StatusController: NSObject, NSMenuDelegate {
             let state = (th["state"] as? String) ?? "nominal"
             let pretty = String(state.prefix(1)).uppercased() + String(state.dropFirst())
             let cpuTemp = (th["cpu"] as? NSNumber)?.doubleValue
-            let valStr: String
-            if let t = cpuTemp {
-                valStr = "\(pretty) · \(Int(t.rounded()))°C"
-            } else {
-                valStr = pretty
-            }
+            let tempStr: String? = cpuTemp.map { "\(Int($0.rounded()))°C" }
+            let valStr = tempStr.map { "\(pretty) · \($0)" } ?? pretty
             thermalItem.title = "Thermal \(valStr)"
-            // Colour the reading on the machine's own observed range (coldest →
-            // hottest since the sampler started). The span is floored at 10°C so
-            // a quiet machine's few-degree range doesn't map a 1° swing onto the
-            // whole green→red ramp, and the colour uses the ROUNDED value so it
-            // always matches the number the user reads (and the dashboard's).
-            let color: NSColor
+            // Two independent colours: the STATE word reflects the SMC throttle
+            // level (nominal = the system isn't acting → neutral, whatever the
+            // die temp is), and the TEMPERATURE sits on the machine's own
+            // observed range (coldest → hottest since the sampler started).
+            // The span is floored at 10°C so a quiet machine's few-degree range
+            // doesn't map a 1° swing onto the whole green→red ramp, and the
+            // colour uses the ROUNDED value so it always matches the number the
+            // user reads (and the dashboard's).
+            let stateColor: NSColor = lvl == 0 ? .labelColor : (lvl == 1 ? .systemOrange : .systemRed)
             if let tRaw = cpuTemp,
                let lo = (th["min"] as? NSNumber)?.doubleValue,
                let hi = (th["max"] as? NSNumber)?.doubleValue,
@@ -1354,11 +1372,11 @@ final class StatusController: NSObject, NSMenuDelegate {
                 let span = max(hi - lo, 10.0)
                 let rangeLo = lo - (span - (hi - lo)) / 2  // widen around the observed range
                 let frac = min(1, max(0, (Double(Int(tRaw.rounded())) - rangeLo) / span))
-                color = NSColor(hue: 1 - frac, saturation: 0.65, brightness: 0.85, alpha: 1)
+                let tempColor = NSColor(hue: 1 - frac, saturation: 0.65, brightness: 0.85, alpha: 1)
+                thermalRow.set(state: pretty, value: tempStr!, stateColor: stateColor, valueColor: tempColor)
             } else {
-                color = lvl == 0 ? .labelColor : (lvl == 1 ? NSColor.systemOrange : NSColor.systemRed)
+                thermalRow.set(value: valStr, color: stateColor)
             }
-            thermalRow.set(value: valStr, color: color)
         }
 
         // Load avg
