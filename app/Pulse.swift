@@ -119,7 +119,7 @@ final class PulseSettings {
     let filePath: String
     var startAtLogin: Bool = false
     var closeBehavior: String = "background" // "background" | "quit"
-    var keepDashboardInMemory: Bool = false
+    var keepDashboardInMemory: Bool = true
     var menuRows: [String] = PulseSettings.defaultMenuRows
     var barRows: [String] = PulseSettings.defaultBarRows
     var layoutGen: Int = 0 // settings-file revision (bumped on each layout write)
@@ -164,7 +164,7 @@ final class PulseSettings {
             storage = [:]
             startAtLogin = false
             closeBehavior = "background"
-            keepDashboardInMemory = false
+            keepDashboardInMemory = true
             menuRows = Self.defaultMenuRows
             barRows = Self.defaultBarRows
             layoutGen = 0
