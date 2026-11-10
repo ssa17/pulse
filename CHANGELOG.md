@@ -9,6 +9,13 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Added
+- Settings: the Updates card now shows your current version and the latest one, with an “Available” badge when a newer build is out
+
+### Fixed
+- Settings no longer keeps advertising an update when you're already on the latest version (it wrongly stayed “Update” for builds whose version had been bumped ahead of the release)
+- Dashboard: the updates section re-syncs when the window re-opens, so it always agrees with the menu bar and the app's Settings
+
 ## [1.4] - 2026-11-10
 
 ### Added

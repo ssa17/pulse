@@ -1619,8 +1619,10 @@ final class SettingsWindowController: NSObject {
     private var menuRowSwitches: [String: NSSwitch] = [:]
     private var menuRowBarSwitches: [String: NSSwitch] = [:]
     private var menuRowBarWords: [String: NSTextField] = [:]
-    private let updateStatusLabel = NSTextField(labelWithString: "Up to date")
     private let updateCheckButton = NSButton(title: "Check for Updates…", target: nil, action: nil)
+    private let updateCurrentVerLabel = NSTextField(labelWithString: "")
+    private let updateLatestVerLabel = NSTextField(labelWithString: "")
+    private let updateStatusBadge = NSTextField(labelWithString: "")
     private var menuRowLabels: [String: NSTextField] = [:]
     private var menuRowFull: [String] = PulseSettings.allMenuRows // all rows, UI order (hidden included)
     private var menuRowHidden = Set(PulseSettings.allMenuRows).subtracting(PulseSettings.defaultMenuRows)
@@ -1638,6 +1640,12 @@ final class SettingsWindowController: NSObject {
         self.shell = shell
         updateCheckButton.target = shell
         updateCheckButton.action = #selector(Shell.checkForUpdates)
+        updateCurrentVerLabel.font = .systemFont(ofSize: 11)
+        updateCurrentVerLabel.textColor = textCol
+        updateLatestVerLabel.font = .systemFont(ofSize: 11)
+        updateLatestVerLabel.textColor = textCol
+        updateStatusBadge.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        updateStatusBadge.textColor = accentGreen
         let rect = NSRect(x: 0, y: 0, width: 468, height: 660)
         window = NSWindow(contentRect: rect,
                           styleMask: [.titled, .closable],
@@ -1843,22 +1851,53 @@ final class SettingsWindowController: NSObject {
         s4Col.addArrangedSubview(rowsBox)
         let card4 = makeCard(s4Col)
 
-        // 5. Updates card — status + an explicit “Check for Updates…” affordance.
-        let s5Left = NSStackView()
-        s5Left.orientation = .vertical
-        s5Left.alignment = .leading
-        s5Left.spacing = 3
-        let s5Header = NSStackView()
-        s5Header.orientation = .horizontal
-        s5Header.alignment = .centerY
-        s5Header.spacing = 8
-        updateStatusLabel.font = .systemFont(ofSize: 10.5, weight: .semibold)
-        updateStatusLabel.textColor = dimCol
-        s5Header.addArrangedSubview(makeTitle("Updates"))
-        s5Header.addArrangedSubview(updateStatusLabel)
-        s5Left.addArrangedSubview(s5Header)
-        s5Left.addArrangedSubview(makeNote("Checks at launch. A declined update is offered again on next launch, and stays marked (thin green strip, menu row) until installed."))
-        let s5Row = NSStackView(views: [s5Left, updateCheckButton])
+        // 5. Updates card — version info + action button.
+        let s5Col = NSStackView()
+        s5Col.orientation = .vertical
+        s5Col.alignment = .leading
+        s5Col.spacing = 4
+        s5Col.addArrangedSubview(makeTitle("Updates"))
+        let s5VerBox = NSStackView()
+        s5VerBox.orientation = .vertical
+        s5VerBox.alignment = .leading
+        s5VerBox.spacing = 2
+        let row1 = NSStackView()
+        row1.orientation = .horizontal
+        row1.alignment = .centerY
+        row1.spacing = 10
+        let lbl1 = NSTextField(labelWithString: "Current:")
+        lbl1.font = .systemFont(ofSize: 11)
+        lbl1.textColor = dimCol
+        lbl1.translatesAutoresizingMaskIntoConstraints = false
+        lbl1.widthAnchor.constraint(equalToConstant: 65).isActive = true
+        updateCurrentVerLabel.translatesAutoresizingMaskIntoConstraints = false
+        row1.addArrangedSubview(lbl1)
+        row1.addArrangedSubview(updateCurrentVerLabel)
+        let row2 = NSStackView()
+        row2.orientation = .horizontal
+        row2.alignment = .centerY
+        row2.spacing = 10
+        let lbl2 = NSTextField(labelWithString: "Latest:")
+        lbl2.font = .systemFont(ofSize: 11)
+        lbl2.textColor = dimCol
+        lbl2.translatesAutoresizingMaskIntoConstraints = false
+        lbl2.widthAnchor.constraint(equalToConstant: 65).isActive = true
+        updateLatestVerLabel.translatesAutoresizingMaskIntoConstraints = false
+        row2.addArrangedSubview(lbl2)
+        row2.addArrangedSubview(updateLatestVerLabel)
+        s5VerBox.addArrangedSubview(row1)
+        s5VerBox.addArrangedSubview(row2)
+        s5Col.addArrangedSubview(s5VerBox)
+        let s5StatusRow = NSStackView()
+        s5StatusRow.alignment = .leading
+        s5StatusRow.spacing = 6
+        updateStatusBadge.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        updateStatusBadge.textColor = accentGreen
+        s5StatusRow.addArrangedSubview(updateStatusBadge)
+        s5StatusRow.isHidden = true
+        s5Col.addArrangedSubview(s5StatusRow)
+        s5Col.addArrangedSubview(makeNote("Pulse checks for updates at launch. You can also trigger a manual check here."))
+        let s5Row = NSStackView(views: [s5Col, updateCheckButton])
         s5Row.orientation = .horizontal
         s5Row.alignment = .top
         s5Row.distribution = .fill
@@ -1912,13 +1951,20 @@ final class SettingsWindowController: NSObject {
         }
         let bar = shell.settings.barRows
         if Set(bar) != menuRowBarOn { menuRowBarOn = Set(bar) }
+        let currentVer = (Bundle.main.object(forInfoDictionaryKey:
+            "CFBundleShortVersionString") as? String) ?? "?"
+        updateCurrentVerLabel.stringValue = "v\(currentVer)"
         if let ver = shell.pendingUpdateVersion {
-            updateStatusLabel.stringValue = "v\(ver) available"
-            updateStatusLabel.textColor = accentGreen
-            updateCheckButton.title = "Update…"
+            updateLatestVerLabel.stringValue = "v\(ver)"
+            updateLatestVerLabel.textColor = accentGreen
+            updateStatusBadge.stringValue = "Available"
+            updateStatusBadge.isHidden = false
+            updateCheckButton.title = "Update to v\(ver)…"
         } else {
-            updateStatusLabel.stringValue = "Up to date"
-            updateStatusLabel.textColor = dimCol
+            updateLatestVerLabel.stringValue = "v\(currentVer)"
+            updateLatestVerLabel.textColor = textCol
+            updateStatusBadge.stringValue = "Up to date"
+            updateStatusBadge.isHidden = true
             updateCheckButton.title = "Check for Updates…"
         }
         rebuildMenuRowsUI()
@@ -2348,8 +2394,27 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         cv.addSubview(updateStrip)
     }
 
+    // MARK: Update helpers
+
+    /// True when version `a` is strictly newer than `b`.
+    /// Bases are compared numerically ("1.10" > "1.9"). When the bases are
+    /// equal, only a plain version counts as newer than a suffixed one (a final
+    /// release supersedes its dev build) — "1.4" vs "1.4" is the same version,
+    /// not an update. This is what stops stale "Update available" states for
+    /// builds whose version was bumped ahead of the release.
+    private func isNewerVersion(_ a: String, _ b: String) -> Bool {
+        let baseA = a.split(separator: "-").first.map(String.init) ?? a
+        let baseB = b.split(separator: "-").first.map(String.init) ?? b
+        if baseA == baseB {
+            return !a.contains("-") && b.contains("-")
+        }
+        return baseA.compare(baseB, options: .numeric) == .orderedDescending
+    }
+
     /// Reflect the update state on every surface: the thin top strip, the status-menu row,
-    /// the native Settings card, and the dashboard.
+    /// the native Settings card, and the dashboard. `pendingUpdateVersion` is only
+    /// ever set to genuinely newer versions (guarded in `didFindValidUpdate`), so it
+    /// can be read directly here.
     func setUpdateIndicators() {
         let v = pendingUpdateVersion
         updateStrip.isHidden = v == nil
@@ -2380,7 +2445,15 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     // next launch — and the quiet strip/menu row remain as a persistent signal until the
     // installed version actually changes.
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        pendingUpdateVersion = item.displayVersionString
+        // Guard at the source: Sparkle can call this even when the appcast entry equals
+        // the installed version (e.g. a dev build whose marketing version was already
+        // bumped for a release, but whose build number wasn't). Never advertise a
+        // version that isn't actually newer — this makes `pendingUpdateVersion`
+        // trustworthy for every consumer (strip, menu, Settings, web UI).
+        let available = item.displayVersionString
+        let current = (Bundle.main.object(forInfoDictionaryKey:
+            "CFBundleShortVersionString") as? String) ?? "1.0"
+        pendingUpdateVersion = isNewerVersion(available, current) ? available : nil
         setUpdateIndicators()
     }
 
@@ -2987,6 +3060,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     // MARK: WKNavigationDelegate
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pushSettingsToWeb()
+        pushUpdateToWeb()
         if ProcessInfo.processInfo.environment["PULSE_AUTOCONFIRM"] == "1" {
             web?.evaluateJavaScript("window.__autoconfirm = true") { _, _ in }
         }

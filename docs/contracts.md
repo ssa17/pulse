@@ -207,6 +207,32 @@ not an app.
   WKUIDelegate handles it — Pulse.swift renders native NSAlerts (without this the
   kill / quit buttons appear to do nothing). In web mode the browser's own dialogs
   are used.
+- **Update availability (Sparkle ⇄ every UI surface)**: `Pulse.swift` keeps one
+  app-side state, `pendingUpdateVersion: String?` — the newest appcast version
+  not yet installed, or nil when up to date. Sparkle's `didFindValidUpdate`
+  delegate sets it, but **guarded**: the version is only stored when it is
+  *strictly newer* than the installed `CFBundleShortVersionString`
+  (`isNewerVersion` in `Pulse.swift`). Sparkle itself compares BUILD numbers
+  (`CFBundleVersion` vs the appcast's `sparkle:version`), so a build whose
+  marketing version was bumped ahead of its build number (a dev build from a
+  release-in-progress) would otherwise advertise "v1.4 available" while already
+  *showing* 1.4 — the guard kills exactly that. All four surfaces render from the
+  one guarded value via `setUpdateIndicators()`: the thin top strip
+  (`updateStrip.isHidden`), the status-menu "Update to vX…" row
+  (`StatusController.showUpdateRow`), the native Settings Updates card
+  (`SettingsWindowController.syncFromState` — Current/Latest versions +
+  "Available" badge), and the dashboard via `pushUpdateToWeb()` →
+  `window.__pulseUpdate({ available: <string|null> })` in `index.html`
+  (non-null shows `#st-update-row` with the version badge; null shows
+  `#st-check-row`). `didFinish` re-pushes both settings and update state on
+  every webview (re)load so the dashboard agrees with the other surfaces.
+  A *declined* real update keeps its indicators until installed (Sparkle
+  re-offers at the next launch; the thin strip is the persistent signal).
+  A failed check (`didNotFindUpdate(_:error:)`) keeps the previous state —
+  "couldn't check" is not "up to date".
+  **Do not remove the version guard** — it only misbehaves in the mismatched
+  build-number case, so it is invisible in ordinary builds and easy to mistake
+  for dead code.
 - **`/api/purge` (server.js ⇄ index.html)**: `POST`, empty body. Two modes:
   * **app mode** (`PULSE=1`): the server samples `vm_stat`, queues the request
     and advertises `purge: <id>` in `/api/status`. The app shell (which polls

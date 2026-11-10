@@ -70,6 +70,14 @@ Never store state inside the .app bundle — it must stay immutable and rebuilda
 7. **Log user-visible changes** — every user-visible change gets a bullet in
    `CHANGELOG.md` under `[Unreleased]` (see the `changelog` skill), and the
    entries are summarized before a release so the "what's new" stays concise.
+8. **Never advertise an update that isn't actually newer.** Sparkle compares
+   *build* numbers (`CFBundleVersion` vs the appcast's `sparkle:version`), but
+   the UI shows the *marketing* version — a dev build bumped mid-release can
+   "find" an appcast entry equal to its own displayed version. `didFindValidUpdate`
+   therefore stores `pendingUpdateVersion` only when strictly newer
+   (`isNewerVersion`), and all four indicator surfaces render from that one
+   guarded value (see `docs/contracts.md` → Update availability). The guard only
+   bites in the mismatched case, so it looks like dead code — don't remove it.
 
 ## Run & test
 
