@@ -583,6 +583,262 @@ final class LaunchAgentManager {
  *  Menu-bar status item: live CPU / GPU / memory rows + quick actions
  * ================================================================== */
 
+/// Centered group section header (CPU, GPU, MEMORY, SYSTEM) in the status menu,
+/// with an optional padded top divider line to separate groups cleanly.
+final class SectionHeaderView: NSView {
+    static let rowWidth = StatRowView.rowWidth
+    static let pad = StatRowView.pad
+    private let labelField = NSTextField(labelWithString: "")
+    private let titleText: String
+    var showDivider: Bool = false {
+        didSet {
+            guard showDivider != oldValue else { return }
+            updateLayout()
+        }
+    }
+
+    init(title: String, showDivider: Bool = false) {
+        self.titleText = title
+        self.showDivider = showDivider
+        let h: CGFloat = showDivider ? 36 : 26
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: h))
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor(srgbRed: 0.28, green: 0.58, blue: 1.0, alpha: 1.0),
+            .kern: 1.2,
+            .paragraphStyle: style,
+        ]
+        labelField.attributedStringValue = NSAttributedString(string: title.uppercased(), attributes: attrs)
+        labelField.alignment = .center
+        labelField.isBezeled = false
+        labelField.drawsBackground = false
+        labelField.isEditable = false
+        labelField.isSelectable = false
+        addSubview(labelField)
+        updateLayout()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func updateLayout() {
+        let h: CGFloat = showDivider ? 36 : 26
+        frame = NSRect(x: 0, y: 0, width: Self.rowWidth, height: h)
+        labelField.frame = NSRect(x: 0, y: 4, width: Self.rowWidth, height: 16)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard showDivider else { return }
+        NSColor.labelColor.withAlphaComponent(0.11).setFill()
+        NSRect(x: Self.pad, y: bounds.height - 8, width: Self.rowWidth - 2 * Self.pad, height: 1).fill()
+    }
+}
+
+/// Dual rolling wave graph (rolling 30s) with subtitle and smooth antialiased curves.
+final class WaveGraphRowView: NSView {
+    static let rowWidth = StatRowView.rowWidth
+    static let pad = StatRowView.pad
+    static let maxHistory = 30
+
+    private let subtitleField = NSTextField(labelWithString: "")
+    var series1: [Double] = [] { didSet { needsDisplay = true } }
+    var series2: [Double] = [] { didSet { needsDisplay = true } }
+    var color1: NSColor
+    var color2: NSColor
+
+    init(subtitle: String, color1: NSColor, color2: NSColor) {
+        self.color1 = color1
+        self.color2 = color2
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 52))
+
+        subtitleField.stringValue = subtitle
+        subtitleField.font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        subtitleField.textColor = .secondaryLabelColor
+        subtitleField.frame = NSRect(x: Self.pad, y: 33, width: Self.rowWidth - 2 * Self.pad, height: 16)
+        addSubview(subtitleField)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setSubtitle(_ text: String) {
+        if subtitleField.stringValue != text { subtitleField.stringValue = text }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let graphRect = NSRect(x: Self.pad, y: 5, width: Self.rowWidth - 2 * Self.pad, height: 25)
+
+        NSColor.labelColor.withAlphaComponent(0.06).setFill()
+        let bgPath = NSBezierPath(roundedRect: graphRect, xRadius: 4, yRadius: 4)
+        bgPath.fill()
+        NSColor.labelColor.withAlphaComponent(0.08).setStroke()
+        bgPath.lineWidth = 0.5
+        bgPath.stroke()
+
+        // Subtle mid-line for visual scale
+        NSColor.labelColor.withAlphaComponent(0.06).setFill()
+        NSRect(x: graphRect.minX + 2, y: graphRect.midY, width: graphRect.width - 4, height: 0.5).fill()
+
+        // Adaptive ceiling (floored at 35% so normal 5–25% core activity is clearly visible,
+        // scaling up to 100% under heavy load).
+        let peak = max(series1.max() ?? 0, series2.max() ?? 0)
+        let scaleMax = min(100.0, max(35.0, peak * 1.25))
+
+        NSGraphicsContext.saveGraphicsState()
+        bgPath.addClip()
+        drawSeries(series1, color: color1, scaleMax: scaleMax, in: graphRect)
+        drawSeries(series2, color: color2, scaleMax: scaleMax, in: graphRect)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func drawSeries(_ data: [Double], color: NSColor, scaleMax: Double, in rect: NSRect) {
+        guard !data.isEmpty else { return }
+        // If fewer than maxHistory points exist, stretch or pad from the first sample so
+        // the wave spans the full graph width immediately instead of a tiny stub.
+        let pts: [Double]
+        if data.count < Self.maxHistory {
+            pts = Array(repeating: data[0], count: Self.maxHistory - data.count) + data
+        } else {
+            pts = Array(data.suffix(Self.maxHistory))
+        }
+
+        let path = NSBezierPath()
+        path.lineWidth = 1.6
+        path.lineJoinStyle = .round
+        path.lineCapStyle = .round
+
+        let n = CGFloat(Self.maxHistory - 1)
+        let innerH = rect.height - 4
+        for (i, val) in pts.enumerated() {
+            let x = rect.minX + (CGFloat(i) / n) * rect.width
+            let norm = max(0, min(1.0, val / scaleMax))
+            let y = rect.minY + 2 + CGFloat(norm) * innerH
+            let pt = NSPoint(x: x, y: y)
+            if i == 0 { path.move(to: pt) } else { path.line(to: pt) }
+        }
+
+        if let fillPath = path.copy() as? NSBezierPath {
+            fillPath.line(to: NSPoint(x: rect.maxX, y: rect.minY))
+            fillPath.line(to: NSPoint(x: rect.minX, y: rect.minY))
+            fillPath.close()
+            color.withAlphaComponent(0.12).setFill()
+            fillPath.fill()
+        }
+
+        color.setStroke()
+        path.stroke()
+    }
+}
+
+/// Multi-segmented progress bar for Memory pools.
+final class SegmentedBarView: NSView {
+    struct Segment {
+        var frac: Double
+        var color: NSColor
+    }
+    var segments: [Segment] = [] {
+        didSet { needsDisplay = true }
+    }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.labelColor.withAlphaComponent(0.12).setFill()
+        let path = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+        path.fill()
+        guard !segments.isEmpty else { return }
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+
+        var curX: CGFloat = 0
+        let totalW = bounds.width
+        for seg in segments {
+            let segW = totalW * CGFloat(max(0, seg.frac))
+            if segW > 0 {
+                seg.color.setFill()
+                NSRect(x: curX, y: 0, width: segW, height: bounds.height).fill()
+                curX += segW
+            }
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+/// Memory row with "Memory" on the left, "Used / Total GB · %" on the right, and a segmented bar below.
+final class MemoryRowView: NSView {
+    static let rowWidth = StatRowView.rowWidth
+    static let pad = StatRowView.pad
+
+    let valueField = NSTextField(labelWithString: "—")
+    let bar = SegmentedBarView()
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 34))
+        let labelField = NSTextField(labelWithString: "Memory")
+        labelField.font = NSFont.menuFont(ofSize: 13)
+        labelField.textColor = .secondaryLabelColor
+        labelField.sizeToFit()
+        let lw = ceil(labelField.frame.width) + 2
+        labelField.frame = NSRect(x: Self.pad, y: 13, width: lw, height: 18)
+        addSubview(labelField)
+
+        let vx = Self.pad + lw + 6
+        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
+        valueField.alignment = .right
+        valueField.textColor = .labelColor
+        valueField.frame = NSRect(x: vx, y: 13, width: Self.rowWidth - Self.pad - vx, height: 18)
+        valueField.lineBreakMode = .byTruncatingHead
+        addSubview(valueField)
+
+        bar.frame = NSRect(x: Self.pad, y: 4, width: Self.rowWidth - 2 * Self.pad, height: 4)
+        addSubview(bar)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func set(valueStr: String, segments: [SegmentedBarView.Segment]) {
+        if valueField.stringValue != valueStr { valueField.stringValue = valueStr }
+        bar.segments = segments
+    }
+}
+
+/// Memory pool breakdown row with a colored swatch, label, and formatted value.
+final class LegendRowView: NSView {
+    static let rowWidth = StatRowView.rowWidth
+    static let pad = StatRowView.pad
+    private let swatch = NSView()
+    private let labelField = NSTextField(labelWithString: "")
+    let valueField = NSTextField(labelWithString: "—")
+
+    init(label: String, color: NSColor) {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 22))
+        swatch.wantsLayer = true
+        swatch.layer?.backgroundColor = color.cgColor
+        swatch.layer?.cornerRadius = 2
+        swatch.frame = NSRect(x: Self.pad, y: 7, width: 8, height: 8)
+        addSubview(swatch)
+
+        labelField.stringValue = label
+        labelField.font = NSFont.menuFont(ofSize: 13)
+        labelField.textColor = .secondaryLabelColor
+        labelField.sizeToFit()
+        let lw = ceil(labelField.frame.width) + 2
+        labelField.frame = NSRect(x: Self.pad + 14, y: 2, width: lw, height: 18)
+        addSubview(labelField)
+
+        let vx = Self.pad + 14 + lw + 6
+        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
+        valueField.alignment = .right
+        valueField.frame = NSRect(x: vx, y: 2, width: Self.rowWidth - Self.pad - vx, height: 18)
+        valueField.lineBreakMode = .byTruncatingHead
+        addSubview(valueField)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func set(value: String, color: NSColor = .labelColor) {
+        if valueField.stringValue != value { valueField.stringValue = value }
+        if valueField.textColor != color { valueField.textColor = color }
+    }
+}
+
 /// One stats row in the status menu, laid out like the Stats app:
 /// `label` (left) … `value` (right, at the row's end) with a proportional
 /// utilization bar below, evenly padded on both sides. Fixed size so the menu
@@ -592,9 +848,8 @@ final class LaunchAgentManager {
 /// menu item, which would grey out the values and bars. An enabled no-action
 /// row just closes the menu when clicked.
 final class StatRowView: NSView {
-    static let rowWidth: CGFloat = 250
-    static let pad: CGFloat = 8
-    static let labelW: CGFloat = 92
+    static let rowWidth: CGFloat = 272
+    static let pad: CGFloat = 14
     static let cpuColor = NSColor(srgbRed: 1.0, green: 159.0 / 255, blue: 67.0 / 255, alpha: 1)  // --cpu #ff9f43
     static let memColor = NSColor(srgbRed: 77.0 / 255, green: 159.0 / 255, blue: 1.0, alpha: 1) // --mem #4d9fff
     static let gpuColor = NSColor(srgbRed: 52.0 / 255, green: 199.0 / 255, blue: 89.0 / 255, alpha: 1) // --gpu #34c759
@@ -604,15 +859,19 @@ final class StatRowView: NSView {
     let bar = StatBarView()
 
     init(label: String) {
-        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 30))
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 34))
         let labelField = NSTextField(labelWithString: label)
-        labelField.font = NSFont.menuFont(ofSize: 0)
+        labelField.font = NSFont.menuFont(ofSize: 13)
         labelField.textColor = .secondaryLabelColor
-        labelField.frame = NSRect(x: Self.pad, y: 12, width: Self.labelW, height: 14)
+        labelField.sizeToFit()
+        let lw = ceil(labelField.frame.width) + 2
+        labelField.frame = NSRect(x: Self.pad, y: 13, width: lw, height: 18)
         addSubview(labelField)
-        valueField.font = NSFont.menuFont(ofSize: 0)
+
+        let vx = Self.pad + lw + 6
+        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
         valueField.alignment = .right
-        valueField.frame = NSRect(x: Self.pad + Self.labelW, y: 12, width: Self.rowWidth - 2 * Self.pad - Self.labelW, height: 14)
+        valueField.frame = NSRect(x: vx, y: 13, width: Self.rowWidth - Self.pad - vx, height: 18)
         valueField.lineBreakMode = .byTruncatingHead // keep the tail (units / GB) visible
         addSubview(valueField)
         bar.frame = NSRect(x: Self.pad, y: 4, width: Self.rowWidth - 2 * Self.pad, height: 4)
@@ -630,22 +889,25 @@ final class StatRowView: NSView {
     }
 }
 
-/// Plain `label … value` row (Uptime) — no bar, value at the end.
+/// Plain `label … value` row (Thermal, Load avg, Uptime, Network, GPU memory) — no bar, value at the end.
 final class InfoRowView: NSView {
     static let rowWidth = StatRowView.rowWidth
     let valueField = NSTextField(labelWithString: "—")
 
     init(label: String) {
-        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 22))
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: 24))
         let labelField = NSTextField(labelWithString: label)
-        labelField.font = NSFont.menuFont(ofSize: 0)
+        labelField.font = NSFont.menuFont(ofSize: 13)
         labelField.textColor = .secondaryLabelColor
-        labelField.frame = NSRect(x: StatRowView.pad, y: 4, width: StatRowView.labelW, height: 14)
+        labelField.sizeToFit()
+        let lw = ceil(labelField.frame.width) + 2
+        labelField.frame = NSRect(x: StatRowView.pad, y: 3, width: lw, height: 18)
         addSubview(labelField)
-        valueField.font = NSFont.menuFont(ofSize: 0)
+
+        let vx = StatRowView.pad + lw + 6
+        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
         valueField.alignment = .right
-        valueField.frame = NSRect(x: StatRowView.pad + StatRowView.labelW, y: 4,
-                                  width: Self.rowWidth - 2 * StatRowView.pad - StatRowView.labelW, height: 14)
+        valueField.frame = NSRect(x: vx, y: 3, width: Self.rowWidth - StatRowView.pad - vx, height: 18)
         valueField.lineBreakMode = .byTruncatingHead
         addSubview(valueField)
     }
@@ -683,13 +945,15 @@ final class StatBarView: NSView {
     }
 }
 
-final class StatusController: NSObject {
+final class StatusController: NSObject, NSMenuDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     var cpuHist: [Double] = []
     var memHist: [Double] = []
     var gpuHist: [Double] = []
     var netHist: [Double] = []
+    var eCpuHist: [Double] = []
+    var pCpuHist: [Double] = []
     var lastNet: (down: Double, up: Double) = (0, 0)
     var lastMenuRows: [String] = PulseSettings.defaultMenuRows
     var lastBarRows: [String] = PulseSettings.defaultBarRows
@@ -704,6 +968,12 @@ final class StatusController: NSObject {
     var lastPurgeId = 0  // dedupe: the `purge` flag stays in /api/status until settled
     var onStaleBackend: (() -> Void)?
 
+    // Memory breakdown colors
+    static let wiredColor = NSColor(srgbRed: 0.24, green: 0.58, blue: 1.0, alpha: 1.0)
+    static let activeColor = NSColor(srgbRed: 0.95, green: 0.32, blue: 0.35, alpha: 1.0)
+    static let compColor = NSColor(srgbRed: 0.75, green: 0.25, blue: 0.95, alpha: 1.0)
+    static let freeColor = NSColor(srgbRed: 0.55, green: 0.55, blue: 0.58, alpha: 1.0)
+
     // All stat rows are display-only (Open Pulse opens the dashboard) and stay
     // enabled so AppKit doesn't dim their custom views.
     let cpuItem = NSMenuItem(title: "CPU", action: nil, keyEquivalent: "")
@@ -711,16 +981,52 @@ final class StatusController: NSObject {
     let memItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
     let cpuRow = StatRowView(label: "CPU")
     let gpuRow = StatRowView(label: "GPU")
-    let memRow = StatRowView(label: "Memory")
+    let memRow = MemoryRowView()
+
+    // Dual rolling wave graph for E and P core clusters
+    let cpuWaveItem = NSMenuItem(title: "CPU Cores", action: nil, keyEquivalent: "")
+    let cpuWaveRow = WaveGraphRowView(
+        subtitle: "E (amber) / P (blue) usage · 30s",
+        color1: NSColor(srgbRed: 1.0, green: 0.62, blue: 0.26, alpha: 1.0),
+        color2: NSColor(srgbRed: 0.24, green: 0.58, blue: 1.0, alpha: 1.0)
+    )
+
     let thermalItem = NSMenuItem(title: "Thermal", action: nil, keyEquivalent: "")
-    let netItem = NSMenuItem(title: "Network", action: nil, keyEquivalent: "")
+    let thermalRow = InfoRowView(label: "Thermal")
+    let loadAvgItem = NSMenuItem(title: "Load avg", action: nil, keyEquivalent: "")
+    let loadAvgRow = InfoRowView(label: "Load avg")
     let uptimeItem = NSMenuItem(title: "Uptime", action: nil, keyEquivalent: "")
-    let updateItem = NSMenuItem(title: "Update…", action: nil, keyEquivalent: "")
-    let thermalRow = StatRowView(label: "Thermal")  // no bar — the coloured °C number is the signal
-    let netRow = StatRowView(label: "Network")
     let uptimeRow = InfoRowView(label: "Uptime")
-    var statItems: [String: NSMenuItem] = [:]  // populated in init (member refs aren't allowed in initializers)
+    let gpuMemItem = NSMenuItem(title: "GPU memory", action: nil, keyEquivalent: "")
+    let gpuMemRow = InfoRowView(label: "GPU memory")
+    let netItem = NSMenuItem(title: "Network", action: nil, keyEquivalent: "")
+    let netRow = InfoRowView(label: "Network")
+
+    // Memory pool rows
+    let wiredItem = NSMenuItem(title: "Wired", action: nil, keyEquivalent: "")
+    let wiredRow = LegendRowView(label: "Wired", color: StatusController.wiredColor)
+    let activeItem = NSMenuItem(title: "Active", action: nil, keyEquivalent: "")
+    let activeRow = LegendRowView(label: "Active", color: StatusController.activeColor)
+    let compItem = NSMenuItem(title: "Compressed", action: nil, keyEquivalent: "")
+    let compRow = LegendRowView(label: "Compressed", color: StatusController.compColor)
+    let freeItem = NSMenuItem(title: "Free", action: nil, keyEquivalent: "")
+    let freeRow = LegendRowView(label: "Free", color: StatusController.freeColor)
+
+    let updateItem = NSMenuItem(title: "Update…", action: nil, keyEquivalent: "")
+
+    // Centered section headers (styled like the omlx stats display)
+    let cpuHeaderItem = NSMenuItem(title: "CPU", action: nil, keyEquivalent: "")
+    let gpuHeaderItem = NSMenuItem(title: "GPU", action: nil, keyEquivalent: "")
+    let memHeaderItem = NSMenuItem(title: "MEMORY", action: nil, keyEquivalent: "")
+    let sysHeaderItem = NSMenuItem(title: "SYSTEM", action: nil, keyEquivalent: "")
+
+    let cpuHeader = SectionHeaderView(title: "CPU")
+    let gpuHeader = SectionHeaderView(title: "GPU")
+    let memHeader = SectionHeaderView(title: "MEMORY")
+    let sysHeader = SectionHeaderView(title: "SYSTEM")
+
     let statSep = NSMenuItem.separator()
+    var dynamicMenuItems: [NSMenuItem] = []
     var lastMenuKey = ""
 
     let settingsItem = NSMenuItem(title: "Settings…", action: #selector(Shell.openSettings), keyEquivalent: ",")
@@ -732,12 +1038,22 @@ final class StatusController: NSObject {
     init(shell: Shell) {
         self.shell = shell
         super.init()
-        statItems = ["cpu": cpuItem, "gpu": gpuItem, "memory": memItem, "thermal": thermalItem, "network": netItem, "uptime": uptimeItem]
         menu.autoenablesItems = false
-        for (it, row) in [(cpuItem, cpuRow), (gpuItem, gpuRow), (memItem, memRow),
-                           (thermalItem, thermalRow), (netItem, netRow), (uptimeItem, uptimeRow)] {
+        menu.delegate = self
+        for (it, row) in [
+            (cpuItem, cpuRow), (cpuWaveItem, cpuWaveRow),
+            (thermalItem, thermalRow), (loadAvgItem, loadAvgRow), (uptimeItem, uptimeRow),
+            (gpuItem, gpuRow), (gpuMemItem, gpuMemRow),
+            (memItem, memRow), (wiredItem, wiredRow), (activeItem, activeRow), (compItem, compRow), (freeItem, freeRow),
+            (netItem, netRow)
+        ] {
             it.view = row
         }
+        cpuHeaderItem.view = cpuHeader
+        gpuHeaderItem.view = gpuHeader
+        memHeaderItem.view = memHeader
+        sysHeaderItem.view = sysHeader
+
         applyMenuLayout(menu: PulseSettings.defaultMenuRows, bar: PulseSettings.defaultBarRows)
         settingsItem.target = shell
         openItem.target = shell
@@ -764,6 +1080,10 @@ final class StatusController: NSObject {
                                          bar: PulseSettings.defaultBarRows)
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        poll()
+    }
+
     /// Show/hide the status-menu update row (hidden item keeps its slot — no rebuild needed).
     func showUpdateRow(_ version: String?) {
         if let v = version { updateItem.title = "Update to v\(v)…" }
@@ -781,16 +1101,65 @@ final class StatusController: NSObject {
         if let ci = visible.firstIndex(of: "cpu") { visible.insert("thermal", at: ci + 1) }
         if visible.joined(separator: ",") != lastMenuKey {
             lastMenuKey = visible.joined(separator: ",")
-            for (_, it) in statItems {
-                let i = self.menu.index(of: it)
-                if i >= 0 { self.menu.removeItem(at: i) }
+
+            for it in dynamicMenuItems {
+                let idx = self.menu.index(of: it)
+                if idx >= 0 { self.menu.removeItem(at: idx) }
             }
-            let si = self.menu.index(of: statSep)
-            if si >= 0 { self.menu.removeItem(at: si) }
-            for (i, id) in visible.enumerated() {
-                self.menu.insertItem(statItems[id]!, at: i)
+            dynamicMenuItems.removeAll()
+
+            var newItems: [NSMenuItem] = []
+            var addedGroups = Set<String>()
+
+            let addSystemGroup = {
+                guard !addedGroups.contains("system") else { return }
+                let hasNet = menu.contains("network")
+                let hasUptime = menu.contains("uptime")
+                guard hasNet || hasUptime else { return }
+                addedGroups.insert("system")
+                self.sysHeader.showDivider = !newItems.isEmpty
+                newItems.append(self.sysHeaderItem)
+                newItems.append(self.loadAvgItem)
+                if hasUptime { newItems.append(self.uptimeItem) }
+                if hasNet { newItems.append(self.netItem) }
             }
-            if !visible.isEmpty { self.menu.insertItem(statSep, at: visible.count) }
+
+            for id in menu where known.contains(id) {
+                if id == "cpu" && !addedGroups.contains("cpu") {
+                    addedGroups.insert("cpu")
+                    cpuHeader.showDivider = !newItems.isEmpty
+                    newItems.append(cpuHeaderItem)
+                    newItems.append(cpuItem)
+                    newItems.append(cpuWaveItem)
+                    newItems.append(thermalItem)
+                } else if id == "gpu" && !addedGroups.contains("gpu") {
+                    addedGroups.insert("gpu")
+                    gpuHeader.showDivider = !newItems.isEmpty
+                    newItems.append(gpuHeaderItem)
+                    newItems.append(gpuItem)
+                    newItems.append(gpuMemItem)
+                } else if id == "memory" && !addedGroups.contains("memory") {
+                    addedGroups.insert("memory")
+                    memHeader.showDivider = !newItems.isEmpty
+                    newItems.append(memHeaderItem)
+                    newItems.append(memItem)
+                    newItems.append(wiredItem)
+                    newItems.append(activeItem)
+                    newItems.append(compItem)
+                    newItems.append(freeItem)
+                } else if id == "network" || id == "uptime" {
+                    addSystemGroup()
+                }
+            }
+
+            if !newItems.isEmpty {
+                newItems.append(statSep)
+            }
+
+            for (i, it) in newItems.enumerated() {
+                self.menu.insertItem(it, at: i)
+            }
+            dynamicMenuItems = newItems
         }
         lastMenuRows = visible
         lastBarRows = bar.filter { PulseSettings.allBarRows.contains($0) }
@@ -829,7 +1198,9 @@ final class StatusController: NSObject {
         self.port = port
         poll()
         if first {
-            timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+            let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
         }
     }
 
@@ -885,13 +1256,22 @@ final class StatusController: NSObject {
                 BootTracer.shared.mark("menubar_first_sample", once: true, launchOnly: true)
                 if snapT == 0 || snapT > self.lastStatusT {
                     if snapT > 0 { self.lastStatusT = snapT }
-                    if let c = obj["cpu"] as? [String: Any], let t = c["total"] as? Double {
+                    if let c = obj["cpu"] as? [String: Any], let t = (c["total"] as? NSNumber)?.doubleValue {
                         self.cpuHist.append(t)
+                        if let e = (c["eCores"] as? NSNumber)?.doubleValue {
+                            self.eCpuHist.append(e)
+                            if self.eCpuHist.count > WaveGraphRowView.maxHistory { self.eCpuHist.removeFirst(self.eCpuHist.count - WaveGraphRowView.maxHistory) }
+                        }
+                        if let p = (c["pCores"] as? NSNumber)?.doubleValue {
+                            self.pCpuHist.append(p)
+                            if self.pCpuHist.count > WaveGraphRowView.maxHistory { self.pCpuHist.removeFirst(self.pCpuHist.count - WaveGraphRowView.maxHistory) }
+                        }
                     }
-                    if let m = obj["memPct"] as? Double { self.memHist.append(m) }
-                    if let g = obj["gpuPct"] as? Double { self.gpuHist.append(g) }
+                    if let m = (obj["memPct"] as? NSNumber)?.doubleValue { self.memHist.append(m) }
+                    if let g = (obj["gpuPct"] as? NSNumber)?.doubleValue { self.gpuHist.append(g) }
                     if let n = obj["net"] as? [String: Any] {
-                        let d = n["down"] as? Double ?? 0, u = n["up"] as? Double ?? 0
+                        let d = (n["down"] as? NSNumber)?.doubleValue ?? 0
+                        let u = (n["up"] as? NSNumber)?.doubleValue ?? 0
                         self.lastNet = (d, u)
                         self.netHist.append(min(100, (d + u) / 1.25e8 * 100))  // 1 Gbps reference
                     }
@@ -918,31 +1298,45 @@ final class StatusController: NSObject {
     }
 
     func updateMenu(_ o: [String: Any]) {
-        let gb: (Double) -> String = { let g = $0 / 1_073_741_824; return g >= 10 ? String(format: "%.0f GB", g) : String(format: "%.1f GB", g) }
-        if let c = o["cpu"] as? [String: Any], let t = c["total"] as? Double {
-            cpuItem.title = String(format: "CPU %.1f%%", t)
-            cpuRow.set(value: String(format: "%.1f%%", t), frac: t / 100, color: StatRowView.cpuColor)
+        let fmtMem: (Double) -> String = { b in
+            let gb = b / 1_073_741_824
+            if gb >= 1 { return String(format: "%.2f GB", gb) }
+            let mb = b / 1_048_576
+            if mb >= 1 { return String(format: "%.0f MB", mb) }
+            return "0 GB"
         }
-        if let p = o["gpuPct"] as? Double {
-            gpuItem.title = String(format: "GPU %.0f%%", p)
-            gpuRow.set(value: String(format: "%.0f%%", p), frac: p / 100, color: StatRowView.gpuColor)
-        } else {
-            // Non-Apple-Silicon machine: keep the row, show nothing.
-            gpuRow.set(value: "—", frac: 0, color: .clear)
+        let tt = (o["memTotal"] as? NSNumber)?.doubleValue ?? 0
+
+        // CPU
+        if let c = o["cpu"] as? [String: Any], let t = (c["total"] as? NSNumber)?.doubleValue {
+            let u = (c["user"] as? NSNumber)?.doubleValue
+            let s = (c["sys"] as? NSNumber)?.doubleValue
+            let cpuValStr: String
+            if let u, let s {
+                cpuValStr = String(format: "%.0f%% · %.1f / %.1f", t.rounded(), u, s)
+            } else {
+                cpuValStr = String(format: "%.1f%%", t)
+            }
+            cpuItem.title = "CPU " + cpuValStr
+            cpuRow.set(value: cpuValStr, frac: t / 100, color: StatRowView.cpuColor)
+
+            if let e = (c["eCores"] as? NSNumber)?.doubleValue,
+               let p = (c["pCores"] as? NSNumber)?.doubleValue {
+                cpuWaveRow.setSubtitle(String(format: "E %.0f%% (amber) / P %.0f%% (blue) · 30s", e.rounded(), p.rounded()))
+            }
+            cpuWaveRow.series1 = self.eCpuHist
+            cpuWaveRow.series2 = self.pCpuHist
         }
-        if let p = o["memPct"] as? Double, let u = o["memUsed"] as? Double, let tt = o["memTotal"] as? Double, tt > 0 {
-            let v = "\(gb(u)) / \(gb(tt)) · \(Int(p.rounded()))%"
-            memItem.title = "Memory " + v
-            memRow.set(value: v, frac: p / 100, color: StatRowView.memColor)
-        }
+
+        // Thermal
         if let th = o["thermal"] as? [String: Any] {
-            let lvl = th["level"] as? Int ?? 0
+            let lvl = (th["level"] as? NSNumber)?.intValue ?? 0
             let state = (th["state"] as? String) ?? "nominal"
             let pretty = String(state.prefix(1)).uppercased() + String(state.dropFirst())
-            let cpuTemp = th["cpu"] as? Double
+            let cpuTemp = (th["cpu"] as? NSNumber)?.doubleValue
             let valStr: String
             if let t = cpuTemp {
-                valStr = lvl > 0 ? "\(Int(t.rounded()))°C · \(pretty)" : "\(Int(t.rounded()))°C"
+                valStr = "\(pretty) · \(Int(t.rounded()))°C"
             } else {
                 valStr = pretty
             }
@@ -952,9 +1346,11 @@ final class StatusController: NSObject {
             // a quiet machine's few-degree range doesn't map a 1° swing onto the
             // whole green→red ramp, and the colour uses the ROUNDED value so it
             // always matches the number the user reads (and the dashboard's).
-            // No bar — the number is the signal.
             let color: NSColor
-            if let tRaw = cpuTemp, let lo = th["min"] as? Double, let hi = th["max"] as? Double, hi - lo >= 1 {
+            if let tRaw = cpuTemp,
+               let lo = (th["min"] as? NSNumber)?.doubleValue,
+               let hi = (th["max"] as? NSNumber)?.doubleValue,
+               hi - lo >= 1 {
                 let span = max(hi - lo, 10.0)
                 let rangeLo = lo - (span - (hi - lo)) / 2  // widen around the observed range
                 let frac = min(1, max(0, (Double(Int(tRaw.rounded())) - rangeLo) / span))
@@ -962,19 +1358,75 @@ final class StatusController: NSObject {
             } else {
                 color = lvl == 0 ? .labelColor : (lvl == 1 ? NSColor.systemOrange : NSColor.systemRed)
             }
-            thermalRow.set(value: valStr, frac: nil, color: color)
+            thermalRow.set(value: valStr, color: color)
         }
-        if let n = o["net"] as? [String: Any] {
-            let d = n["down"] as? Double ?? 0, u = n["up"] as? Double ?? 0
-            // Dominant direction; the unit travels with the figure (B/KB/MB/GB,
-            // same ladder as the dashboard card, so the two surfaces agree).
-            netRow.set(value: d >= u ? "↓ \(Self.rate(d))/s" : "↑ \(Self.rate(u))/s",
-                       frac: min(1, (d + u) / 1.25e8), color: StatRowView.netColor)  // 1 Gbps reference
+
+        // Load avg
+        if let la = o["loadAvg"] as? [NSNumber], la.count >= 3 {
+            let s = String(format: "%.2f · %.2f · %.2f", la[0].doubleValue, la[1].doubleValue, la[2].doubleValue)
+            loadAvgItem.title = "Load avg " + s
+            loadAvgRow.set(value: s)
         }
-        if let bt = o["bootTime"] as? Int, bt > 0 {
+
+        // Uptime
+        if let bt = (o["bootTime"] as? NSNumber)?.intValue, bt > 0 {
             let up = max(0, Int(Date().timeIntervalSince1970) - bt)
             let d = up / 86_400, h = (up % 86_400) / 3_600, m = (up % 3_600) / 60
             uptimeRow.set(value: d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m")
+        }
+
+        // GPU
+        if let p = (o["gpuPct"] as? NSNumber)?.doubleValue {
+            gpuItem.title = String(format: "GPU %.0f%%", p)
+            gpuRow.set(value: String(format: "%.0f%%", p), frac: p / 100, color: StatRowView.gpuColor)
+        } else {
+            // Non-Apple-Silicon machine: keep the row, show nothing.
+            gpuRow.set(value: "—", frac: 0, color: .clear)
+        }
+        if let gm = (o["gpuMem"] as? NSNumber)?.doubleValue {
+            let gmStr = "\(fmtMem(gm)) in use"
+            gpuMemItem.title = "GPU memory " + gmStr
+            gpuMemRow.set(value: gmStr)
+        } else {
+            gpuMemRow.set(value: "—")
+        }
+
+        // Memory
+        if let p = (o["memPct"] as? NSNumber)?.doubleValue,
+           let u = (o["memUsed"] as? NSNumber)?.doubleValue,
+           tt > 0 {
+            let uGb = u / 1_073_741_824
+            let ttGb = tt / 1_073_741_824
+            let valStr = String(format: "%.1f / %.1f GB · %.0f%%", uGb, ttGb, p.rounded())
+            memItem.title = "Memory " + valStr
+
+            var segs: [SegmentedBarView.Segment] = []
+            if let mp = o["memPools"] as? [String: Any] {
+                let wired = (mp["wired"] as? NSNumber)?.doubleValue ?? 0
+                let active = (mp["active"] as? NSNumber)?.doubleValue ?? 0
+                let comp = (mp["compressed"] as? NSNumber)?.doubleValue ?? 0
+                let free = (mp["free"] as? NSNumber)?.doubleValue ?? 0
+
+                segs = [
+                    .init(frac: wired / tt, color: StatusController.wiredColor),
+                    .init(frac: active / tt, color: StatusController.activeColor),
+                    .init(frac: comp / tt, color: StatusController.compColor),
+                ]
+                wiredRow.set(value: fmtMem(wired))
+                activeRow.set(value: fmtMem(active))
+                compRow.set(value: fmtMem(comp))
+                freeRow.set(value: fmtMem(free))
+            } else {
+                segs = [.init(frac: p / 100, color: StatRowView.memColor)]
+            }
+            memRow.set(valueStr: valStr, segments: segs)
+        }
+
+        // Network (bar-less info row showing both download and upload rates)
+        if let n = o["net"] as? [String: Any] {
+            let d = (n["down"] as? NSNumber)?.doubleValue ?? 0
+            let u = (n["up"] as? NSNumber)?.doubleValue ?? 0
+            netRow.set(value: "↓ \(Self.rate(d))/s · ↑ \(Self.rate(u))/s")
         }
     }
 
@@ -1463,9 +1915,11 @@ final class SettingsWindowController: NSObject {
         if let ver = shell.pendingUpdateVersion {
             updateStatusLabel.stringValue = "v\(ver) available"
             updateStatusLabel.textColor = accentGreen
+            updateCheckButton.title = "Update…"
         } else {
             updateStatusLabel.stringValue = "Up to date"
             updateStatusLabel.textColor = dimCol
+            updateCheckButton.title = "Check for Updates…"
         }
         rebuildMenuRowsUI()
     }

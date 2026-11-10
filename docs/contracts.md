@@ -21,7 +21,8 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   sys: {
     model, chip, memLabel,      // from system_profiler; null until it finishes loading
     cores, memTotal,            // memTotal in bytes
-    cpu:  { user, sys, idle, total, temp }, // percents (total = 100 - idle); temp in °C or null
+    cpu:  { user, sys, idle, total, temp, eCores, pCores }, // percents (total = 100 - idle); temp in °C or null; eCores/pCores cluster load %
+    loadAvg: [ 1m, 5m, 15m ],   // load averages from os.loadavg()
     mem:  { free, used, apps, wired, compressed, cache, inUse },  // bytes. Activity-Monitor-style:
                                                                  // wired/compressor are vm_stat measurements,
                                                                  // cache = vm_stat filebacked + purgeable (capped
@@ -38,8 +39,8 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     net:  { down, up },         // bytes/sec
     disk: { mbps },             // MB/s, read + write
     batt: { pct, charging },        // pct null when on AC / no battery
-    gpu:  { pct, name, cores },      // Apple Silicon only (ioreg AGX); pct null elsewhere.
-                                     // pct = delta of accumulatedGPUTime ÷ window ÷ MGPU units;
+    gpu:  { pct, mem, name, cores }, // Apple Silicon only (ioreg AGX/IOAccelerator); pct null elsewhere.
+                                     // pct = delta of accumulatedGPUTime ÷ window ÷ MGPU units; mem = in use system memory (bytes);
                                      // name/cores from the GPU node
     thermal: { level, state, cpu, min, max }, // level 0..3 (pmset), state: nominal|slowed|throttled; cpu: temp in °C or null;
                                               // min/max: the machine's observed cold–hot range since the sampler
@@ -69,9 +70,12 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   serverMtime: <sec epoch>,          // mtime of server.js at boot (triggers live backend reload on rebuild)
   bootTrace: { start, listen, firstSnapshot }, // epoch ms timestamps for startup trace logging
   memDebug: { rss, heapTotal, heapUsed, external }, // Node V8 memory telemetry (bytes)
-  cpu: { user, sys, idle, total, temp }, // SYSTEM cpu (from top) — NOT an app; temp in °C or null
+  cpu: { user, sys, idle, total, temp, eCores, pCores }, // SYSTEM cpu (from top) — NOT an app; temp in °C or null; eCores/pCores load %
+  loadAvg: [ 1m, 5m, 15m ],          // load averages from os.loadavg()
   memPct, memUsed, memTotal,         // AM-style: memUsed = used − file cache
+  memPools: { wired, active, compressed, free }, // bytes per memory pool for segmented bar & breakdown
   gpuPct,                            // Apple Silicon GPU utilization %; null if unavailable
+  gpuMem,                            // Apple Silicon in use GPU memory (bytes); null if unavailable
   thermal: { level, state, cpu, min, max }, // pmset level 0..3 + nominal|slowed|throttled; cpu temp in °C or null; min/max = observed range (colours use a 10°C-floored span of it)
   net: { down, up },                 // bytes/s summed across all interfaces — the SAME
                                      // scale as the snapshot's sys.net; each side formats

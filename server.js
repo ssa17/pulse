@@ -250,6 +250,32 @@ function computeHostCpuDelta(prevCpus, curCpus) {
 }
 
 /**
+ * Compute real-time load % for Apple Silicon Efficiency (E) and Performance (P) core clusters.
+ * On Apple Silicon, E-cores always precede P-cores in `os.cpus()`.
+ */
+function computeCoreClusterLoads(prevCpus, curCpus, eCount) {
+  if (!Array.isArray(prevCpus) || !Array.isArray(curCpus) || prevCpus.length !== curCpus.length || eCount <= 0) {
+    return { eCores: null, pCores: null };
+  }
+  function calcRange(start, end) {
+    let busy = 0, total = 0;
+    for (let i = start; i < end && i < curCpus.length; i++) {
+      const p = prevCpus[i] && prevCpus[i].times;
+      const c = curCpus[i] && curCpus[i].times;
+      if (!p || !c) continue;
+      const b = (c.user - p.user) + (c.nice - p.nice) + (c.sys - p.sys) + (c.irq - p.irq);
+      const idle = c.idle - p.idle;
+      busy += Math.max(0, b);
+      total += Math.max(0, b) + Math.max(0, idle);
+    }
+    return total > 0 ? +((busy / total) * 100).toFixed(1) : 0;
+  }
+  const eCores = calcRange(0, eCount);
+  const pCores = calcRange(eCount, curCpus.length);
+  return { eCores, pCores };
+}
+
+/**
  * top -F -l 2 -n 800 -o mem -stats pid,cpu,mem → pid → { mem, cpu }.
  * The MEM column is the kernel's phys_footprint — the same number Activity
  * Monitor shows: RSS with shared file pages (dyld shared cache, app bundles)
@@ -391,6 +417,16 @@ function parseIoregGpu(out) {
     else map.set(c[1], { name: c[2], ns });
   }
   return map;
+}
+
+/**
+ * Parse GPU memory currently in use (bytes) from IOKit IOAccelerator.
+ * Matches `"In use system memory" = <bytes>`.
+ */
+function parseGpuMem(out) {
+  if (!out) return null;
+  const m = out.match(/"In use system memory"\s*=\s*(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
 }
 
 // Status-menu row ids. settings.json stores an ordered SUBSET under `menuRows`
@@ -644,7 +680,13 @@ let lastBattT = 0;
 let prevGpu = new Map();
 let lastGpuT = 0;
 let gpuPct = null;
+let lastGpuMem = null;
 let gpuHw = { name: null, cores: 0, mgpus: 1 };
+let eCoreCount = 0;
+try {
+  eCoreCount = parseInt(execFileSync('/usr/sbin/sysctl', ['-n', 'hw.perflevel1.logicalcpu'], { encoding: 'utf8' }).trim(), 10) || 0;
+} catch {}
+let lastClusterLoads = { eCores: null, pCores: null };
 let lastTherm = { level: 0, state: 'nominal', cpu: null, min: null, max: null };
 let lastCpuTemp = null;
 let lastCpuTempT = 0;
@@ -745,10 +787,10 @@ async function sample(fast = false) {
   kickThermal(); // background — never blocks the sample
 
   let topOut = null, iostatOut = null;
-  let psMain, psArgs, vmOut, sysOut, battOut, gpuOut;
+  let psMain, psArgs, vmOut, sysOut, battOut, gpuOut, accelOut;
   const needBatt = !lastBattOut || Date.now() - lastBattT >= 4500;
   if (useFast) {
-    [psMain, psArgs, vmOut, sysOut, topOut, battOut, gpuOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, topOut, battOut, gpuOut, accelOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
@@ -756,19 +798,21 @@ async function sample(fast = false) {
       run('top', ['-F', '-l', '1', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem'], 4000),
       needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
+      run('ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator'], 4000),
     ]);
   } else if (activeViewer) {
     [topOut, iostatOut] = await Promise.all([
       run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1'], 6000),
       run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
     ]);
-    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut, accelOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
       run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
       needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
+      run('ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator'], 4000),
     ]);
   } else {
     // Background menu-bar mode (no open dashboard): skip `top` (which walks
@@ -776,13 +820,14 @@ async function sample(fast = false) {
     // Sleep 1s to preserve the 1s delta window and read system CPU in-process
     // via os.cpus() (host_processor_info).
     await new Promise((r) => setTimeout(r, 1000));
-    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut, accelOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
       run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
       needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
+      run('ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator'], 4000),
     ]);
   }
   if (needBatt && battOut) { lastBattOut = battOut; lastBattT = Date.now(); }
@@ -790,6 +835,10 @@ async function sample(fast = false) {
   if (battOut || curCpuTemp !== lastTherm.cpu) {
     // min/max are sampler-lifetime state, not pmset-derived — attach, don't parse.
     lastTherm = { ...parseTherm(battOut || lastBattOut, curCpuTemp), min: thermalMin, max: thermalMax };
+  }
+  if (accelOut) {
+    const gm = parseGpuMem(accelOut);
+    if (gm !== null) lastGpuMem = gm;
   }
 
   // Never overwrite live data with empty/zero parser fallbacks if a core tool failed.
@@ -805,7 +854,14 @@ async function sample(fast = false) {
 
   const curHostCpus = os.cpus();
   const hostCpu = computeHostCpuDelta(prevHostCpus, curHostCpus);
-  prevHostCpus = curHostCpus;
+  if (hostCpu) {
+    lastClusterLoads = computeCoreClusterLoads(prevHostCpus, curHostCpus, eCoreCount);
+    prevHostCpus = curHostCpus;
+  } else if (lastClusterLoads.eCores === null && eCoreCount > 0) {
+    const zeroCpus = curHostCpus.map(() => ({ times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }));
+    lastClusterLoads = computeCoreClusterLoads(zeroCpus, curHostCpus, eCoreCount);
+  }
+  const clusterLoads = lastClusterLoads;
 
   // ---- processes + real-time CPU (delta of cumulative cpu time) ----
   const procs = parsePsMain(psMain);
@@ -969,7 +1025,8 @@ async function sample(fast = false) {
       ...hardware,
       cores,
       memTotal,
-      cpu: { ...top, temp: lastTherm.cpu },
+      cpu: { ...top, temp: lastTherm.cpu, eCores: clusterLoads.eCores, pCores: clusterLoads.pCores },
+      loadAvg: os.loadavg().map((v) => +v.toFixed(2)),
       mem: { free, used, apps: appsMem, wired, compressed, cache, inUse },
       // Extra vm_stat counters (bytes), informational only — NOT part of the
       // normalized `mem` segments above (the UI's bar/sum uses those). They
@@ -987,6 +1044,7 @@ async function sample(fast = false) {
       batt,
       gpu: {
         pct: gpuPct == null ? null : +gpuPct.toFixed(1),
+        mem: lastGpuMem,
         name: gpuHw.name,
         cores: gpuHw.cores,
       },
@@ -1030,13 +1088,21 @@ async function sample(fast = false) {
     serverMtime: SERVER_MTIME,
     bootTrace: BOOT_TRACE,
     memDebug: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
-    cpu: { ...top, temp: lastTherm.cpu },
+    cpu: { ...top, temp: lastTherm.cpu, eCores: clusterLoads.eCores, pCores: clusterLoads.pCores },
+    loadAvg: os.loadavg().map((v) => +v.toFixed(2)),
     // AM-style: "memory used" = used − cache (Apps + Wired + Compressed;
     // reclaimable file/purgeable cache excluded)
     memPct: memTotal ? +((inUse / memTotal) * 100).toFixed(1) : 0,
     memUsed: inUse,
     memTotal,
+    memPools: {
+      wired,
+      active: appsMem,
+      compressed,
+      free,
+    },
     gpuPct: gpuPct == null ? null : +gpuPct.toFixed(1),
+    gpuMem: lastGpuMem,
     thermal: lastTherm,      // { level, state, cpu, min, max } — cpu temp is coloured on min..max by the UIs
     net: { down: netDown, up: netUp }, // bytes/s — same scale as snapshot.sys.net; each side formats B/KB/MB/GB
     bootTime: sysc.bootTime, // epoch sec — the menu computes uptime

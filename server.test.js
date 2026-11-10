@@ -947,6 +947,68 @@ function computeHostCpuDelta(prevCpus, curCpus) {
   assert(computeHostCpuDelta(null, cur) === null, 'computeHostCpuDelta: null input → null');
 }
 
+/* ── computeCoreClusterLoads ── */
+console.log('\n--- computeCoreClusterLoads ---');
+
+function computeCoreClusterLoads(prevCpus, curCpus, eCount) {
+  if (!Array.isArray(prevCpus) || !Array.isArray(curCpus) || prevCpus.length !== curCpus.length || eCount <= 0) {
+    return { eCores: null, pCores: null };
+  }
+  function calcRange(start, end) {
+    let busy = 0, total = 0;
+    for (let i = start; i < end && i < curCpus.length; i++) {
+      const p = prevCpus[i] && prevCpus[i].times;
+      const c = curCpus[i] && curCpus[i].times;
+      if (!p || !c) continue;
+      const b = (c.user - p.user) + (c.nice - p.nice) + (c.sys - p.sys) + (c.irq - p.irq);
+      const idle = c.idle - p.idle;
+      busy += Math.max(0, b);
+      total += Math.max(0, b) + Math.max(0, idle);
+    }
+    return total > 0 ? +((busy / total) * 100).toFixed(1) : 0;
+  }
+  const eCores = calcRange(0, eCount);
+  const pCores = calcRange(eCount, curCpus.length);
+  return { eCores, pCores };
+}
+
+{
+  const prev = [
+    { times: { user: 1000, nice: 0, sys: 500, idle: 8500, irq: 0 } }, // E-core 0
+    { times: { user: 1000, nice: 0, sys: 500, idle: 8500, irq: 0 } }, // E-core 1
+    { times: { user: 2000, nice: 0, sys: 1000, idle: 7000, irq: 0 } }, // P-core 2
+    { times: { user: 2000, nice: 0, sys: 1000, idle: 7000, irq: 0 } }, // P-core 3
+  ];
+  const cur = [
+    { times: { user: 1400, nice: 0, sys: 600, idle: 9000, irq: 0 } }, // +500 busy, +500 idle -> 50%
+    { times: { user: 1400, nice: 0, sys: 600, idle: 9000, irq: 0 } }, // +500 busy, +500 idle -> 50%
+    { times: { user: 2100, nice: 0, sys: 1000, idle: 7900, irq: 0 } }, // +100 busy, +900 idle -> 10%
+    { times: { user: 2100, nice: 0, sys: 1000, idle: 7900, irq: 0 } }, // +100 busy, +900 idle -> 10%
+  ];
+  const cl = computeCoreClusterLoads(prev, cur, 2);
+  assert(cl.eCores === 50 && cl.pCores === 10, 'computeCoreClusterLoads: E-cores=50%, P-cores=10%');
+  assert(computeCoreClusterLoads(null, cur, 2).eCores === null, 'computeCoreClusterLoads: null input → null');
+  assert(computeCoreClusterLoads(prev, cur, 0).eCores === null, 'computeCoreClusterLoads: zero eCount → null');
+}
+
+/* ── parseGpuMem ── */
+console.log('\n--- parseGpuMem ---');
+
+function parseGpuMem(out) {
+  if (!out) return null;
+  const m = out.match(/"In use system memory"\s*=\s*(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+{
+  const s = '{"In use system memory"=1515192320,"Device Utilization %"=21}';
+  assert(parseGpuMem(s) === 1515192320, 'parseGpuMem: parses integer bytes');
+  const s2 = '"In use system memory" = 1073741824';
+  assert(parseGpuMem(s2) === 1073741824, 'parseGpuMem: handles spaces around equals');
+  assert(parseGpuMem('') === null, 'parseGpuMem: empty string → null');
+  assert(parseGpuMem('no memory field') === null, 'parseGpuMem: missing field → null');
+}
+
 // ---------------------------------------------------------------------------
 //  Wrap up
 // ---------------------------------------------------------------------------

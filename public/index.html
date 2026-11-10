@@ -254,6 +254,7 @@
     padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
   }
   .s-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .s-row[hidden] { display: none; }
   .s-info { flex: 1; min-width: 0; }
   .s-title {
     font-size: 13px; font-weight: 600; color: var(--text);
@@ -541,14 +542,14 @@
         </div>
         <div class="s-row" id="st-update-row" hidden>
           <div class="s-info">
-            <div class="s-title">Update available <span class="s-pill" id="st-update-badge">…</span></div>
+            <div class="s-title">Update available <span class="s-pill active" id="st-update-badge">…</span></div>
             <div class="s-desc">Pulse <b id="st-update-ver"></b> is ready — install it any time.</div>
           </div>
           <button class="s-act accent" id="st-update-btn">Update…</button>
         </div>
-        <div class="s-row">
-          <div class="s-info"><div class="s-desc" style="margin-top:10px">Check for updates</div></div>
-          <button class="s-act" id="st-check-btn">Check</button>
+        <div class="s-row" id="st-check-row">
+          <div class="s-info"><div class="s-desc" style="margin-top:6px">Updates · Up to date</div></div>
+          <button class="s-act" id="st-check-btn">Check for Updates…</button>
         </div>
       </div>
       <div class="s-card">
@@ -1828,12 +1829,15 @@ $('#mem-info').addEventListener('click', (e) => {
 $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
 window.__pulseUpdate = (d) => {
   const row = $('#st-update-row');
+  const checkRow = $('#st-check-row');
   if (d && d.available) {
     row.hidden = false;
+    if (checkRow) checkRow.hidden = true;
     $('#st-update-ver').textContent = String(d.available);
     $('#st-update-badge').textContent = 'v' + d.available;
   } else {
     row.hidden = true;
+    if (checkRow) checkRow.hidden = false;
   }
 };
 $('#st-update-btn').addEventListener('click', () => postNativeSetting({ action: 'checkForUpdates' }));

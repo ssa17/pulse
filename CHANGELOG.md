@@ -10,14 +10,15 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ## [Unreleased]
 
 ### Added
-- Dashboard CPU card shows the live CPU die temperature (°C) alongside user/sys, coloured green→red by how hot the machine is (scaled on its observed cold–hot range, 10 °C minimum span) and flagging throttling — read directly from Apple Silicon sensors, no root needed
-- Menu-bar Thermal row (pinned just below CPU, no separate toggle or bar) shows the same reading, coloured identically
+- Live CPU die temperature (°C) on the dashboard CPU card, coloured green→red by how hot the machine is and flagging throttling, with the same reading pinned just below CPU in the menu bar
+- New status-bar dropdown visuals: dual 30s rolling wave graphs for E/P core clusters, GPU utilization vs. GPU memory, live GPU memory in use, system load averages, and a color-coded memory breakdown (Wired, Active, Compressed, Free)
 
 ### Changed
-- Update checks now run hourly instead of once a day, so new releases appear within the hour
+- Status-bar dropdown is grouped into clean CPU, GPU, MEMORY, and SYSTEM sections with centered titles and airy spacing
+- Update checks now run hourly instead of once a day
 
 ### Fixed
-- Lighter background menu-bar footprint: when the dashboard window is closed, the sampler reads system CPU counters in-process instead of spawning `top`/`iostat` on every tick, and status-bar views skip redundant redraws when metrics are unchanged
+- Lighter background footprint: with the dashboard closed, the sampler no longer spawns `top`/`iostat` on every tick, and the status bar skips redundant redraws
 
 ## [1.3] - 2026-11-09
 
