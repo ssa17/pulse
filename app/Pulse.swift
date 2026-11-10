@@ -2049,6 +2049,108 @@ final class ClickableView: NSView {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
+/// Sparkle's standard user driver, minus one modal: the “you're up to date”
+/// alert. Manually checking for updates while already current used to end in a
+/// dialog that required an OK click for nothing — instead the dashboard's
+/// Updates card confirms the check inline (“· checked just now”). Every other
+/// interaction (progress window, the update dialog, permission prompt, real
+/// errors) forwards to the stock standard driver unchanged.
+@MainActor
+final class QuietUserDriver: NSObject, SPUUserDriver {
+    private unowned let shell: Shell
+    private let inner: SPUStandardUserDriver
+
+    init(shell: Shell) {
+        self.shell = shell
+        self.inner = SPUStandardUserDriver(hostBundle: .main, delegate: nil)
+    }
+
+    /// The one interaction replaced. “No newer version” is a non-event: record
+    /// it for the dashboard and acknowledge without a modal. Checks that failed
+    /// for a real reason (network, OS/hardware mismatch) still get the stock
+    /// error alert.
+    func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        let raw = (error as NSError).userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber
+        let reason = raw.map { SPUNoUpdateFoundReason(rawValue: OSStatus($0.intValue)) }
+        if reason == .onLatestVersion || reason == .onNewerThanLatestVersion {
+            shell.updateCheckFoundNothing()
+            acknowledgement()
+        } else {
+            inner.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement)
+        }
+    }
+
+    // MARK: Forwarded, unchanged
+
+    func show(_ request: SPUUpdatePermissionRequest,
+              reply: @escaping (SUUpdatePermissionResponse) -> Void) {
+        inner.show(request, reply: reply)
+    }
+
+    func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        inner.showUserInitiatedUpdateCheck(cancellation: cancellation)
+    }
+
+    func showUpdateFound(with item: SUAppcastItem, state: SPUUserUpdateState,
+                         reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        inner.showUpdateFound(with: item, state: state, reply: reply)
+    }
+
+    func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
+        inner.showUpdateReleaseNotes(with: downloadData)
+    }
+
+    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {
+        inner.showUpdateReleaseNotesFailedToDownloadWithError(error)
+    }
+
+    func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        inner.showUpdaterError(error, acknowledgement: acknowledgement)
+    }
+
+    func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        inner.showDownloadInitiated(cancellation: cancellation)
+    }
+
+    func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) {
+        inner.showDownloadDidReceiveExpectedContentLength(expectedContentLength)
+    }
+
+    func showDownloadDidReceiveData(ofLength length: UInt64) {
+        inner.showDownloadDidReceiveData(ofLength: length)
+    }
+
+    func showDownloadDidStartExtractingUpdate() {
+        inner.showDownloadDidStartExtractingUpdate()
+    }
+
+    func showExtractionReceivedProgress(_ progress: Double) {
+        inner.showExtractionReceivedProgress(progress)
+    }
+
+    func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        inner.showReady(toInstallAndRelaunch: reply)
+    }
+
+    func showInstallingUpdate(withApplicationTerminated terminated: Bool,
+                              retryTerminatingApplication: @escaping () -> Void) {
+        inner.showInstallingUpdate(withApplicationTerminated: terminated,
+                                   retryTerminatingApplication: retryTerminatingApplication)
+    }
+
+    func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) {
+        inner.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: acknowledgement)
+    }
+
+    func dismissUpdateInstallation() {
+        inner.dismissUpdateInstallation()
+    }
+
+    func showUpdateInFocus() {
+        inner.showUpdateInFocus()
+    }
+}
+
 final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, SPUUpdaterDelegate {
     var window: NSWindow!
     var web: WKWebView?
@@ -2063,8 +2165,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var loaded = false
     var serverPort: Int?
     var status: StatusController?
-    var updater: SPUStandardUpdaterController!
+    var updater: SPUUpdater!
+    var updateDriver: QuietUserDriver!   // retained here — the updater may only reference it
     var pendingUpdateVersion: String?   // newest appcast version not yet installed
+    var lastCheckAtMs: Int?             // epoch ms of the last manual check that found nothing
     let updateStrip = ClickableView()
     var activityToken: NSObjectProtocol?
     let darkBg = NSColor(red: 0.043, green: 0.055, blue: 0.07, alpha: 1)
@@ -2383,7 +2487,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     @objc func checkForUpdates() {
-        updater.checkForUpdates(nil)
+        updater.checkForUpdates()
     }
 
     /// Re-parent the strip onto whatever the current content view is — the content view
@@ -2427,10 +2531,28 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     func pushUpdateToWeb() {
         guard let w = web, loaded else { return }
-        let payload: [String: Any] = ["available": pendingUpdateVersion ?? NSNull()]
+        let current = (Bundle.main.object(forInfoDictionaryKey:
+            "CFBundleShortVersionString") as? String) ?? "1.0"
+        // `current` always rides along — the "up to date" card shows it too;
+        // `checkedAt` backs the card's “· checked just now” confirmation.
+        var payload: [String: Any] = ["current": current]
+        if let available = pendingUpdateVersion {
+            payload["available"] = available
+        }
+        if let checkedAt = lastCheckAtMs {
+            payload["checkedAt"] = checkedAt
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
         w.evaluateJavaScript("window.__pulseUpdate && window.__pulseUpdate(\(json))", completionHandler: nil)
+    }
+
+    /// Final feedback for a manual check that found nothing to install. The stock
+    /// driver used to end in a modal “you're up to date” alert requiring an OK
+    /// click for nothing — the dashboard's Updates card confirms it inline instead.
+    func updateCheckFoundNothing() {
+        lastCheckAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        setUpdateIndicators()
     }
 
     // MARK: Sparkle delegate — restart LaunchAgent on auto-update so it never serves an old bundle
@@ -2612,7 +2734,12 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             loadDashboard(port: port)
         }
 
-        updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+        // A raw SPUUpdater with Pulse's own user driver: the stock driver handles
+        // everything except the dead-end “you're up to date” modal, which the
+        // dashboard's Updates card confirms inline (see QuietUserDriver).
+        updateDriver = QuietUserDriver(shell: self)
+        updater = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: updateDriver, delegate: self)
+        do { try updater.start() } catch { NSLog("Pulse updater failed to start: \(error)") }
 
         // Prevent App Nap from throttling live menu-bar polling & sampling while
         // Pulse is behind other windows or closed to the menu bar, without blocking idle sleep.

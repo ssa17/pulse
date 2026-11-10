@@ -13,7 +13,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Settings: the Updates card now shows your current version and the latest one, with an “Available” badge when a newer build is out
 
 ### Fixed
-- Settings no longer keeps advertising an update when you're already on the latest version (it wrongly stayed “Update” for builds whose version had been bumped ahead of the release)
+- Settings: when you're on the latest version, the Updates card shows “You have vX — up to date” instead of a ghost “New update available” card with empty versions (the card's hidden state was defeated by its styling, so it lingered with placeholder text)
+- Settings: a manual update check that finds nothing no longer pops a macOS “you're up to date” dialog you must click OK on — the Updates card confirms it inline instead ("You have v1.4. Up to date · checked just now")
 - Dashboard: the updates section re-syncs when the window re-opens, so it always agrees with the menu bar and the app's Settings
 - Dashboard: clicking outside the right-click context menu now dismisses it without also triggering whatever is underneath (the dismissing click no longer opens a drawer)
 

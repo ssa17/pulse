@@ -253,6 +253,8 @@
     background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
     padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
   }
+  /* author `display:flex` above would override the UA [hidden] rule — hide for real */
+  .s-card[hidden] { display: none; }
   .s-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
   .s-row[hidden] { display: none; }
   .s-info { flex: 1; min-width: 0; }
@@ -297,7 +299,11 @@
   .s-act:hover { color: var(--text); border-color: #2f384c; }
   .s-act.accent { color: var(--net); border-color: rgba(45,212,167,.4); }
   .s-act.accent:hover { background: rgba(45,212,167,.1); }
-  #st-update-row .s-desc b { color: var(--text); }
+  /* update notification card */
+  .s-update-card {
+    background: linear-gradient(135deg, rgba(45,212,167,.18) 0%, rgba(45,212,167,.1) 100%);
+    border: 1px solid rgba(45,212,167,.4);
+  }
   .s-seg {
     display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
     background: #10131b; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
@@ -528,6 +534,26 @@
       <button class="dclose" id="settings-close" title="Close (Esc)">✕</button>
     </div>
     <div class="s-body">
+      <div class="s-card s-update-card" id="st-update-card" hidden>
+        <div class="s-row">
+          <div class="s-info">
+            <div class="s-title">
+              New update available <span class="s-pill active" id="st-update-badge">v…</span>
+            </div>
+            <div class="s-desc">You have <b id="st-current-ver">v</b>. A new version <b id="st-update-ver">v…</b> is ready — install it any time.</div>
+          </div>
+          <button class="s-act accent" id="st-update-btn" style="margin-top:2px">Update…</button>
+        </div>
+      </div>
+      <div class="s-card" id="st-check-card">
+        <div class="s-row">
+          <div class="s-info">
+            <div class="s-title">Updates</div>
+            <div class="s-desc" id="st-check-desc" style="margin-top:6px">Up to date</div>
+          </div>
+          <button class="s-act" id="st-check-btn">Check for Updates…</button>
+        </div>
+      </div>
       <div class="s-card">
         <div class="s-row">
           <div class="s-info">
@@ -539,17 +565,6 @@
             <div class="s-err" id="st-daemon-err" hidden></div>
           </div>
           <button class="sw" id="sw-login" role="switch" aria-checked="false" aria-label="Start at login"><span class="knob"></span></button>
-        </div>
-        <div class="s-row" id="st-update-row" hidden>
-          <div class="s-info">
-            <div class="s-title">Update available <span class="s-pill active" id="st-update-badge">…</span></div>
-            <div class="s-desc">Pulse <b id="st-update-ver"></b> is ready — install it any time.</div>
-          </div>
-          <button class="s-act accent" id="st-update-btn">Update…</button>
-        </div>
-        <div class="s-row" id="st-check-row">
-          <div class="s-info"><div class="s-desc" style="margin-top:6px">Updates · Up to date</div></div>
-          <button class="s-act" id="st-check-btn">Check for Updates…</button>
         </div>
       </div>
       <div class="s-card">
@@ -617,6 +632,8 @@ const S = {
   apps: new Map(),          // key → { data, cpuHist: [], memHist: [] }
   sysHist: { cpu: [], net: [], disk: [], gpu: [], wired: [], comp: [], cache: [] },
   search: '',
+  version: null,         // snapshot's app version — the header and the Updates card both show it
+  lastCheckAt: null,     // epoch ms of the last manual update check (pushed by the app)
   showAll: { cpu: false, mem: false },
   drawerKey: null,
   closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
@@ -1401,7 +1418,9 @@ function onTick(p) {
   }
 
   S.sys = p.sys;
-  if (p.version) $('#ver').textContent = 'v' + p.version;
+  if (p.version) S.version = p.version;
+  if (S.version) $('#ver').textContent = 'v' + S.version;
+  if (settingsOpen) renderCheckCard();   // keep “· checked X ago” fresh
   const seen = new Set();
   for (const a of p.apps) {
     seen.add(a.key);
@@ -1811,6 +1830,7 @@ function setSettingsModal(open) {
       fetchSettingsFallback();
     }
     renderSettingsUI();
+    renderCheckCard();
   }
 }
 
@@ -1836,17 +1856,41 @@ $('#mem-info').addEventListener('click', (e) => {
   setMemPop(!memPop);
 });
 $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
+/* The app pushes { current, available?, checkedAt? } after load and after every
+ * update-state change; web mode never receives one, so the Updates card also
+ * renders from the snapshot's version. `checkedAt` is the inline confirmation
+ * that replaced the old modal “you're up to date” macOS dialog.
+ */
+function relAge(ms) {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+function renderCheckCard() {
+  const cd = $('#st-check-desc');
+  if (!cd) return;
+  cd.textContent = (S.version ? 'You have v' + S.version + '. ' : '')
+    + 'Up to date' + (S.lastCheckAt ? ' · checked ' + relAge(S.lastCheckAt) : '');
+}
 window.__pulseUpdate = (d) => {
-  const row = $('#st-update-row');
-  const checkRow = $('#st-check-row');
+  if (d) {
+    if (d.current) S.version = String(d.current);
+    if (d.checkedAt) S.lastCheckAt = +d.checkedAt;
+    renderCheckCard();
+  }
   if (d && d.available) {
-    row.hidden = false;
-    if (checkRow) checkRow.hidden = true;
-    $('#st-update-ver').textContent = String(d.available);
+    $('#st-update-card').hidden = false;
+    $('#st-check-card').hidden = true;
+    $('#st-current-ver').textContent = S.version ? 'v' + S.version : 'v—';
+    $('#st-update-ver').textContent = 'v' + d.available;
     $('#st-update-badge').textContent = 'v' + d.available;
+    $('#st-update-btn').textContent = 'Update to v' + d.available + '…';
   } else {
-    row.hidden = true;
-    if (checkRow) checkRow.hidden = false;
+    $('#st-update-card').hidden = true;
+    $('#st-check-card').hidden = false;
+    $('#st-update-btn').textContent = 'Update…';
   }
 };
 $('#st-update-btn').addEventListener('click', () => postNativeSetting({ action: 'checkForUpdates' }));

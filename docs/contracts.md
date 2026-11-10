@@ -222,9 +222,16 @@ not an app.
   (`StatusController.showUpdateRow`), the native Settings Updates card
   (`SettingsWindowController.syncFromState` — Current/Latest versions +
   "Available" badge), and the dashboard via `pushUpdateToWeb()` →
-  `window.__pulseUpdate({ available: <string|null> })` in `index.html`
-  (non-null shows `#st-update-row` with the version badge; null shows
-  `#st-check-row`). `didFinish` re-pushes both settings and update state on
+  `window.__pulseUpdate({ current, available?, checkedAt? })` in `index.html`
+  (non-null `available` shows `#st-update-card` with both versions +
+  "Update to vX…"; null shows `#st-check-card`, whose description renders
+  "You have vX. Up to date · checked <age>" from `current`/`checkedAt` —
+  web mode never receives a push, so the card renders from the snapshot's
+  `version` instead). `checkedAt` (epoch ms) is set only by
+  `QuietUserDriver.showUpdateNotFoundWithError` when a *manual* check finds
+  nothing: the stock driver's modal "you're up to date" alert is replaced by
+  that inline confirmation (real check failures still get the stock error
+  alert). `didFinish` re-pushes both settings and update state on
   every webview (re)load so the dashboard agrees with the other surfaces.
   A *declined* real update keeps its indicators until installed (Sparkle
   re-offers at the next launch; the thin strip is the persistent signal).
