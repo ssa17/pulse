@@ -197,7 +197,16 @@ not an app.
   reported as `dashboardSettingsOk`), exercises the Updates card (fake
   `window.__pulseUpdate` with an `available` version → `#st-update-card` shows
   with "Update to vX…" → restore → `#st-check-card` shows, reported as
-  `updatesCardOk`), and runs lifecycle checks in
+  `updatesCardOk`), then runs a **real** update check through the card button —
+  reported as `checkFlowSample`/`checkFlow`/`checkFlowOk`: all timing lives
+  *app-side* (this WebKit's `evaluateJavaScript` doesn't flatten promises), so
+  the app samples the card 200ms in (the ramp is 1.1s: the desc must still say
+  "Checking…", the button greyed, the bar not at 100% — even if the result
+  already arrived, i.e. the deferred-landing invariant) and reads the settled
+  card once its own check completes (desc = "Up to date …"/error, button
+  re-enabled, bar 100% or the update card shown); the landing retries while the
+  webview is released (the lifecycle closes/reopens the window) and is bounded
+  by a 75s timeout, and runs lifecycle checks in
   `lifecycle`: native Settings window open + `settings.json` migration/round-trip
   (`settingsVisible`, `settingsRoundTripOk`), window close keeping backend alive
   while releasing the webview (`closedWindowHidden`, `closedWebReleased`,
@@ -231,17 +240,25 @@ not an app.
   versions + "Update to vX…"; otherwise `#st-check-card` renders the
   `#st-check-desc` state). Dashboard card check lifecycle: `checking` is true
   while an appcast check is in flight — the card animates its own 3px progress
-  bar (ramps to ~92%, holds, completes and fades on a success, stays lit orange
-  on `failed`), and `QuietUserDriver` **suppresses the stock progress window for
-  checks started from the card** (`shell.checkFromWeb`) — on a fast appcast
-  fetch it flashed open and closed faster than it could be read; checks started
-  from the menu/strip/Settings keep the stock window. `failed` distinguishes a
-  check that errored from one that found nothing — the card says "couldn't
-  check" in orange instead of claiming up to date. `checkedAt` (epoch ms) is
-  stamped by `updateCheckFoundNothing()` for *any* completed check that found
-  nothing (launch, hourly scheduled, manual) and backs the green "Up to date ·
-  checked <age>" line (web mode never receives a push, so the card renders from
-  the snapshot's `version` and a check click resolves to an "update checks run
+  bar (ramps to ~92% over 1.1s, holds, completes and fades on a success, stays
+  lit orange on `failed`; the ramp is only re-armed on an actual phase change —
+  re-renders while ramping must keep the in-flight animation, or the bar
+  visibly snaps back to empty), and `QuietUserDriver` **suppresses the stock
+  progress window for checks started from the card** (`shell.checkFromWeb`) —
+  on a fast appcast fetch it flashed open and closed faster than it could be
+  read; checks started from the menu/strip/Settings keep the stock window. A result that
+  beats the ramp to the finish is *deferred*: the card keeps showing
+  "Checking…" (button greyed) until the 1.1s ramp completes, then text + bar +
+  card swap land together in one frame, so the word never says "up to date"
+  while the bar is still running. `failed` distinguishes a check that errored
+  from one that found nothing — the card says "couldn't check" in orange
+  instead of claiming up to date. `checkedAt` (epoch ms) is stamped by
+  `updateCheckFoundNothing()` for *any* completed check that found nothing
+  (launch, hourly scheduled, manual) and backs the "· checked <when>" line —
+  relative while fresh ("just now", "5m ago"), a clock time once it's an hour
+  old ("at 14:32"), date+time once a day old — in both the card and the native
+  Settings badge (web mode never receives a push, so the card renders from the
+  snapshot's `version` and a check click resolves to an "update checks run
   from the Pulse app" explanation). The stock driver's modal "you're up to
   date" alert is suppressed in `QuietUserDriver.showUpdateNotFoundWithError`
   (real check failures still get the stock error alert). `didFinish` re-pushes

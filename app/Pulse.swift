@@ -1653,6 +1653,9 @@ final class SettingsWindowController: NSObject {
     private let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
     private let accentGreen = NSColor(red: 0.176, green: 0.831, blue: 0.655, alpha: 1) // #2dd4a7
     private let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1)  // #ff9f43
+    private static let checkTimeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
+    }()
 
     init(shell: Shell) {
         self.shell = shell
@@ -1991,9 +1994,16 @@ final class SettingsWindowController: NSObject {
         } else {
             updateLatestVerLabel.stringValue = "v\(currentVer)"
             updateLatestVerLabel.textColor = textCol
-            updateStatusBadge.stringValue = "Up to date"
+            // Badge shown (not hidden) in the up-to-date state: with the last
+            // check's clock time it is a persistent "verified at 14:32" signal.
+            if let ms = shell.lastCheckAtMs {
+                let when = Self.checkTimeFmt.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
+                updateStatusBadge.stringValue = "Up to date · \(when)"
+            } else {
+                updateStatusBadge.stringValue = "Up to date"
+            }
             updateStatusBadge.textColor = accentGreen
-            updateStatusBadge.isHidden = true
+            updateStatusBadge.isHidden = false
             updateCheckButton.title = "Check for Updates…"
             updateCheckButton.isEnabled = true
         }
@@ -2631,6 +2641,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         lastCheckFailed = false
         lastCheckAtMs = Int(Date().timeIntervalSince1970 * 1000)
         setUpdateIndicators()
+        selfTestCheckCompleted()
     }
 
     /// A check that failed (network, feed, OS mismatch): availability keeps its
@@ -2642,6 +2653,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         checkFromWeb = false
         lastCheckFailed = true
         setUpdateIndicators()
+        selfTestCheckCompleted()
     }
 
     // MARK: Sparkle delegate — restart LaunchAgent on auto-update so it never serves an old bundle
@@ -2670,6 +2682,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             "CFBundleShortVersionString") as? String) ?? "1.0"
         pendingUpdateVersion = isNewerVersion(available, current) ? available : nil
         setUpdateIndicators()
+        selfTestCheckCompleted()
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
@@ -2721,6 +2734,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if let val = body["rows"] as? [String] { setMenuLayout(menu: val, bar: body["bar"] as? [String] ?? settings.barRows) }
             case "checkForUpdates":
                 startUpdateCheck(fromWeb: true)
+                if isSelfTest { armSelfTestCheckFlow() }
             default:
                 break
             }
@@ -3099,9 +3113,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     private func runSelfTest() {
-        // NOTE: evaluateJavaScript is synchronous on DOM expressions here.
+        // NOTE: the IIFE is synchronous — evaluateJavaScript does not flatten
+        // promises in this WebKit. The real check flow (card click) is timed
+        // app-side instead: the app samples the card mid-ramp and reads the
+        // settled state once its own check completes (armSelfTestCheckFlow /
+        // selfTestCheckCompleted); the final output waits for it (bounded).
         let js = """
         (() => {
+        try {
           let confirmWired = null;
           if (window.__autoconfirm) confirmWired = confirm('selftest');
           const row = [...document.querySelectorAll('#rows-cpu .row')].find(r => r.style.display !== 'none');
@@ -3133,6 +3152,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             && updBtnText.includes(realVer);
           window.__pulseUpdate && window.__pulseUpdate({ current: realVer });
           const checkCardRestored = !document.querySelector('#st-check-card')?.hidden;
+          // Real check flow — regression for "the text said up to date before the
+          // bar finished". Reopen the modal (the bar must be visible to measure)
+          // and click the real button. evaluateJavaScript does not flatten
+          // promises in this WebKit, so all timing lives app-side: the app
+          // samples the card mid-ramp and reads the settled state once its own
+          // check completes (see armSelfTestCheckFlow / selfTestCheckCompleted).
+          document.querySelector('#settings-btn')?.click();
+          document.querySelector('#st-check-btn')?.click();
           return JSON.stringify({
             machine: document.querySelector('#machine')?.textContent,
             ver: document.querySelector('#ver')?.textContent,
@@ -3145,6 +3172,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             updatesCardOk: updateCardSwaps && checkCardRestored,
             purgeBtn: !!document.querySelector('#mem-purge')
           });
+        } catch (e) {
+          return JSON.stringify({ selfTestError: String((e && e.message) || e) });
+        }
         })()
         """
         guard let w = web else {
@@ -3156,7 +3186,145 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             guard let self else { return }
             let initialJson = (d as? String) ?? "{}"
             self.runSelfTestLifecycleChecks(initialJson: initialJson)
+            // The check flow resolves from the app when the real check completes;
+            // bound it so a check that never completes (offline) can't hold the
+            // final output forever.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 75) { [weak self] in
+                guard let self, !self.selfTestFlowResolved else { return }
+                self.selfTestFlowResolved = true
+                self.maybeFinishSelfTest()
+            }
         }
+    }
+
+    // The self-test's real check flow: all timing lives app-side (this WebKit's
+    // evaluateJavaScript doesn't flatten promises). `armSelfTestCheckFlow` fires
+    // when the page clicks the real card button: it samples the card mid-ramp at
+    // 200ms — which must precede the lifecycle's webview release — and
+    // `selfTestCheckCompleted` (called from every terminal Sparkle path) reads
+    // the settled card after the ramp/hop margin. The final output waits for
+    // BOTH the lifecycle and this flow, bounded by a timeout; the landing
+    // retries while the webview is released (the window is closed and reopened
+    // during the lifecycle).
+    private var selfTestFlowArmed = false
+    private var selfTestSampleTaken = false
+    private var selfTestLandingArmed = false
+    private var selfTestWebStatePushedAt: Date?
+    private var selfTestCheckFlowSample: [String: Any]?
+    private var selfTestCheckFlow: [String: Any]?
+    private var selfTestFlowResolved = false
+    private var selfTestLifecycleDone = false
+    private var selfTestFinishFired = false
+    private var selfTestFinishHandler: (() -> Void)?
+
+    private func maybeFinishSelfTest() {
+        guard selfTestLifecycleDone, selfTestFlowResolved, !selfTestFinishFired else { return }
+        selfTestFinishFired = true
+        selfTestFinishHandler?()
+        selfTestFinishHandler = nil
+    }
+
+    // Card-state probe shared by the mid-ramp sample and the settled-state read.
+    // The conditional modal-open makes it work both pre-release (the flow leaves
+    // the modal open) and post-reopen (fresh page, modal closed). The bar width
+    // ratio is only meaningful while the card is visible; barOpacity covers the
+    // faded-out success state.
+    private static let selfTestCardJS = """
+        (() => {
+          if (document.querySelector('#settings-scrim')?.classList.contains('on') !== true) {
+            document.querySelector('#settings-btn')?.click();
+          }
+          const f = document.querySelector('#st-check-bar-fill');
+          const t = document.querySelector('#st-check-bar');
+          const fw = f ? parseFloat(getComputedStyle(f).width) : -1;
+          const tw = t ? parseFloat(getComputedStyle(t).width) : -1;
+          const out = {
+            desc: document.querySelector('#st-check-desc')?.textContent || '',
+            bar: (t && tw > 0) ? fw / tw : -1,
+            fillInline: f ? f.style.width : '',
+            barOpacity: t ? parseFloat(getComputedStyle(t).opacity) : -1,
+            btnDisabled: document.querySelector('#st-check-btn')?.disabled || false,
+            updateCard: document.querySelector('#st-update-card')?.hidden === false
+          };
+          document.querySelector('#settings-close')?.click();
+          return JSON.stringify(out);
+        })()
+        """
+
+    /// The self-test clicked the real check button: sample the card 200ms in —
+    /// mid-ramp (the ramp is 1.1s), and safely before the lifecycle's webview
+    /// release. The sync invariant under test: even if the result already
+    /// arrived, the desc must still say "Checking…" with the bar mid-fill.
+    private func armSelfTestCheckFlow() {
+        guard !selfTestFlowArmed else { return }
+        selfTestFlowArmed = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            if let w = self.web, self.loaded {
+                w.evaluateJavaScript(Self.selfTestCardJS) { d, _ in
+                    if let s = d as? String,
+                       var obj = (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] {
+                        obj["stage"] = "sample"
+                        self.selfTestCheckFlowSample = obj
+                    }
+                    self.selfTestSampleTaken = true
+                }
+            } else {
+                self.selfTestSampleTaken = true   // webview already released — nothing to sample
+            }
+        }
+    }
+
+    /// Terminal path of the update check (called from `updateCheckFoundNothing`,
+    /// `updateCheckFailed` and `didFindValidUpdate`). In the self-test: wait for
+    /// the ramp+hop margin so the card has fully settled, then read it.
+    private func selfTestCheckCompleted() {
+        guard isSelfTest, selfTestFlowArmed, !selfTestLandingArmed, !selfTestFlowResolved else { return }
+        selfTestLandingArmed = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            self?.landSelfTestCheck(attempts: 40)
+        }
+    }
+
+    private func landSelfTestCheck(attempts: Int) {
+        guard !selfTestFlowResolved else { return }
+        guard selfTestSampleTaken else {
+            guard attempts > 0 else { return resolveSelfTestFlow() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.landSelfTestCheck(attempts: attempts - 1)
+            }
+            return
+        }
+        guard let w = web, loaded else {
+            guard attempts > 0 else { return resolveSelfTestFlow() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.landSelfTestCheck(attempts: attempts - 1)
+            }
+            return
+        }
+        // A freshly reloaded page must have received its state push (didFinish) —
+        // otherwise the card is still in its idle state and the read is meaningless.
+        if let pushed = selfTestWebStatePushedAt, Date().timeIntervalSince(pushed) < 0.3 {
+            guard attempts > 0 else { return resolveSelfTestFlow() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.landSelfTestCheck(attempts: attempts - 1)
+            }
+            return
+        }
+        w.evaluateJavaScript(Self.selfTestCardJS) { [weak self] d, _ in
+            guard let self else { return }
+            if let s = d as? String,
+               var obj = (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] {
+                obj["stage"] = "done"
+                self.selfTestCheckFlow = obj
+            }
+            self.resolveSelfTestFlow()
+        }
+    }
+
+    private func resolveSelfTestFlow() {
+        selfTestFlowResolved = true
+        maybeFinishSelfTest()
     }
 
     private func runSelfTestLifecycleChecks(initialJson: String) {
@@ -3212,46 +3380,89 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             // 3. Re-open window -> fresh webview loads and renders real data.
             let reopenStart = Date()
             self.openApp()
-            self.pollReopenRender(reopenStart: reopenStart, attemptsLeft: 30) { reopenOk, reopenMs in
-                // 4. LaunchAgent install/remove round-trip (uses isolated label local.pulse.monitor.selftest).
-                var daemonRoundTripOk = false
-                if let node = findNodeFast() {
-                    let mgr = LaunchAgentManager.shared
-                    if case .success = mgr.installAndBootstrap(nodePath: node) {
-                        let installedOk = mgr.plistExists && mgr.isLoaded()
-                        _ = mgr.uninstall()
-                        let removedOk = !mgr.plistExists && !mgr.isLoaded()
-                        daemonRoundTripOk = installedOk && removedOk
+            self.pollReopenRender(reopenStart: reopenStart, attemptsLeft: 30) { [self] reopenOk, reopenMs in
+                // 4. Final output — runs exactly once, and only when BOTH the
+                // lifecycle checks and the check flow are done (the flow may
+                // arrive first, or be cut off by its timeout — the handler then
+                // reports what it has).
+                self.selfTestLifecycleDone = true
+                self.selfTestFinishHandler = {
+                    // LaunchAgent install/remove round-trip (uses isolated label local.pulse.monitor.selftest).
+                    var daemonRoundTripOk = false
+                    if let node = findNodeFast() {
+                        let mgr = LaunchAgentManager.shared
+                        if case .success = mgr.installAndBootstrap(nodePath: node) {
+                            let installedOk = mgr.plistExists && mgr.isLoaded()
+                            _ = mgr.uninstall()
+                            let removedOk = !mgr.plistExists && !mgr.isLoaded()
+                            daemonRoundTripOk = installedOk && removedOk
+                        }
                     }
-                }
-                let traceText = (try? String(contentsOfFile: BootTracer.shared.logPath, encoding: .utf8)) ?? ""
-                let traceOk = traceText.contains("stage=app_launch") &&
-                              traceText.contains("stage=first_render") &&
-                              traceText.contains("stage=window_reopen")
-                try? FileManager.default.removeItem(atPath: BootTracer.shared.logPath)
-                try? FileManager.default.removeItem(atPath: pulseDir + "/daemon-selftest.log")
+                    let traceText = (try? String(contentsOfFile: BootTracer.shared.logPath, encoding: .utf8)) ?? ""
+                    let traceOk = traceText.contains("stage=app_launch") &&
+                                  traceText.contains("stage=first_render") &&
+                                  traceText.contains("stage=window_reopen")
+                    try? FileManager.default.removeItem(atPath: BootTracer.shared.logPath)
+                    try? FileManager.default.removeItem(atPath: pulseDir + "/daemon-selftest.log")
 
-                restoreSettings()
-                var merged = (try? JSONSerialization.jsonObject(with: Data(initialJson.utf8)) as? [String: Any]) ?? [:]
-                merged["lifecycle"] = [
-                    "settingsVisible": settingsVisible,
-                    "settingsRoundTripOk": settingsRoundTripOk,
-                    "closedWindowHidden": closedWindowHidden,
-                    "closedWebReleased": closedWebReleased,
-                    "backendAliveWhileClosed": backendAliveWhileClosed,
-                    "reopenRenderOk": reopenOk,
-                    "reopenMs": reopenMs,
-                    "daemonRoundTripOk": daemonRoundTripOk,
-                    "bootTraceOk": traceOk,
-                ]
-                let outData = (try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])) ?? Data()
-                let outStr = String(data: outData, encoding: .utf8) ?? initialJson
-                let statusOk = self.status?.samples ?? 0
-                print("SELFTEST: " + outStr +
-                      " port=" + String(self.serverPort ?? -1) +
-                      " statusItemSamples=" + String(statusOk) +
-                      " statusItemImage=" + ((self.status?.item.button?.image != nil) ? "ok" : "missing"))
-                NSApp.terminate(nil)
+                    restoreSettings()
+                    var merged = (try? JSONSerialization.jsonObject(with: Data(initialJson.utf8)) as? [String: Any]) ?? [:]
+                    merged["lifecycle"] = [
+                        "settingsVisible": settingsVisible,
+                        "settingsRoundTripOk": settingsRoundTripOk,
+                        "closedWindowHidden": closedWindowHidden,
+                        "closedWebReleased": closedWebReleased,
+                        "backendAliveWhileClosed": backendAliveWhileClosed,
+                        "reopenRenderOk": reopenOk,
+                        "reopenMs": reopenMs,
+                        "daemonRoundTripOk": daemonRoundTripOk,
+                        "bootTraceOk": traceOk,
+                    ]
+                    // Check flow: the mid-ramp sample is the sync regression assertion;
+                    // the terminal state must have landed (bar full, or card swapped).
+                    let sample = self.selfTestCheckFlowSample
+                    if let sample { merged["checkFlowSample"] = sample }
+                    if let flow = self.selfTestCheckFlow {
+                        merged["checkFlow"] = flow
+                        if (flow["stage"] as? String) == "done" {
+                            // The inline fill width is the deterministic signal: it is
+                            // 92% (or sliding) while checking and only becomes 100% when
+                            // the result lands. The computed ratio lags the animation.
+                            var sampleOk = ((sample?["desc"] as? String) ?? "").contains("Checking for updates")
+                                && (sample?["btnDisabled"] as? Bool) == true
+                                && (sample?["fillInline"] as? String) != "100%"
+                            if let sBar = sample?["bar"] as? Double, sBar >= 0 {
+                                sampleOk = sampleOk && sBar < 0.99   // unmeasurable (-1) is fine; a measured value must be mid-ramp
+                            }
+                            let dBar = (flow["bar"] as? Double) ?? -1
+                            let dFill = flow["fillInline"] as? String ?? ""
+                            let dOpacity = (flow["barOpacity"] as? Double) ?? 1
+                            merged["checkFlowOk"] = sampleOk
+                                && (flow["btnDisabled"] as? Bool) == false
+                                && ((flow["updateCard"] as? Bool) == true || dBar >= 0.99 || dFill == "100%" || dOpacity < 0.5)
+                        } else {
+                            // Only the sample arrived (the webview was released mid-check,
+                            // e.g. offline): assert the sample alone, flag the gap.
+                            let sBar = (sample?["bar"] as? Double) ?? -1
+                            merged["checkFlowOk"] = ((sample?["desc"] as? String) ?? "").contains("Checking for updates")
+                                && (sample?["btnDisabled"] as? Bool) == true
+                                && (sample?["fillInline"] as? String) != "100%"
+                                && sBar < 0.99
+                            merged["checkFlowTimedOut"] = true
+                        }
+                    } else if self.selfTestCheckFlowSample != nil {
+                        merged["checkFlowTimedOut"] = true   // sample kept, terminal state lost
+                    }
+                    let outData = (try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])) ?? Data()
+                    let outStr = String(data: outData, encoding: .utf8) ?? initialJson
+                    let statusOk = self.status?.samples ?? 0
+                    print("SELFTEST: " + outStr +
+                          " port=" + String(self.serverPort ?? -1) +
+                          " statusItemSamples=" + String(statusOk) +
+                          " statusItemImage=" + ((self.status?.item.button?.image != nil) ? "ok" : "missing"))
+                    NSApp.terminate(nil)
+                }
+                self.maybeFinishSelfTest()
             }
         }
     }
@@ -3298,6 +3509,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pushSettingsToWeb()
         pushUpdateToWeb()
+        selfTestWebStatePushedAt = Date()
         if ProcessInfo.processInfo.environment["PULSE_AUTOCONFIRM"] == "1" {
             web?.evaluateJavaScript("window.__autoconfirm = true") { _, _ in }
         }

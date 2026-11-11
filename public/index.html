@@ -295,7 +295,7 @@
      the fill ramps to ~92% and holds until the real result lands, then
      completes and fades. In the error state it stays lit (orange) as the hint. */
   .s-bar { height: 3px; border-radius: 2px; background: var(--free); overflow: hidden; margin-top: 9px; opacity: 0; transition: opacity .45s; }
-  .s-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--net); transition: width 1.05s cubic-bezier(.25,.7,.35,1); }
+  .s-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--net); transition: width 1.1s cubic-bezier(.25,.7,.35,1); }
   .s-bar.err .s-bar-fill { background: var(--cpu); }
   .s-bar.slide .s-bar-fill { width: 45%; animation: sbar-slide 1.3s ease-in-out infinite alternate; }
   @keyframes sbar-slide { from { margin-left: 0; } to { margin-left: 55%; } }
@@ -306,11 +306,22 @@
     border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
     cursor: pointer; transition: color .14s, background .14s, border-color .14s;
   }
-  .s-act:disabled { opacity: .55; cursor: default; }
-  .s-act:disabled:hover { color: var(--dim); border-color: var(--border); }
+  .s-act {
+    background: none; border: 1px solid var(--border); color: var(--dim);
+    border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: color .14s, background .14s, border-color .14s;
+  }
   .s-act:hover { color: var(--text); border-color: #2f384c; }
   .s-act.accent { color: var(--net); border-color: rgba(45,212,167,.4); }
   .s-act.accent:hover { background: rgba(45,212,167,.1); }
+  /* Disabled (a check is in flight): muted + desaturated. Declared last and with
+     extra specificity so the hover/accent rules above can't re-lit it. */
+  button.s-act:disabled,
+  button.s-act:disabled:hover,
+  button.s-act.accent:disabled:hover {
+    color: var(--faint); border-color: var(--border); background: none;
+    opacity: .6; cursor: default;
+  }
   /* update notification card */
   .s-update-card {
     background: linear-gradient(135deg, rgba(45,212,167,.18) 0%, rgba(45,212,167,.1) 100%);
@@ -1884,25 +1895,32 @@ $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCac
  * progress window is suppressed for checks started from this card, which used to
  * flash open and closed faster than they could be read). `failed` marks a check
  * that errored — "couldn't check" must not render as "up to date". `checkedAt`
- * (epoch ms) backs the "· checked just now" confirmation that replaced the old
- * modal dialog. Web mode (browser, no app) never receives a push, so the card
+ * (epoch ms) backs the "· checked just now / at 14:32" line (relative while
+ * fresh, a clock time once it's an hour old) that replaced the old modal dialog. Web mode (browser, no app) never receives a push, so the card
  * renders from the snapshot's version, and a check click resolves to an
  * explanation after the minimum perceived duration instead of a silent no-op.
  */
 const hasAppBridge = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pulseSettings);
 let checkPhase = 'idle';        // idle | checking | ok | err
 let checkSlow = false;          // a long check: swap the fill for a sliding segment
+let checkStartAt = 0;           // Date.now() of the current check — the ramp's origin
+let checkPending = null;        // result that arrived mid-ramp: { phase, payload } to land together
 let checkSlowTimer = null;      // resolves a check that never lands (web mode / stuck fetch)
-let checkAgeTimer = null;       // re-renders the "· checked Xm ago" age while the modal is open
+let checkAgeTimer = null;       // re-renders the "· checked …" line while the modal is open
+const CHECK_RAMP_MS = 1100;     // the bar's ramp duration (keep in sync with the .s-bar-fill transition)
 const CHECK_SLOW_MS = 45000;    // "taking longer than expected" nudge (slow appcast fetch)
-const CHECK_FAKE_MS = 1300;     // artificial minimum duration so a fast check is still *seen*
+const CHECK_FAKE_MS = 1300;     // artificial minimum duration so a fast check is still *seen* (≥ ramp)
 
-function relAge(ms) {
+/* "When was the last successful check" — relative while fresh, a clock time once
+ * it's an hour old, a date+time once it's a day old. */
+function checkedWhen(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 60) return 'just now';
   if (s < 3600) return Math.floor(s / 60) + 'm ago';
-  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
+  const d = new Date(ms);
+  const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (s < 86400) return 'at ' + hm;
+  return 'on ' + d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' at ' + hm;
 }
 
 function clearCheckTimers() {
@@ -1928,7 +1946,7 @@ function renderCheckCard() {
   const fill = $('#st-check-bar-fill');
   cd.textContent = '';
   if (S.version) cd.append('You have v' + S.version + '. ');
-  const age = S.lastCheckAt ? ' · checked ' + relAge(S.lastCheckAt) : '';
+  const age = S.lastCheckAt ? ' · checked ' + checkedWhen(S.lastCheckAt) : '';
   if (checkPhase === 'checking') {
     cd.append(checkSlow ? 'Taking longer than expected — still checking…' : 'Checking for updates…');
     if (btn) { btn.textContent = 'Checking…'; btn.disabled = true; btn.title = ''; }
@@ -1953,29 +1971,49 @@ function renderCheckCard() {
     }
   }
   // The update card's button mirrors an in-flight check (its "Update to vX…" label is
-  // re-set by __pulseUpdate when a real result lands).
+  // re-set by applyCardSwap when a real result lands). The swap and the text render
+  // happen in the same frame (applyCardSwap follows every state-changing render).
   const ubtn = $('#st-update-btn');
   if (ubtn && checkPhase === 'checking') { ubtn.textContent = 'Checking…'; ubtn.disabled = true; }
   if (bar && fill) {
     bar.classList.toggle('err', checkPhase === 'err');
     if (checkPhase === 'checking') {
       bar.style.opacity = '1';
-      if (checkSlow) { bar.classList.add('slide'); }
-      else {
+      if (checkSlow) {
+        bar.classList.add('slide');
+        fill.style.width = '';                 // let the 45% sliding segment take over the inline 92%
+      } else {
         bar.classList.remove('slide');
-        fill.style.transition = 'none';     // restart from 0 without animating back from the old width
-        fill.style.width = '0%';
-        void fill.offsetWidth;
-        fill.style.transition = '';
-        fill.style.width = '92%';           // holds near-full until the real result completes it
+        if (fill.style.width !== '92%') {
+          // Restart the ramp from 0 — but only when this render actually starts a
+          // new ramp. Re-renders while already ramping (the app echoes `checking`
+          // back, the age ticker fires, …) must keep the ramp running, or the bar
+          // snaps back to empty mid-flight.
+          fill.style.transition = 'none';
+          fill.style.width = '0%';
+          void fill.offsetWidth;
+          fill.style.transition = '';
+        }
+        fill.style.width = '92%';              // ramps over CHECK_RAMP_MS, holds until the result lands
       }
     } else if (checkPhase === 'ok') {
       bar.style.opacity = '1';
       bar.classList.remove('slide');
+      fill.style.transition = 'width .22s ease-out';  // the final hop — quick, lands with the text
       fill.style.width = '100%';
-      setTimeout(() => { if (checkPhase === 'ok') bar.style.opacity = '0'; }, 900);
+      setTimeout(() => {
+        if (checkPhase !== 'ok') return;
+        bar.style.opacity = '0';               // fade out, keep the (reserved) slot so the card doesn't jump
+        fill.style.transition = '';
+      }, 550);
+    } else if (checkPhase === 'err') {
+      bar.style.opacity = '1';                 // stays lit (orange) as the failure hint until the next check
+      bar.classList.remove('slide');
+      fill.style.transition = 'width .22s ease-out';
+      fill.style.width = '100%';
+      fill.style.transition = '';
     } else {
-      bar.style.opacity = checkPhase === 'err' ? '1' : '0';
+      bar.style.opacity = '0';
       bar.classList.remove('slide');
       fill.style.transition = 'none';
       fill.style.width = '0%';
@@ -1987,27 +2025,15 @@ function renderCheckCard() {
 
 function startUpdateCheck() {
   if (checkPhase === 'checking') return;
+  checkPending = null;
+  checkSlow = false;
   checkPhase = 'checking';
+  checkStartAt = Date.now();
   renderCheckCard();
   armCheckTimers(postNativeSetting({ action: 'checkForUpdates' }));
 }
 
-window.__pulseUpdate = (d) => {
-  if (d) {
-    if (d.current) S.version = String(d.current);
-    if (d.checkedAt) S.lastCheckAt = +d.checkedAt;
-    if (d.checking) {
-      checkPhase = 'checking';
-      armCheckTimers(hasAppBridge);
-    } else if (d.checkedAt || d.available || d.failed || checkPhase === 'checking') {
-      // A completed check — or a result-less sync while checking, which the app's
-      // safety timer sends when a check was canceled or dropped: back out to a
-      // neutral idle (no bogus "up to date") rather than leaving the bar running.
-      clearCheckTimers();
-      checkPhase = d.failed ? 'err' : (d.checkedAt || d.available) ? 'ok' : 'idle';
-    }
-    renderCheckCard();
-  }
+function applyCardSwap(d) {
   if (d && d.available) {
     $('#st-update-card').hidden = false;
     $('#st-check-card').hidden = true;
@@ -2022,6 +2048,55 @@ window.__pulseUpdate = (d) => {
     $('#st-update-btn').textContent = 'Update…';
     $('#st-update-btn').disabled = false;
   }
+}
+
+/* A result that beat the ramp to the finish: once the bar's ramp completes, land
+ * the text and the bar in one frame so they read as a single gesture.
+ */
+function firePendingResult() {
+  checkSlowTimer = null;
+  if (!checkPending) return;
+  checkPhase = checkPending.phase;
+  const payload = checkPending.payload;
+  checkPending = null;
+  renderCheckCard();
+  applyCardSwap(payload);
+}
+
+window.__pulseUpdate = (d) => {
+  if (d) {
+    if (d.current) S.version = String(d.current);
+    if (d.checkedAt) S.lastCheckAt = +d.checkedAt;
+    if (d.checking) {
+      // A (re)started check: fresh ramp, any pending landing is superseded.
+      checkPending = null;
+      if (checkPhase !== 'checking') checkStartAt = Date.now();
+      checkPhase = 'checking';
+      checkSlow = false;
+      armCheckTimers(hasAppBridge);
+      renderCheckCard();
+    } else if (d.checkedAt || d.available || d.failed || checkPhase === 'checking') {
+      // A completed check — or a result-less sync while checking, which the app's
+      // safety timer sends when a check was canceled or dropped: back out to a
+      // neutral idle (no bogus "up to date") rather than leaving the bar running.
+      clearCheckTimers();
+      const phase = d.failed ? 'err' : (d.checkedAt || d.available) ? 'ok' : 'idle';
+      if (checkPhase === 'checking' && Date.now() - checkStartAt < CHECK_RAMP_MS) {
+        // The result landed before the bar's ramp finished (or supersedes a result
+        // that did — latest wins, same rule applies). Keep showing "Checking…"
+        // until the ramp does, then fire text + bar + card swap together.
+        checkPending = { phase, payload: d };
+        checkSlowTimer = setTimeout(firePendingResult, CHECK_RAMP_MS - (Date.now() - checkStartAt));
+        return;
+      }
+      checkPending = null;
+      checkPhase = phase;
+      renderCheckCard();
+    } else {
+      renderCheckCard();
+    }
+  }
+  applyCardSwap(d);
 };
 $('#st-update-btn').addEventListener('click', startUpdateCheck);
 $('#st-check-btn').addEventListener('click', startUpdateCheck);
