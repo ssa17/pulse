@@ -290,12 +290,24 @@
   button.sw[aria-checked="true"] .knob { transform: translateX(16px); background: var(--net); }
   button.sw:hover { border-color: #495673; }
   button.sw[aria-checked="true"]:hover { border-color: #4ce3b8; }
-  /* segmented control */
+  /* Updates-card check progress: 3px track under the row. The slot is always
+     reserved (faded with opacity, never removed) so the card doesn't jump;
+     the fill ramps to ~92% and holds until the real result lands, then
+     completes and fades. In the error state it stays lit (orange) as the hint. */
+  .s-bar { height: 3px; border-radius: 2px; background: var(--free); overflow: hidden; margin-top: 9px; opacity: 0; transition: opacity .45s; }
+  .s-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--net); transition: width 1.05s cubic-bezier(.25,.7,.35,1); }
+  .s-bar.err .s-bar-fill { background: var(--cpu); }
+  .s-bar.slide .s-bar-fill { width: 45%; animation: sbar-slide 1.3s ease-in-out infinite alternate; }
+  @keyframes sbar-slide { from { margin-left: 0; } to { margin-left: 55%; } }
+  .up-ok { color: var(--net); font-weight: 600; }
+  .up-err { color: var(--cpu); font-weight: 600; }
   .s-act {
     background: none; border: 1px solid var(--border); color: var(--dim);
     border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
     cursor: pointer; transition: color .14s, background .14s, border-color .14s;
   }
+  .s-act:disabled { opacity: .55; cursor: default; }
+  .s-act:disabled:hover { color: var(--dim); border-color: var(--border); }
   .s-act:hover { color: var(--text); border-color: #2f384c; }
   .s-act.accent { color: var(--net); border-color: rgba(45,212,167,.4); }
   .s-act.accent:hover { background: rgba(45,212,167,.1); }
@@ -304,6 +316,7 @@
     background: linear-gradient(135deg, rgba(45,212,167,.18) 0%, rgba(45,212,167,.1) 100%);
     border: 1px solid rgba(45,212,167,.4);
   }
+  /* segmented control */
   .s-seg {
     display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
     background: #10131b; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
@@ -540,7 +553,7 @@
             <div class="s-title">
               New update available <span class="s-pill active" id="st-update-badge">v…</span>
             </div>
-            <div class="s-desc">You have <b id="st-current-ver">v</b>. A new version <b id="st-update-ver">v…</b> is ready — install it any time.</div>
+            <div class="s-desc">You have <b id="st-current-ver">v</b>. A new version <b id="st-update-ver" class="up-ok">v…</b> is ready — install it any time.</div>
           </div>
           <button class="s-act accent" id="st-update-btn" style="margin-top:2px">Update…</button>
         </div>
@@ -549,10 +562,11 @@
         <div class="s-row">
           <div class="s-info">
             <div class="s-title">Updates</div>
-            <div class="s-desc" id="st-check-desc" style="margin-top:6px">Up to date</div>
+            <div class="s-desc" id="st-check-desc" style="margin-top:6px"></div>
           </div>
           <button class="s-act" id="st-check-btn">Check for Updates…</button>
         </div>
+        <div class="s-bar" id="st-check-bar"><div class="s-bar-fill" id="st-check-bar-fill"></div></div>
       </div>
       <div class="s-card">
         <div class="s-row">
@@ -633,7 +647,7 @@ const S = {
   sysHist: { cpu: [], net: [], disk: [], gpu: [], wired: [], comp: [], cache: [] },
   search: '',
   version: null,         // snapshot's app version — the header and the Updates card both show it
-  lastCheckAt: null,     // epoch ms of the last manual update check (pushed by the app)
+  lastCheckAt: null,     // epoch ms of the last completed check (pushed by the app)
   showAll: { cpu: false, mem: false },
   drawerKey: null,
   closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
@@ -1835,6 +1849,10 @@ function setSettingsModal(open) {
     }
     renderSettingsUI();
     renderCheckCard();
+    // Keep the "· checked Xm ago" age fresh while the modal is open.
+    if (!checkAgeTimer) checkAgeTimer = setInterval(() => { if (settingsOpen) renderCheckCard(); }, 15000);
+  } else {
+    if (checkAgeTimer) { clearInterval(checkAgeTimer); checkAgeTimer = null; }
   }
 }
 
@@ -1860,11 +1878,25 @@ $('#mem-info').addEventListener('click', (e) => {
   setMemPop(!memPop);
 });
 $('#mem-purge').addEventListener('click', (e) => { e.stopPropagation(); purgeCache(); });
-/* The app pushes { current, available?, checkedAt? } after load and after every
- * update-state change; web mode never receives one, so the Updates card also
- * renders from the snapshot's version. `checkedAt` is the inline confirmation
- * that replaced the old modal “you're up to date” macOS dialog.
+/* The app pushes { current, available?, checkedAt?, checking?, failed? } after
+ * load and after every update-state change. `checking` is true while an appcast
+ * check is in flight — it drives the card's inline progress bar (the stock macOS
+ * progress window is suppressed for checks started from this card, which used to
+ * flash open and closed faster than they could be read). `failed` marks a check
+ * that errored — "couldn't check" must not render as "up to date". `checkedAt`
+ * (epoch ms) backs the "· checked just now" confirmation that replaced the old
+ * modal dialog. Web mode (browser, no app) never receives a push, so the card
+ * renders from the snapshot's version, and a check click resolves to an
+ * explanation after the minimum perceived duration instead of a silent no-op.
  */
+const hasAppBridge = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pulseSettings);
+let checkPhase = 'idle';        // idle | checking | ok | err
+let checkSlow = false;          // a long check: swap the fill for a sliding segment
+let checkSlowTimer = null;      // resolves a check that never lands (web mode / stuck fetch)
+let checkAgeTimer = null;       // re-renders the "· checked Xm ago" age while the modal is open
+const CHECK_SLOW_MS = 45000;    // "taking longer than expected" nudge (slow appcast fetch)
+const CHECK_FAKE_MS = 1300;     // artificial minimum duration so a fast check is still *seen*
+
 function relAge(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 60) return 'just now';
@@ -1872,16 +1904,108 @@ function relAge(ms) {
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
 }
-function renderCheckCard() {
-  const cd = $('#st-check-desc');
-  if (!cd) return;
-  cd.textContent = (S.version ? 'You have v' + S.version + '. ' : '')
-    + 'Up to date' + (S.lastCheckAt ? ' · checked ' + relAge(S.lastCheckAt) : '');
+
+function clearCheckTimers() {
+  if (checkSlowTimer) { clearTimeout(checkSlowTimer); checkSlowTimer = null; }
+  checkSlow = false;
 }
+
+function armCheckTimers(bridged) {
+  clearCheckTimers();
+  checkSlowTimer = setTimeout(() => {
+    if (checkPhase !== 'checking') return;
+    if (bridged) { checkSlow = true; renderCheckCard(); }                       // still alive, just slow
+    else { checkPhase = 'err'; checkSlow = false; renderCheckCard(); }          // no app ran the check
+  }, bridged ? CHECK_SLOW_MS : CHECK_FAKE_MS);
+}
+
+function renderCheckCard() {
+  const card = $('#st-check-card');
+  const cd = $('#st-check-desc');
+  if (!card || !cd) return;
+  const btn = $('#st-check-btn');
+  const bar = $('#st-check-bar');
+  const fill = $('#st-check-bar-fill');
+  cd.textContent = '';
+  if (S.version) cd.append('You have v' + S.version + '. ');
+  const age = S.lastCheckAt ? ' · checked ' + relAge(S.lastCheckAt) : '';
+  if (checkPhase === 'checking') {
+    cd.append(checkSlow ? 'Taking longer than expected — still checking…' : 'Checking for updates…');
+    if (btn) { btn.textContent = 'Checking…'; btn.disabled = true; btn.title = ''; }
+  } else if (checkPhase === 'err') {
+    const m = document.createElement('span');
+    m.className = 'up-err';
+    m.textContent = hasAppBridge ? "Couldn't check for updates — try again" : 'Update checks run from the Pulse app — open it to check';
+    cd.append(m);
+    if (btn) { btn.textContent = hasAppBridge ? 'Try again' : 'Check for Updates…'; btn.disabled = false; btn.title = ''; }
+  } else if (checkPhase === 'ok') {
+    const m = document.createElement('span');
+    m.className = 'up-ok';
+    m.textContent = 'Up to date';
+    cd.append(m);
+    if (age) cd.append(document.createTextNode(age));
+    if (btn) { btn.textContent = 'Check for Updates…'; btn.disabled = false; btn.title = ''; }
+  } else { // idle — no check has completed this session: state the facts, no claim
+    if (btn) {
+      btn.textContent = 'Check for Updates…';
+      btn.disabled = false;
+      btn.title = hasAppBridge ? '' : 'Update checks run from the Pulse app';
+    }
+  }
+  // The update card's button mirrors an in-flight check (its "Update to vX…" label is
+  // re-set by __pulseUpdate when a real result lands).
+  const ubtn = $('#st-update-btn');
+  if (ubtn && checkPhase === 'checking') { ubtn.textContent = 'Checking…'; ubtn.disabled = true; }
+  if (bar && fill) {
+    bar.classList.toggle('err', checkPhase === 'err');
+    if (checkPhase === 'checking') {
+      bar.style.opacity = '1';
+      if (checkSlow) { bar.classList.add('slide'); }
+      else {
+        bar.classList.remove('slide');
+        fill.style.transition = 'none';     // restart from 0 without animating back from the old width
+        fill.style.width = '0%';
+        void fill.offsetWidth;
+        fill.style.transition = '';
+        fill.style.width = '92%';           // holds near-full until the real result completes it
+      }
+    } else if (checkPhase === 'ok') {
+      bar.style.opacity = '1';
+      bar.classList.remove('slide');
+      fill.style.width = '100%';
+      setTimeout(() => { if (checkPhase === 'ok') bar.style.opacity = '0'; }, 900);
+    } else {
+      bar.style.opacity = checkPhase === 'err' ? '1' : '0';
+      bar.classList.remove('slide');
+      fill.style.transition = 'none';
+      fill.style.width = '0%';
+      void fill.offsetWidth;
+      fill.style.transition = '';
+    }
+  }
+}
+
+function startUpdateCheck() {
+  if (checkPhase === 'checking') return;
+  checkPhase = 'checking';
+  renderCheckCard();
+  armCheckTimers(postNativeSetting({ action: 'checkForUpdates' }));
+}
+
 window.__pulseUpdate = (d) => {
   if (d) {
     if (d.current) S.version = String(d.current);
     if (d.checkedAt) S.lastCheckAt = +d.checkedAt;
+    if (d.checking) {
+      checkPhase = 'checking';
+      armCheckTimers(hasAppBridge);
+    } else if (d.checkedAt || d.available || d.failed || checkPhase === 'checking') {
+      // A completed check — or a result-less sync while checking, which the app's
+      // safety timer sends when a check was canceled or dropped: back out to a
+      // neutral idle (no bogus "up to date") rather than leaving the bar running.
+      clearCheckTimers();
+      checkPhase = d.failed ? 'err' : (d.checkedAt || d.available) ? 'ok' : 'idle';
+    }
     renderCheckCard();
   }
   if (d && d.available) {
@@ -1891,14 +2015,16 @@ window.__pulseUpdate = (d) => {
     $('#st-update-ver').textContent = 'v' + d.available;
     $('#st-update-badge').textContent = 'v' + d.available;
     $('#st-update-btn').textContent = 'Update to v' + d.available + '…';
+    $('#st-update-btn').disabled = false;
   } else {
     $('#st-update-card').hidden = true;
     $('#st-check-card').hidden = false;
     $('#st-update-btn').textContent = 'Update…';
+    $('#st-update-btn').disabled = false;
   }
 };
-$('#st-update-btn').addEventListener('click', () => postNativeSetting({ action: 'checkForUpdates' }));
-$('#st-check-btn').addEventListener('click', () => postNativeSetting({ action: 'checkForUpdates' }));
+$('#st-update-btn').addEventListener('click', startUpdateCheck);
+$('#st-check-btn').addEventListener('click', startUpdateCheck);
 
 $('#settings-btn').addEventListener('click', (e) => {
   e.stopPropagation();

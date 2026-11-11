@@ -194,7 +194,10 @@ not an app.
   popover (clicks `#mem-info` → reads `#mempop` open + `#pop-wired`, `#pop-comp`,
   `#pop-cache`, `#pop-webkit-note` → closes it), exercises the in-dashboard
   Settings modal (`#settings-btn` → `#settings-scrim.on` → `#settings-close`,
-  reported as `dashboardSettingsOk`), and runs lifecycle checks in
+  reported as `dashboardSettingsOk`), exercises the Updates card (fake
+  `window.__pulseUpdate` with an `available` version → `#st-update-card` shows
+  with "Update to vX…" → restore → `#st-check-card` shows, reported as
+  `updatesCardOk`), and runs lifecycle checks in
   `lifecycle`: native Settings window open + `settings.json` migration/round-trip
   (`settingsVisible`, `settingsRoundTripOk`), window close keeping backend alive
   while releasing the webview (`closedWindowHidden`, `closedWebReleased`,
@@ -221,22 +224,31 @@ not an app.
   (`updateStrip.isHidden`), the status-menu "Update to vX…" row
   (`StatusController.showUpdateRow`), the native Settings Updates card
   (`SettingsWindowController.syncFromState` — Current/Latest versions +
-  "Available" badge), and the dashboard via `pushUpdateToWeb()` →
-  `window.__pulseUpdate({ current, available?, checkedAt? })` in `index.html`
-  (non-null `available` shows `#st-update-card` with both versions +
-  "Update to vX…"; null shows `#st-check-card`, whose description renders
-  "You have vX. Up to date · checked <age>" from `current`/`checkedAt` —
-  web mode never receives a push, so the card renders from the snapshot's
-  `version` instead). `checkedAt` (epoch ms) is set only by
-  `QuietUserDriver.showUpdateNotFoundWithError` when a *manual* check finds
-  nothing: the stock driver's modal "you're up to date" alert is replaced by
-  that inline confirmation (real check failures still get the stock error
-  alert). `didFinish` re-pushes both settings and update state on
-  every webview (re)load so the dashboard agrees with the other surfaces.
-  A *declined* real update keeps its indicators until installed (Sparkle
-  re-offers at the next launch; the thin strip is the persistent signal).
-  A failed check (`didNotFindUpdate(_:error:)`) keeps the previous state —
-  "couldn't check" is not "up to date".
+  "Available" badge, plus a "Checking…" button state while a check runs), and
+  the dashboard via `pushUpdateToWeb()` →
+  `window.__pulseUpdate({ current, available?, checkedAt?, checking, failed? })`
+  in `index.html` (non-null `available` shows `#st-update-card` with both
+  versions + "Update to vX…"; otherwise `#st-check-card` renders the
+  `#st-check-desc` state). Dashboard card check lifecycle: `checking` is true
+  while an appcast check is in flight — the card animates its own 3px progress
+  bar (ramps to ~92%, holds, completes and fades on a success, stays lit orange
+  on `failed`), and `QuietUserDriver` **suppresses the stock progress window for
+  checks started from the card** (`shell.checkFromWeb`) — on a fast appcast
+  fetch it flashed open and closed faster than it could be read; checks started
+  from the menu/strip/Settings keep the stock window. `failed` distinguishes a
+  check that errored from one that found nothing — the card says "couldn't
+  check" in orange instead of claiming up to date. `checkedAt` (epoch ms) is
+  stamped by `updateCheckFoundNothing()` for *any* completed check that found
+  nothing (launch, hourly scheduled, manual) and backs the green "Up to date ·
+  checked <age>" line (web mode never receives a push, so the card renders from
+  the snapshot's `version` and a check click resolves to an "update checks run
+  from the Pulse app" explanation). The stock driver's modal "you're up to
+  date" alert is suppressed in `QuietUserDriver.showUpdateNotFoundWithError`
+  (real check failures still get the stock error alert). `didFinish` re-pushes
+  both settings and update state on every webview (re)load so the dashboard
+  agrees with the other surfaces. A *declined* real update keeps its indicators
+  until installed (Sparkle re-offers at the next launch; the thin strip is the
+  persistent signal).
   **Do not remove the version guard** — it only misbehaves in the mismatched
   build-number case, so it is invisible in ordinary builds and easy to mistake
   for dead code.

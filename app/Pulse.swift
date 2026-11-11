@@ -1976,14 +1976,26 @@ final class SettingsWindowController: NSObject {
             updateLatestVerLabel.stringValue = "v\(ver)"
             updateLatestVerLabel.textColor = accentGreen
             updateStatusBadge.stringValue = "Available"
+            updateStatusBadge.textColor = accentGreen
             updateStatusBadge.isHidden = false
             updateCheckButton.title = "Update to v\(ver)…"
+            updateCheckButton.isEnabled = true
+        } else if shell.updateChecking {
+            updateLatestVerLabel.stringValue = "v\(currentVer)"
+            updateLatestVerLabel.textColor = textCol
+            updateStatusBadge.stringValue = "Checking…"
+            updateStatusBadge.textColor = accentOrange
+            updateStatusBadge.isHidden = false
+            updateCheckButton.title = "Checking…"
+            updateCheckButton.isEnabled = false
         } else {
             updateLatestVerLabel.stringValue = "v\(currentVer)"
             updateLatestVerLabel.textColor = textCol
             updateStatusBadge.stringValue = "Up to date"
+            updateStatusBadge.textColor = accentGreen
             updateStatusBadge.isHidden = true
             updateCheckButton.title = "Check for Updates…"
+            updateCheckButton.isEnabled = true
         }
         rebuildMenuRowsUI()
     }
@@ -2086,7 +2098,7 @@ final class QuietUserDriver: NSObject, SPUUserDriver {
     /// The one interaction replaced. “No newer version” is a non-event: record
     /// it for the dashboard and acknowledge without a modal. Checks that failed
     /// for a real reason (network, OS/hardware mismatch) still get the stock
-    /// error alert.
+    /// error alert — and the dashboard is told the check failed.
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
         let raw = (error as NSError).userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber
         let reason = raw.map { SPUNoUpdateFoundReason(rawValue: OSStatus($0.intValue)) }
@@ -2094,6 +2106,7 @@ final class QuietUserDriver: NSObject, SPUUserDriver {
             shell.updateCheckFoundNothing()
             acknowledgement()
         } else {
+            shell.updateCheckFailed()
             inner.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement)
         }
     }
@@ -2105,7 +2118,14 @@ final class QuietUserDriver: NSObject, SPUUserDriver {
         inner.show(request, reply: reply)
     }
 
+    /// The stock driver shows an indeterminate progress window for user-initiated
+    /// checks. When the check came from the dashboard's Updates card we skip it:
+    /// the card animates its own progress bar over the same interval, and on a
+    /// fast appcast fetch the stock window just flashes open and closed before
+    /// the check can be read. Checks started elsewhere (menu, strip, Settings —
+    /// typically with the dashboard closed) keep the stock window.
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        if shell.checkFromWeb { return }
         inner.showUserInitiatedUpdateCheck(cancellation: cancellation)
     }
 
@@ -2186,7 +2206,11 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var updater: SPUUpdater!
     var updateDriver: QuietUserDriver!   // retained here — the updater may only reference it
     var pendingUpdateVersion: String?   // newest appcast version not yet installed
-    var lastCheckAtMs: Int?             // epoch ms of the last manual check that found nothing
+    var lastCheckAtMs: Int?             // epoch ms of the last completed check that found nothing
+    var updateChecking = false          // a check is in flight — drives the “Checking…” states
+    var lastCheckFailed = false         // the last check errored — “couldn't check” ≠ “up to date”
+    var checkFromWeb = false            // the in-flight check was initiated from the dashboard card
+    var checkSafetyTimer: Timer?        // a canceled/dropped check never gets a result callback
     let updateStrip = ClickableView()
     var activityToken: NSObjectProtocol?
     let darkBg = NSColor(red: 0.043, green: 0.055, blue: 0.07, alpha: 1)
@@ -2505,6 +2529,32 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     @objc func checkForUpdates() {
+        startUpdateCheck(fromWeb: false)
+    }
+
+    /// Starts a Sparkle appcast check. `fromWeb` records which UI initiated it:
+    /// a check from the dashboard's Updates card reports progress on the card's own
+    /// progress bar, so the stock progress window is suppressed (it flashed open and
+    /// closed faster than it could be read on a fast appcast fetch — see
+    /// QuietUserDriver). Checks started from the menu, strip or the Settings window
+    /// keep the stock window as their feedback. (Deliberately not named like
+    /// `checkForUpdates` — the `#selector` menu wiring must stay unambiguous.)
+    func startUpdateCheck(fromWeb: Bool) {
+        guard !updateChecking else { return }
+        updateChecking = true
+        checkFromWeb = fromWeb
+        setUpdateIndicators()
+        // Sparkle has no delegate callback for a *canceled* check, so a canceled
+        // or dropped check would otherwise leave the in-flight states (and every
+        // surface's “Checking…” UI) stuck. By the time this fires the appcast
+        // fetch timeout (~60s) has long passed — a real check always completed.
+        checkSafetyTimer?.invalidate()
+        checkSafetyTimer = Timer.scheduledTimer(withTimeInterval: 90, repeats: false) { [weak self] _ in
+            guard let self, self.updateChecking else { return }
+            self.updateChecking = false
+            self.checkFromWeb = false
+            self.setUpdateIndicators()   // sync without a result — the card goes back to neutral
+        }
         updater.checkForUpdates()
     }
 
@@ -2551,25 +2601,46 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         guard let w = web, loaded else { return }
         let current = (Bundle.main.object(forInfoDictionaryKey:
             "CFBundleShortVersionString") as? String) ?? "1.0"
-        // `current` always rides along — the "up to date" card shows it too;
-        // `checkedAt` backs the card's “· checked just now” confirmation.
-        var payload: [String: Any] = ["current": current]
+        // `current` always rides along — the "up to date" card shows it too.
+        // `checking` drives the card's inline progress bar while a check is in
+        // flight; `failed` lets it say "couldn't check" instead of claiming
+        // "up to date"; `checkedAt` backs the “· checked just now” confirmation.
+        var payload: [String: Any] = ["current": current, "checking": updateChecking]
         if let available = pendingUpdateVersion {
             payload["available"] = available
         }
         if let checkedAt = lastCheckAtMs {
             payload["checkedAt"] = checkedAt
         }
+        if lastCheckFailed {
+            payload["failed"] = true
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
         w.evaluateJavaScript("window.__pulseUpdate && window.__pulseUpdate(\(json))", completionHandler: nil)
     }
 
-    /// Final feedback for a manual check that found nothing to install. The stock
-    /// driver used to end in a modal “you're up to date” alert requiring an OK
-    /// click for nothing — the dashboard's Updates card confirms it inline instead.
+    /// Final feedback for a check that completed with nothing to install: clears
+    /// the in-flight/failed states, stamps the check time, and re-renders every
+    /// surface. The dashboard's Updates card turns this into its inline “up to
+    /// date · checked just now” confirmation (which replaced the stock modal alert).
     func updateCheckFoundNothing() {
+        checkSafetyTimer?.invalidate()
+        updateChecking = false
+        checkFromWeb = false
+        lastCheckFailed = false
         lastCheckAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        setUpdateIndicators()
+    }
+
+    /// A check that failed (network, feed, OS mismatch): availability keeps its
+    /// previous state — a failed check is not “up to date” — but every surface
+    /// learns the check itself errored so the card stops claiming “up to date”.
+    func updateCheckFailed() {
+        checkSafetyTimer?.invalidate()
+        updateChecking = false
+        checkFromWeb = false
+        lastCheckFailed = true
         setUpdateIndicators()
     }
 
@@ -2585,6 +2656,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     // next launch — and the quiet strip/menu row remain as a persistent signal until the
     // installed version actually changes.
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        checkSafetyTimer?.invalidate()
+        updateChecking = false
+        checkFromWeb = false
+        lastCheckFailed = false
         // Guard at the source: Sparkle can call this even when the appcast entry equals
         // the installed version (e.g. a dev build whose marketing version was already
         // bumped for a release, but whose build number wasn't). Never advertise a
@@ -2599,11 +2674,15 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
         pendingUpdateVersion = nil
-        setUpdateIndicators()
+        // Covers launch, scheduled and manual checks alike: any completed check that
+        // found nothing stamps `lastCheckAtMs` so the card's “· checked <age>” is true.
+        updateCheckFoundNothing()
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
-        // A failed check is not “up to date” — keep the previous state.
+        // A failed check is not “up to date” — keep the previous state, and let the
+        // dashboard say the check failed instead of claiming current.
+        updateCheckFailed()
     }
 
     func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice, forUpdate item: SUAppcastItem, state: SPUUserUpdateState) {
@@ -2641,7 +2720,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             case "setMenuRows":
                 if let val = body["rows"] as? [String] { setMenuLayout(menu: val, bar: body["bar"] as? [String] ?? settings.barRows) }
             case "checkForUpdates":
-                checkForUpdates()
+                startUpdateCheck(fromWeb: true)
             default:
                 break
             }
@@ -3042,6 +3121,18 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
           const dashboardSettingsOpen = document.querySelector('#settings-scrim')?.classList.contains('on') || false;
           document.querySelector('#settings-close')?.click();
           const dashboardSettingsClosed = !document.querySelector('#settings-scrim')?.classList.contains('on');
+          // Updates card: fake a found update through the same handler the app uses
+          // (web-only — the app's Sparkle state is untouched), verify the card swap
+          // and the button label, then restore the real version.
+          const realVer = (document.querySelector('#ver')?.textContent || '').replace(/^v/, '');
+          window.__pulseUpdate && window.__pulseUpdate({ current: realVer + '-x', available: realVer + '-x' });
+          const updBtnText = document.querySelector('#st-update-btn')?.textContent || '';
+          const updateCardSwaps = realVer !== ''
+            && !document.querySelector('#st-update-card')?.hidden
+            && document.querySelector('#st-check-card')?.hidden
+            && updBtnText.includes(realVer);
+          window.__pulseUpdate && window.__pulseUpdate({ current: realVer });
+          const checkCardRestored = !document.querySelector('#st-check-card')?.hidden;
           return JSON.stringify({
             machine: document.querySelector('#machine')?.textContent,
             ver: document.querySelector('#ver')?.textContent,
@@ -3051,6 +3142,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             live: document.querySelector('#live-text')?.textContent,
             confirmWired, drawerRows, memInfo,
             dashboardSettingsOk: dashboardSettingsOpen && dashboardSettingsClosed,
+            updatesCardOk: updateCardSwaps && checkCardRestored,
             purgeBtn: !!document.querySelector('#mem-purge')
           });
         })()
