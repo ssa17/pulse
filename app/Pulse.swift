@@ -1991,6 +1991,17 @@ final class SettingsWindowController: NSObject {
             updateStatusBadge.isHidden = false
             updateCheckButton.title = "Checking…"
             updateCheckButton.isEnabled = false
+        } else if shell.lastCheckFailed {
+            // A failed check is not "up to date" — the web card says "Couldn't
+            // check" in this state; the badge must agree (the last successful
+            // check's time would be a false claim).
+            updateLatestVerLabel.stringValue = "v\(currentVer)"
+            updateLatestVerLabel.textColor = textCol
+            updateStatusBadge.stringValue = "Couldn't check"
+            updateStatusBadge.textColor = accentOrange
+            updateStatusBadge.isHidden = false
+            updateCheckButton.title = "Try again"
+            updateCheckButton.isEnabled = true
         } else {
             updateLatestVerLabel.stringValue = "v\(currentVer)"
             updateLatestVerLabel.textColor = textCol

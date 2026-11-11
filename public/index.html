@@ -1997,15 +1997,22 @@ function renderCheckCard() {
         fill.style.width = '92%';              // ramps over CHECK_RAMP_MS, holds until the result lands
       }
     } else if (checkPhase === 'ok') {
-      bar.style.opacity = '1';
-      bar.classList.remove('slide');
-      fill.style.transition = 'width .22s ease-out';  // the final hop — quick, lands with the text
-      fill.style.width = '100%';
-      setTimeout(() => {
-        if (checkPhase !== 'ok') return;
-        bar.style.opacity = '0';               // fade out, keep the (reserved) slot so the card doesn't jump
-        fill.style.transition = '';
-      }, 550);
+      // One-shot landing: the final hop + fade runs only when the bar actually
+      // lands (from the 92% hold or the slide). Re-renders while already landed
+      // — the 15s age ticker, a modal reopen — must leave the faded bar alone,
+      // or it pulses back to life every 15s. A *new* check always re-ramps the
+      // fill to 92% first, so any real landing always sees '92%' here.
+      if (fill.style.width !== '100%') {
+        bar.style.opacity = '1';
+        bar.classList.remove('slide');
+        fill.style.transition = 'width .22s ease-out';  // the final hop — quick, lands with the text
+        fill.style.width = '100%';
+        setTimeout(() => {
+          if (checkPhase !== 'ok') return;
+          bar.style.opacity = '0';               // fade out, keep the (reserved) slot so the card doesn't jump
+          fill.style.transition = '';
+        }, 550);
+      }
     } else if (checkPhase === 'err') {
       bar.style.opacity = '1';                 // stays lit (orange) as the failure hint until the next check
       bar.classList.remove('slide');

@@ -233,7 +233,10 @@ not an app.
   (`updateStrip.isHidden`), the status-menu "Update to vX…" row
   (`StatusController.showUpdateRow`), the native Settings Updates card
   (`SettingsWindowController.syncFromState` — Current/Latest versions +
-  "Available" badge, plus a "Checking…" button state while a check runs), and
+  "Available" badge, a "Checking…" disabled button while a check runs, an
+  orange "Couldn't check" badge after a failed check — a failure must never
+  render as the up-to-date stamp — and a green "Up to date · HH:mm" badge from
+  the last successful check's time), and
   the dashboard via `pushUpdateToWeb()` →
   `window.__pulseUpdate({ current, available?, checkedAt?, checking, failed? })`
   in `index.html` (non-null `available` shows `#st-update-card` with both
@@ -243,7 +246,9 @@ not an app.
   bar (ramps to ~92% over 1.1s, holds, completes and fades on a success, stays
   lit orange on `failed`; the ramp is only re-armed on an actual phase change —
   re-renders while ramping must keep the in-flight animation, or the bar
-  visibly snaps back to empty), and `QuietUserDriver` **suppresses the stock
+  visibly snaps back to empty — and the success fade is one-shot: re-renders
+  while already landed (the 15s age ticker, a modal reopen) must leave the
+  faded bar alone, or it pulses back to life every 15s), and `QuietUserDriver` **suppresses the stock
   progress window for checks started from the card** (`shell.checkFromWeb`) —
   on a fast appcast fetch it flashed open and closed faster than it could be
   read; checks started from the menu/strip/Settings keep the stock window. A result that

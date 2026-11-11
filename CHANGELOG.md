@@ -21,6 +21,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ### Fixed
 - Dashboard: a failed update check now says “Couldn’t check for updates” in the Updates card instead of silently keeping a stale “up to date” claim
+- Dashboard: the Updates card progress bar no longer pulses back to life every 15s after a check completes — it fades out once and stays out until the next check
+- Settings: after a failed check the Updates badge now says “Couldn’t check” instead of a stale “Up to date” stamp
 - Settings: when you're on the latest version, the Updates card shows “You have vX — up to date” instead of a ghost “New update available” card with empty versions (the card's hidden state was defeated by its styling, so it lingered with placeholder text)
 - Settings: a manual update check that finds nothing no longer pops a macOS “you're up to date” dialog you must click OK on — the Updates card confirms it inline instead ("You have v1.4. Up to date · checked just now")
 - Dashboard: the updates section re-syncs when the window re-opens, so it always agrees with the menu bar and the app's Settings
