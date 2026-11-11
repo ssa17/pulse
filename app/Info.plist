@@ -30,6 +30,12 @@
 	<!-- Sparkle auto-update: where to fetch the appcast (list of releases). -->
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/ssa17/pulse/main/releases/appcast.xml</string>
+	<!-- Sparkle auto-update: enable the scheduled background checks. Sparkle 2 renamed
+	     the 1.x SUAutomaticallyCheckForUpdates key to SUEnableAutomaticChecks —
+	     without it SPUUpdater never auto-checks (manual checks still work), so the
+	     "hourly" interval below was silently dead in every release. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<!-- Sparkle auto-update: how often (seconds) to fetch the appcast when no update
 	     is pending. Sparkle's default is 24h; hourly so new releases appear within the hour.
 	     A user-chosen value (defaults write … SUScheduledCheckInterval) overrides this. -->

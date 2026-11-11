@@ -219,7 +219,13 @@ not an app.
   WKUIDelegate handles it — Pulse.swift renders native NSAlerts (without this the
   kill / quit buttons appear to do nothing). In web mode the browser's own dialogs
   are used.
-- **Update availability (Sparkle ⇄ every UI surface)**: `Pulse.swift` keeps one
+- **Update availability (Sparkle ⇄ every UI surface)**: the updater is a raw
+  `SPUUpdater` with Pulse's own `QuietUserDriver` (no `SPUStandardUpdaterController`),
+  so the app must provide Sparkle 2's config keys itself: `SUFeedURL` +
+  `SUPublicEDKey` (feed/EdDSA) and `SUEnableAutomaticChecks` (the Sparkle 2 name —
+  the 1.x `SUAutomaticallyCheckForUpdates` legacy mapping is what silently left
+  every release without scheduled checks until it was added) with
+  `SUScheduledCheckInterval = 3600` (hourly). `Pulse.swift` keeps one
   app-side state, `pendingUpdateVersion: String?` — the newest appcast version
   not yet installed, or nil when up to date. Sparkle's `didFindValidUpdate`
   delegate sets it, but **guarded**: the version is only stored when it is

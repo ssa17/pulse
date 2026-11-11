@@ -21,6 +21,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Dashboard: the Updates card no longer reserves space for the progress bar when the check isn’t running — the slot folds in so the card is as compact as any other settings card
 
 ### Fixed
+- Updates: the scheduled hourly update check now actually runs — the Sparkle 2 migration renamed the auto-check key (to `SUEnableAutomaticChecks`) and it was never added, so since v1.4 Pulse only ever checked when you manually clicked (the v1.4 “hourly checks” note was aspirational); new releases are now noticed within the hour, and the menu/strip/card still offer manual checks
 - Dashboard: a failed update check now says “Couldn’t check for updates” in the Updates card instead of silently keeping a stale “up to date” claim
 - Dashboard: the Updates card progress bar no longer pulses back to life every 15s after a check completes — it fades out once and stays out until the next check
 - Settings: after a failed check the Updates badge now says “Couldn’t check” instead of a stale “Up to date” stamp
