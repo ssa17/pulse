@@ -248,7 +248,10 @@ not an app.
   re-renders while ramping must keep the in-flight animation, or the bar
   visibly snaps back to empty — and the success fade is one-shot: re-renders
   while already landed (the 15s age ticker, a modal reopen) must leave the
-  faded bar alone, or it pulses back to life every 15s), and `QuietUserDriver` **suppresses the stock
+  faded bar alone, or it pulses back to life every 15s). The bar's slot
+  collapses to zero while dark (`.off` class, synced with the opacity in
+  `renderCheckCard`) so the card carries no dead space under the row — it
+  expands with the ramp and folds back in with the fade), and `QuietUserDriver` **suppresses the stock
   progress window for checks started from the card** (`shell.checkFromWeb`) —
   on a fast appcast fetch it flashed open and closed faster than it could be
   read; checks started from the menu/strip/Settings keep the stock window. A result that

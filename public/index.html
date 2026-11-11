@@ -290,22 +290,19 @@
   button.sw[aria-checked="true"] .knob { transform: translateX(16px); background: var(--net); }
   button.sw:hover { border-color: #495673; }
   button.sw[aria-checked="true"]:hover { border-color: #4ce3b8; }
-  /* Updates-card check progress: 3px track under the row. The slot is always
-     reserved (faded with opacity, never removed) so the card doesn't jump;
-     the fill ramps to ~92% and holds until the real result lands, then
-     completes and fades. In the error state it stays lit (orange) as the hint. */
-  .s-bar { height: 3px; border-radius: 2px; background: var(--free); overflow: hidden; margin-top: 9px; opacity: 0; transition: opacity .45s; }
+  /* Updates-card check progress: a 3px track under the row. The slot collapses
+     to zero when the bar is unused (`.off`) so the card carries no dead space —
+     it expands and lights when a check runs, and folds back in with the fade.
+     The fill ramps to ~92% and holds until the real result lands, then completes
+     and fades. In the error state it stays lit (orange) as the hint. */
+  .s-bar { height: 3px; border-radius: 2px; background: var(--free); overflow: hidden; opacity: 0; transition: opacity .45s, height .3s ease, margin .3s ease; }
+  .s-bar.off { height: 0; margin-bottom: -8px; }   /* -8px cancels the card's row gap, so an idle card is exactly row + padding */
   .s-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--net); transition: width 1.1s cubic-bezier(.25,.7,.35,1); }
   .s-bar.err .s-bar-fill { background: var(--cpu); }
   .s-bar.slide .s-bar-fill { width: 45%; animation: sbar-slide 1.3s ease-in-out infinite alternate; }
   @keyframes sbar-slide { from { margin-left: 0; } to { margin-left: 55%; } }
   .up-ok { color: var(--net); font-weight: 600; }
   .up-err { color: var(--cpu); font-weight: 600; }
-  .s-act {
-    background: none; border: 1px solid var(--border); color: var(--dim);
-    border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
-    cursor: pointer; transition: color .14s, background .14s, border-color .14s;
-  }
   .s-act {
     background: none; border: 1px solid var(--border); color: var(--dim);
     border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
@@ -577,7 +574,7 @@
           </div>
           <button class="s-act" id="st-check-btn">Check for Updates…</button>
         </div>
-        <div class="s-bar" id="st-check-bar"><div class="s-bar-fill" id="st-check-bar-fill"></div></div>
+        <div class="s-bar off" id="st-check-bar"><div class="s-bar-fill" id="st-check-bar-fill"></div></div>
       </div>
       <div class="s-card">
         <div class="s-row">
@@ -2009,7 +2006,8 @@ function renderCheckCard() {
         fill.style.width = '100%';
         setTimeout(() => {
           if (checkPhase !== 'ok') return;
-          bar.style.opacity = '0';               // fade out, keep the (reserved) slot so the card doesn't jump
+          bar.style.opacity = '0';               // fade out, fold the slot in with it so the card tightens
+          bar.classList.add('off');
           fill.style.transition = '';
         }, 550);
       }
@@ -2027,6 +2025,9 @@ function renderCheckCard() {
       void fill.offsetWidth;
       fill.style.transition = '';
     }
+    // The slot folds in whenever the bar is dark (opacity is set in every branch
+    // above): an idle card is exactly row + padding, no dead space under the row.
+    bar.classList.toggle('off', bar.style.opacity === '0');
   }
 }
 

@@ -18,6 +18,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Settings: the Updates card button shows “Checking…” while a check is in flight, and its badge is now visible when up to date, showing the last check time
 - Dashboard: in the browser without the Pulse app, “Check for Updates” now explains that update checks run from the app, instead of doing nothing
 - Dashboard: the Updates card shows when Pulse last verified your version — “· checked just now” while fresh, a clock time (“at 14:32”) once it’s an hour old
+- Dashboard: the Updates card no longer reserves space for the progress bar when the check isn’t running — the slot folds in so the card is as compact as any other settings card
 
 ### Fixed
 - Dashboard: a failed update check now says “Couldn’t check for updates” in the Updates card instead of silently keeping a stale “up to date” claim
