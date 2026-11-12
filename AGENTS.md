@@ -99,7 +99,10 @@ the drawer opened (prow count > 0), confirm() is wired, the memory info popover
 opens and renders (wired/compressed/cache values + WebKit XPC note), the menu-bar
 status item is receiving samples, window close keeps the backend alive while
 releasing the webview, window reopen re-renders live data, the Settings dialog
-migrates/round-trips `settings.json`, and the LaunchAgent install/remove cycle works.
+migrates/round-trips `settings.json`, the LaunchAgent install/remove cycle works,
+and a real update check through the card button settles correctly — including a
+second, *background* check (the scheduled path): an up-to-date outcome must land
+as a success, not “couldn't check".
 
 ## Deep docs — read on demand
 

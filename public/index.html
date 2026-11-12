@@ -656,6 +656,7 @@ const S = {
   search: '',
   version: null,         // snapshot's app version — the header and the Updates card both show it
   lastCheckAt: null,     // epoch ms of the last completed check (pushed by the app)
+  lastFailedAt: null,    // epoch ms of the last failed check — the err state's “· tried <age>”
   showAll: { cpu: false, mem: false },
   drawerKey: null,
   closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
@@ -1952,6 +1953,7 @@ function renderCheckCard() {
     m.className = 'up-err';
     m.textContent = hasAppBridge ? "Couldn't check for updates — try again" : 'Update checks run from the Pulse app — open it to check';
     cd.append(m);
+    if (S.lastFailedAt) cd.append(' · tried ' + checkedWhen(S.lastFailedAt));   // a stale failure reads as one
     if (btn) { btn.textContent = hasAppBridge ? 'Try again' : 'Check for Updates…'; btn.disabled = false; btn.title = ''; }
   } else if (checkPhase === 'ok') {
     const m = document.createElement('span');
@@ -2075,6 +2077,7 @@ window.__pulseUpdate = (d) => {
   if (d) {
     if (d.current) S.version = String(d.current);
     if (d.checkedAt) S.lastCheckAt = +d.checkedAt;
+    if (d.failedAt) S.lastFailedAt = +d.failedAt;
     if (d.checking) {
       // A (re)started check: fresh ramp, any pending landing is superseded.
       checkPending = null;

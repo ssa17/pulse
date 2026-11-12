@@ -2279,6 +2279,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var updateDriver: QuietUserDriver!   // retained here — the updater may only reference it
     var pendingUpdateVersion: String?   // newest appcast version not yet installed
     var lastCheckAtMs: Int?             // epoch ms of the last completed check that found nothing
+    var lastFailedAtMs: Int?            // epoch ms of the last failed check — backs the card's “· tried <age>”
     var updateChecking = false          // a check is in flight — drives the “Checking…” states
     var lastCheckFailed = false         // the last check errored — “couldn't check” ≠ “up to date"
     var checkFromWeb = false            // the in-flight check was initiated from the dashboard card
@@ -2676,7 +2677,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         // `current` always rides along — the "up to date" card shows it too.
         // `checking` drives the card's inline progress bar while a check is in
         // flight; `failed` lets it say "couldn't check" instead of claiming
-        // "up to date"; `checkedAt` backs the “· checked just now” confirmation.
+        // "up to date" (with `failedAt` — epoch ms of the failed attempt —
+        // backing the “· tried <age>” suffix); `checkedAt` backs the “· checked
+        // just now” confirmation.
         var payload: [String: Any] = ["current": current, "checking": updateChecking]
         if let available = pendingUpdateVersion {
             payload["available"] = available
@@ -2686,6 +2689,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         }
         if lastCheckFailed {
             payload["failed"] = true
+            if let failedAt = lastFailedAtMs {
+                payload["failedAt"] = failedAt
+            }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
@@ -2701,19 +2707,22 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         updateChecking = false
         checkFromWeb = false
         lastCheckFailed = false
+        lastFailedAtMs = nil            // a completed check supersedes any earlier failure
         lastCheckAtMs = Int(Date().timeIntervalSince1970 * 1000)
         setUpdateIndicators()
         selfTestCheckCompleted()
     }
 
-    /// A check that failed (network, feed, OS mismatch): availability keeps its
-    /// previous state — a failed check is not “up to date” — but every surface
-    /// learns the check itself errored so the card stops claiming “up to date”.
+    /// A check that failed (the appcast fetch or parse couldn't complete — e.g.
+    /// the network): availability keeps its previous state — a failed check is
+    /// not “up to date” — but every surface learns the check itself errored so
+    /// the card stops claiming “up to date”.
     func updateCheckFailed() {
         checkSafetyTimer?.invalidate()
         updateChecking = false
         checkFromWeb = false
         lastCheckFailed = true
+        lastFailedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         setUpdateIndicators()
         selfTestCheckCompleted()
     }
@@ -2749,14 +2758,46 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
         pendingUpdateVersion = nil
+        // Dormant fallback: Sparkle only calls the no-argument variant when the
+        // error variant (below) isn't implemented — it is, so the classification
+        // lives there. Kept as a safe default: a “no update” outcome means the
+        // check completed.
         // Covers launch, scheduled and manual checks alike: any completed check that
         // found nothing stamps `lastCheckAtMs` so the card's “· checked <age>” is true.
         updateCheckFoundNothing()
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
-        // A failed check is not “up to date” — keep the previous state, and let the
-        // dashboard say the check failed instead of claiming current.
+        // Sparkle routes *every* “no update” outcome through here — including the
+        // routine one, where the user is already on the latest version: the error
+        // is a SUNoUpdateError pseudo-error, not a failure (see SPUNoUpdateFoundReason
+        // in the userInfo). A check that fetched the feed fine and found nothing to
+        // install must land as a *success* — a failed fetch never reaches this method
+        // (it aborts earlier, see `updater(_:didAbortWithError:)`), so classifying
+        // the whole callback as a failure is what made every successful hourly check
+        // flip the card to “couldn't check for updates”.
+        let e = error as NSError
+        if e.domain == SUSparkleErrorDomain, e.code == Int(SUError.noUpdateError.rawValue) {
+            pendingUpdateVersion = nil
+            updateCheckFoundNothing()
+        } else {
+            updateCheckFailed()
+        }
+    }
+
+    /// The update cycle aborted for a real reason — the appcast fetch or parse
+    /// failed, a download died, …: the one delegate signal for checks that never
+    /// completed, so this is what marks the check failed. The benign aborts are
+    /// skipped: SUNoUpdateError is the up-to-date outcome (already resolved in
+    /// `updaterDidNotFindUpdate(_:error:)`) and the installation cancel/postpone
+    /// codes are user actions on an update, not check failures.
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        let e = error as NSError
+        if e.domain == SUSparkleErrorDomain,
+           let code = SUError(rawValue: OSStatus(e.code)),
+           code == .noUpdateError || code == .installationCanceledError || code == .installationAuthorizeLaterError {
+            return
+        }
         updateCheckFailed()
     }
 
@@ -3250,8 +3291,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             // bound it so a check that never completes (offline) can't hold the
             // final output forever.
             DispatchQueue.main.asyncAfter(deadline: .now() + 75) { [weak self] in
-                guard let self, !self.selfTestFlowResolved else { return }
+                guard let self, !self.selfTestFinishFired else { return }
                 self.selfTestFlowResolved = true
+                self.selfTestBackgroundDone = true   // bound this too — a slow fetch must not hang the output
+                if self.selfTestBackground == nil { self.selfTestBackground = ["timedOut": true] }
                 self.maybeFinishSelfTest()
             }
         }
@@ -3273,12 +3316,16 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     private var selfTestCheckFlowSample: [String: Any]?
     private var selfTestCheckFlow: [String: Any]?
     private var selfTestFlowResolved = false
+    private var selfTestBackgroundQueued = false
+    private var selfTestBgCheckPending = false
+    private var selfTestBackgroundDone = false
+    private var selfTestBackground: [String: Any]?
     private var selfTestLifecycleDone = false
     private var selfTestFinishFired = false
     private var selfTestFinishHandler: (() -> Void)?
 
     private func maybeFinishSelfTest() {
-        guard selfTestLifecycleDone, selfTestFlowResolved, !selfTestFinishFired else { return }
+        guard selfTestLifecycleDone, selfTestFlowResolved, selfTestBackgroundDone, !selfTestFinishFired else { return }
         selfTestFinishFired = true
         selfTestFinishHandler?()
         selfTestFinishHandler = nil
@@ -3339,10 +3386,47 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     /// `updateCheckFailed` and `didFindValidUpdate`). In the self-test: wait for
     /// the ramp+hop margin so the card has fully settled, then read it.
     private func selfTestCheckCompleted() {
-        guard isSelfTest, selfTestFlowArmed, !selfTestLandingArmed, !selfTestFlowResolved else { return }
+        guard isSelfTest else { return }
+        // The self-test's second check runs in the *background* — the scheduled
+        // path. For it Sparkle never invokes the user driver (an up-to-date
+        // background check shows nothing), so the outcome must classify
+        // correctly on the delegate side alone: an up-to-date result must land
+        // as a success, not a failure. App-side read only, so the lifecycle's
+        // webview release can't starve it.
+        if selfTestBgCheckPending {
+            selfTestBgCheckPending = false
+            selfTestBackground = [
+                "failed": lastCheckFailed,
+                "checkedAtStamped": lastCheckAtMs != nil,
+                "pendingVersion": pendingUpdateVersion as Any
+            ]
+            selfTestBackgroundDone = true
+            maybeFinishSelfTest()
+            return
+        }
+        guard selfTestFlowArmed, !selfTestLandingArmed, !selfTestFlowResolved else { return }
         selfTestLandingArmed = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
             self?.landSelfTestCheck(attempts: 40)
+        }
+        if !selfTestBackgroundQueued {
+            selfTestBackgroundQueued = true
+            queueSelfTestBackgroundCheck(remainingAttempts: 40)   // ≤ 20s for the first check's session to end
+        }
+    }
+
+    /// Fires the self-test's background check once the first (user-initiated)
+    /// check's Sparkle session has fully ended — `checkForUpdatesInBackground`
+    /// is a silent no-op while a session is in progress.
+    private func queueSelfTestBackgroundCheck(remainingAttempts: Int) {
+        guard remainingAttempts > 0 else { return }
+        if !updater.sessionInProgress {
+            selfTestBgCheckPending = true
+            updater.checkForUpdatesInBackground()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.queueSelfTestBackgroundCheck(remainingAttempts: remainingAttempts - 1)
         }
     }
 
@@ -3512,6 +3596,17 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                         }
                     } else if self.selfTestCheckFlowSample != nil {
                         merged["checkFlowTimedOut"] = true   // sample kept, terminal state lost
+                    }
+                    // The background (scheduled-path) check: an up-to-date outcome must
+                    // land as a *success* — the regression that made every hourly check
+                    // mark itself “couldn't check”. (nil = it never ran: slow first
+                    // check or no network; reported, not fatal.)
+                    if let bg = self.selfTestBackground {
+                        merged["checkFlowBackground"] = bg
+                        merged["checkFlowBackgroundOk"] = (bg["failed"] as? Bool) == false
+                    } else {
+                        merged["checkFlowBackgroundOk"] = false
+                        merged["checkFlowBackgroundTimedOut"] = true
                     }
                     let outData = (try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])) ?? Data()
                     let outStr = String(data: outData, encoding: .utf8) ?? initialJson

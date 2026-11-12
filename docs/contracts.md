@@ -206,7 +206,12 @@ not an app.
   card once its own check completes (desc = "Up to date …"/error, button
   re-enabled, bar 100% or the update card shown); the landing retries while the
   webview is released (the lifecycle closes/reopens the window) and is bounded
-  by a 75s timeout, and runs lifecycle checks in
+  by a 75s timeout; it then runs a second check **in the background** (the
+  scheduled path, where Sparkle never invokes the user driver) and reports
+  `checkFlowBackground`/`checkFlowBackgroundOk` — an up-to-date outcome must
+  land as a success (regression guard: the unclassified `SUNoUpdateError`
+  once flipped every hourly check to "couldn't check"); and it runs
+  lifecycle checks in
   `lifecycle`: native Settings window open + `settings.json` migration/round-trip
   (`settingsVisible`, `settingsRoundTripOk`), window close keeping backend alive
   while releasing the webview (`closedWindowHidden`, `closedWebReleased`,
@@ -244,7 +249,7 @@ not an app.
   render as the up-to-date stamp — and a green "Up to date · HH:mm" badge from
   the last successful check's time), and
   the dashboard via `pushUpdateToWeb()` →
-  `window.__pulseUpdate({ current, available?, checkedAt?, checking, failed? })`
+  `window.__pulseUpdate({ current, available?, checkedAt?, checking, failed?, failedAt? })`
   in `index.html` (non-null `available` shows `#st-update-card` with both
   versions + "Update to vX…"; otherwise `#st-check-card` renders the
   `#st-check-desc` state). Dashboard card check lifecycle: `checking` is true
@@ -266,7 +271,19 @@ not an app.
   card swap land together in one frame, so the word never says "up to date"
   while the bar is still running. `failed` distinguishes a check that errored
   from one that found nothing — the card says "couldn't check" in orange
-  instead of claiming up to date. `checkedAt` (epoch ms) is stamped by
+  instead of claiming up to date — and `failedAt` (epoch ms of the failed
+  attempt, pushed alongside `failed`) backs the "· tried <when>" suffix that
+  keeps a stale failure reading as one. Check outcomes are classified in
+  `Pulse.swift` from the Sparkle delegate callbacks: `updaterDidNotFindUpdate(_:error:)`
+  fires for *every* “no update” outcome — the `SUNoUpdateError` pseudo-error,
+  including the routine up-to-date one — so it lands as a *success*
+  (`updateCheckFoundNothing()`); a check that never completed (the appcast
+  fetch or parse failed, a download died) arrives via
+  `updater(_:didAbortWithError:)` and lands as `updateCheckFailed()`. (For a
+  background check Sparkle never invokes the user driver, so the delegate is
+  the only signal — an unclassified `SUNoUpdateError` would flip every
+  successful hourly check to “couldn't check”.)
+  `checkedAt` (epoch ms) is stamped by
   `updateCheckFoundNothing()` for *any* completed check that found nothing
   (launch, hourly scheduled, manual) and backs the "· checked <when>" line —
   relative while fresh ("just now", "5m ago"), a clock time once it's an hour

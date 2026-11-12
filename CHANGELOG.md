@@ -9,6 +9,10 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Fixed
+- Updates: the card no longer claims it “couldn't check for updates” after a successful check that found no update — the failure state was inverted, which is also why real failures (no network, unreachable feed) went unreported
+- Updates: when a check genuinely fails, the card now says so — including how long ago that attempt was (“· tried 5m ago”)
+
 ## [1.5] - 2026-11-12
 ### Added
 - Settings: a fuller Updates card — your current version and the latest one, an inline progress bar while a check runs, the last check time, and a highlighted card when a new version is out
