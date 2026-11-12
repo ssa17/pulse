@@ -8,6 +8,8 @@ in the auto-update dialog), then resets the section to a fresh empty bucket.
 Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
+
+## [1.5] - 2026-11-12
 ### Added
 - Settings: a fuller Updates card — your current version and the latest one, an inline progress bar while a check runs, the last check time, and a highlighted card when a new version is out
 - The update strip along the top of the window is taller and shows its version — “Pulse X.X is available — click to update” — so it's obvious what it means

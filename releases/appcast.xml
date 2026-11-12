@@ -3,26 +3,26 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.4</title>
-            <pubDate>Tue, 10 Nov 2026 08:50:03 +0000</pubDate>
-            <sparkle:version>1.4</sparkle:version>
-            <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
+            <title>1.5</title>
+            <pubDate>Thu, 12 Nov 2026 07:36:00 +0000</pubDate>
+            <sparkle:version>1.5</sparkle:version>
+            <sparkle:shortVersionString>1.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[
-### Added
-- Live CPU die temperature (°C) on the dashboard CPU card, coloured green→red by how hot the machine is and flagging throttling, with the same reading pinned just below CPU in the menu bar
-- New status-bar dropdown visuals: dual 30s rolling wave graphs for E/P core clusters, GPU utilization vs. GPU memory, live GPU memory in use, system load averages, and a color-coded memory breakdown (Wired, Active, Compressed, Free)
+            <description sparkle:format="markdown"><![CDATA[### Added
+- Settings: a fuller Updates card — your current version and the latest one, an inline progress bar while a check runs, the last check time, and a highlighted card when a new version is out
+- The update strip along the top of the window is taller and shows its version — “Pulse X.X is available — click to update” — so it's obvious what it means
 
 ### Changed
-- Status-bar dropdown is grouped into clean CPU, GPU, MEMORY, and SYSTEM sections with centered titles and airy spacing
-- Update checks now run hourly instead of once a day
+- Thermal: the throttle word (nominal / slowed / throttled) is now colored by the actual SMC throttle level — nominal reads neutral instead of red
 
 ### Fixed
-- Lighter background footprint: with the dashboard closed, the sampler no longer spawns `top`/`iostat` on every tick, and the status bar skips redundant redraws
+- Updates: the scheduled hourly check now actually runs — it silently stopped after the Sparkle 2 migration, so new releases went unnoticed until you checked manually
+- Settings: “Check for Updates” no longer pops a pointless “you're up to date” dialog, shows a clear error when a check fails, and keeps up-to-date text out of its “New update available” card
+- The update card in Settings now says “up to date” correctly and folds its progress slot away when idle
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.4/Pulse-1.4.zip" length="1501722" type="application/octet-stream" sparkle:edSignature="2GdGxQCkBZv403wUfkQphC2nTpeSg8qg4xgvnCOJGZGlBYJO/03a8pAXzq2bSMZI9mekHCUfkOnPF/9wQeqOBg=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.5/Pulse-1.5.zip" length="1528064" type="application/octet-stream" sparkle:edSignature="IqPBWae1rX2nAVzST7loyBJuCb0B9RIjC75ruDYcBiVhqpl4i67JcBR8EoOk4JvS4P4aKwmjmwHuGzwy0luoDg=="/>
         </item>
     </channel>
 </rss>
