@@ -22,9 +22,42 @@ func urlForPort(_ port: Int, _ path: String) -> URL {
     URL(string: "http://\(host):\(port)\(path)")!
 }
 
+struct PortFileInfo {
+    let port: Int
+    let pid: Int32?
+}
+
+func portFilePath() -> String {
+    pulseDir + (isSelfTest ? "/port-selftest" : "/port")
+}
+
+func readPortFileInfo(path: String = portFilePath()) -> PortFileInfo? {
+    guard let s = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+    let lines = s.split(whereSeparator: \.isNewline)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
+    guard let first = lines.first, let port = Int(first), port > 0 && port < 65536 else { return nil }
+    let pid: Int32? = lines.count >= 2 ? Int32(lines[1]).flatMap { $0 > 0 ? $0 : nil } : nil
+    return PortFileInfo(port: port, pid: pid)
+}
+
 func readPortFile() -> Int? {
-    guard let s = try? String(contentsOfFile: pulseDir + "/port", encoding: .utf8) else { return nil }
-    return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
+    readPortFileInfo()?.port
+}
+
+func isProcessAlive(_ pid: Int32) -> Bool {
+    guard pid > 0 else { return false }
+    if kill(pid, 0) == 0 { return true }
+    return errno == EPERM
+}
+
+/// Claims the port file for a promoted backend if no live owner currently holds it.
+func writePortFileIfUnowned(port: Int, pid: Int32, path: String = portFilePath()) {
+    if let existing = readPortFileInfo(path: path), let owner = existing.pid, owner != pid, isProcessAlive(owner) {
+        return
+    }
+    try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try? "\(port)\n\(pid)\n".write(toFile: path, atomically: true, encoding: .utf8)
 }
 
 func epochMsNow() -> Int64 {
@@ -280,19 +313,32 @@ func findNodeAsync(completion: @escaping (String?) -> Void) {
 /// prefer the checkout's server.js — matching server.js's own PUBLIC_DIR
 /// lookup so UI and backend can never split-brain across edits. Installed
 /// builds (/Applications/Pulse.app) use Contents/Resources/server.js.
-func serverScriptPath() -> String {
+private func devCheckoutDir() -> URL? {
     let fm = FileManager.default
     let res = Bundle.main.resourcePath ?? "."
     var url = URL(fileURLWithPath: res)
     for _ in 0..<5 {
         url.deleteLastPathComponent()
-        let candidate = url.appendingPathComponent("server.js").path
-        let pub = url.appendingPathComponent("public/index.html").path
-        if fm.isReadableFile(atPath: candidate), fm.isReadableFile(atPath: pub) {
-            return candidate
+        if fm.isReadableFile(atPath: url.appendingPathComponent("server.js").path),
+           fm.isReadableFile(atPath: url.appendingPathComponent("public/index.html").path) {
+            return url
         }
     }
-    return res + "/server.js"
+    return nil
+}
+
+func serverScriptPath() -> String {
+    if let dev = devCheckoutDir() { return dev.appendingPathComponent("server.js").path }
+    return (Bundle.main.resourcePath ?? ".") + "/server.js"
+}
+
+func uiSourcePath() -> (html: String, dir: String) {
+    if let dev = devCheckoutDir() {
+        let dir = dev.appendingPathComponent("public").path
+        return (dir + "/index.html", dir)
+    }
+    let dir = (Bundle.main.resourcePath ?? ".") + "/public"
+    return (dir + "/index.html", dir)
 }
 
 func expectedServerMtime() -> Int? {
@@ -443,6 +489,7 @@ final class LaunchAgentManager {
         ]
         if isSelfTest {
             env["PULSE_SELFTEST"] = "1"
+            env["PULSE_PORT_FILE"] = portFilePath()
         }
 
         let plist: [String: Any] = [
@@ -2267,13 +2314,19 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var settings = PulseSettings()
     var settingsController: SettingsWindowController?
     var nodeProc: Process?
+    var retiredProcs: [Process] = []
     var spawnedNode = false
+    var isRacingDaemon = false
+    var daemonAttachGen = 0
     var restartingBackend = false
     var switchingBackend = false
     var lastBackendMtime: Int?
     var quitting = false
     var loaded = false
+    var pageLoaded = false
+    var injectedBackendUrl: String?
     var serverPort: Int?
+    var selfTestScheduled = false
     var status: StatusController?
     var updater: SPUUpdater!
     var updateDriver: QuietUserDriver!   // retained here — the updater may only reference it
@@ -2285,14 +2338,15 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var checkFromWeb = false            // the in-flight check was initiated from the dashboard card
     var checkSafetyTimer: Timer?        // a canceled/dropped check never gets a result callback
     let updateStrip = UpdateStripView()
+    var launchSplash: NSView?
     var activityToken: NSObjectProtocol?
-    let darkBg = NSColor(red: 0.043, green: 0.055, blue: 0.07, alpha: 1)
+    let darkBg = NSColor(srgbRed: 0x0b / 255.0, green: 0x0d / 255.0, blue: 0x12 / 255.0, alpha: 1)
 
     @objc func reload() {
         if spawnedNode, let disk = expectedServerMtime(), disk != lastBackendMtime {
             restartSpawnedBackend()
         } else {
-            web?.reload()
+            loadDashboard(port: serverPort)
         }
     }
 
@@ -2309,16 +2363,29 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         let handler = WeakScriptMessageHandler(self)
         cfg.userContentController.add(handler, name: "pulseTrace")
         cfg.userContentController.add(handler, name: "pulseSettings")
-        let w = WKWebView(frame: window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 860), configuration: cfg)
+        let cv = window.contentView!
+        let w = WKWebView(frame: cv.bounds, configuration: cfg)
+        w.autoresizingMask = [.width, .height]
         w.navigationDelegate = self
         w.uiDelegate = self
+        // Stop WebKit from drawing an opaque white backing before HTML commits, and keep the
+        // webview hidden over the dark AppKit splash until `skeleton_paint` fires.
+        w.setValue(false, forKey: "drawsBackground")
+        w.isHidden = true
+        w.wantsLayer = true
+        w.layer?.backgroundColor = darkBg.cgColor
         if #available(macOS 12.0, *) {
             w.underPageBackgroundColor = darkBg
         }
-        window.contentView = w
+        cv.addSubview(w, positioned: .below, relativeTo: updateStrip.superview === cv ? updateStrip : nil)
         web = w
         syncUpdateStrip()
         return w
+    }
+
+    func revealWebView() {
+        web?.isHidden = false
+        launchSplash?.isHidden = true
     }
 
     func releaseWebView() {
@@ -2328,26 +2395,70 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         w.configuration.userContentController.removeScriptMessageHandler(forName: "pulseSettings")
         w.navigationDelegate = nil
         w.uiDelegate = nil
-        let placeholder = NSView(frame: window.contentView?.bounds ?? .zero)
-        placeholder.wantsLayer = true
-        placeholder.layer?.backgroundColor = darkBg.cgColor
-        window.contentView = placeholder
+        w.removeFromSuperview()
+        launchSplash?.isHidden = false
         syncUpdateStrip()
         web = nil
         loaded = false
+        pageLoaded = false
+        injectedBackendUrl = nil
     }
 
-    func loadDashboard(port: Int) {
+    private func retireProc(_ proc: Process, delay: TimeInterval = 0) {
+        retiredProcs.append(proc)
+        let stop = { [weak self] in
+            if proc.isRunning { proc.terminate() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                self?.retiredProcs.removeAll { $0 === proc }
+            }
+        }
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: stop)
+        } else {
+            stop()
+        }
+    }
+
+    func loadDashboard(port: Int?) {
         let w = ensureWebView()
+        w.isHidden = true
+        launchSplash?.isHidden = false
         loaded = true
+        pageLoaded = false
+        let (htmlPath, publicDir) = uiSourcePath()
+        var comp = URLComponents(url: URL(fileURLWithPath: htmlPath), resolvingAgainstBaseURL: false)!
+        var items = [URLQueryItem(name: "r", value: String(Int(Date().timeIntervalSince1970 * 1000)))]
+        if let port {
+            let backendUrl = "http://\(host):\(port)"
+            items.append(URLQueryItem(name: "backend", value: backendUrl))
+            injectedBackendUrl = backendUrl
+        } else {
+            injectedBackendUrl = nil
+        }
+        comp.queryItems = items
         BootTracer.shared.mark("webview_load")
-        let path = "/?r=\(Int(Date().timeIntervalSince1970 * 1000))"
-        w.load(URLRequest(url: urlForPort(port, path)))
+        if let fileUrl = comp.url {
+            w.loadFileURL(fileUrl, allowingReadAccessTo: URL(fileURLWithPath: publicDir, isDirectory: true))
+        } else if let port {
+            w.load(URLRequest(url: urlForPort(port, "/?r=\(Int(Date().timeIntervalSince1970 * 1000))")))
+        }
+    }
+
+    func syncBackendToWeb(onWake: (() -> Void)? = nil) {
+        guard let w = web, pageLoaded, let port = serverPort else { return }
+        let target = "http://\(host):\(port)"
+        if injectedBackendUrl == target {
+            w.evaluateJavaScript("window.__pulseWake && window.__pulseWake(); true") { _, _ in onWake?() }
+            return
+        }
+        injectedBackendUrl = target
+        let js = "window.__pulseSetBackend && window.__pulseSetBackend(\"\(target)\"); true"
+        w.evaluateJavaScript(js) { _, _ in onWake?() }
     }
 
     @objc func openApp() {
         let wasHidden = !window.isVisible
-        let hadWarmWeb = (web != nil && loaded)
+        let hadWarmWeb = (web != nil && pageLoaded)
         if wasHidden {
             BootTracer.shared.beginSession(mode: "reopen", extra: "warm_webview=\(hadWarmWeb)")
             BootTracer.shared.mark("window_reopen")
@@ -2355,17 +2466,17 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         _ = ensureWebView()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if !loaded, let port = serverPort {
-            loadDashboard(port: port)
+        if !loaded {
+            loadDashboard(port: serverPort)
         } else if hadWarmWeb {
-            web?.evaluateJavaScript("window.__pulseWake && window.__pulseWake()") { _, _ in
+            syncBackendToWeb {
                 if wasHidden { BootTracer.shared.mark("first_render", once: true) }
             }
         }
     }
 
     @objc func openSettings() {
-        if window.isVisible, let w = web, loaded {
+        if window.isVisible, let w = web, pageLoaded {
             settingsController?.window.close()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -2410,10 +2521,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     func pushSettingsToWeb() {
-        guard let w = web, loaded,
+        guard let w = web, pageLoaded,
               let data = try? JSONSerialization.data(withJSONObject: currentSettingsPayload()),
               let json = String(data: data, encoding: .utf8) else { return }
-        w.evaluateJavaScript("window.__pulseSyncSettings && window.__pulseSyncSettings(\(json))", completionHandler: nil)
+        w.evaluateJavaScript("window.__pulseSyncSettings && window.__pulseSyncSettings(\(json)); true", completionHandler: nil)
     }
 
     func syncAllSettingsUI() {
@@ -2459,6 +2570,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         mgr.lastError = nil
         mgr.isTransitioning = true
         switchingBackend = true
+        isRacingDaemon = false
+        daemonAttachGen += 1
+        let gen = daemonAttachGen
         settings.mergeFromDisk()
         settings.startAtLogin = enabled
         settings.save()
@@ -2466,7 +2580,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
         if enabled {
             findNodeAsync { [weak self] node in
-                guard let self else { return }
+                guard let self, gen == self.daemonAttachGen else { return }
                 guard let node else {
                     mgr.isTransitioning = false
                     self.switchingBackend = false
@@ -2487,7 +2601,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if self.spawnedNode, let p = self.nodeProc {
                     self.nodeProc = nil
                     self.spawnedNode = false
-                    try? FileManager.default.removeItem(atPath: pulseDir + "/port")
+                    try? FileManager.default.removeItem(atPath: portFilePath())
                     if p.isRunning { p.terminate() }
                 }
                 mgr.workQueue.async { [weak self] in
@@ -2497,14 +2611,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                     }
                     let result = mgr.installAndBootstrap(nodePath: node)
                     DispatchQueue.main.async {
-                        guard let self else { return }
+                        guard let self, gen == self.daemonAttachGen else { return }
                         mgr.isTransitioning = false
                         switch result {
                         case .success:
                             self.settings.startAtLogin = true
                             self.settings.save()
                             self.syncAllSettingsUI()
-                            self.attachToDaemonPort(attemptsLeft: 25)
+                            self.attachToDaemonPort(attemptsLeft: 25, gen: gen)
                         case .failure:
                             try? FileManager.default.removeItem(atPath: pulseDir + "/preferred-port")
                             self.switchingBackend = false
@@ -2512,7 +2626,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                             self.settings.save()
                             self.syncAllSettingsUI()
                             if self.serverPort == nil || !self.spawnedNode {
-                                self.spawnBackend(portOverride: oldPort)
+                                self.spawnBackend(portOverride: oldPort, nodePath: node, isRace: false)
                             }
                         }
                     }
@@ -2522,12 +2636,12 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             let wasDaemonOwned = !spawnedNode
             let oldPort = serverPort
             if wasDaemonOwned {
-                try? FileManager.default.removeItem(atPath: pulseDir + "/port")
+                try? FileManager.default.removeItem(atPath: portFilePath())
             }
             mgr.workQueue.async { [weak self] in
                 _ = mgr.uninstall()
                 DispatchQueue.main.async {
-                    guard let self else { return }
+                    guard let self, gen == self.daemonAttachGen else { return }
                     mgr.isTransitioning = false
                     self.settings.startAtLogin = false
                     self.settings.save()
@@ -2543,52 +2657,62 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         }
     }
 
-    private func attachToDaemonPort(attemptsLeft: Int) {
-        if let p = readPortFile() {
-            checkServerAlive(port: p, timeout: 0.6) { [weak self] alive in
-                guard let self, !self.quitting else { return }
-                if alive {
-                    let samePortAndLoaded = (self.serverPort == p && self.loaded)
-                    self.switchingBackend = false
-                    // If we spawned our own backend while waiting for the daemon, release it
-                    // before adopting — the port file can point at only one backend. (The
-                    // dying backend only removes the port file if it still owns it, so the
-                    // daemon's entry survives.)
-                    if self.spawnedNode, self.serverPort != p, let dying = self.nodeProc {
-                        self.nodeProc = nil
-                        self.spawnedNode = false
-                        if dying.isRunning { dying.terminate() }
-                    }
-                    self.serverPort = p
-                    self.spawnedNode = false
-                    self.status?.start(port: p)
-                    self.syncAllSettingsUI()
-                    if self.window.isVisible {
-                        if samePortAndLoaded {
-                            self.web?.evaluateJavaScript("window.__pulseWake && window.__pulseWake()", completionHandler: nil)
-                        } else {
-                            self.loadDashboard(port: p)
+    private func attachToDaemonPort(attemptsLeft: Int, gen: Int) {
+        guard gen == daemonAttachGen, !quitting else { return }
+        if let info = readPortFileInfo() {
+            // Skip stale/unowned or self-racer port entries without burning a probe attempt.
+            let isRacerPid = (spawnedNode && nodeProc.map { info.pid == $0.processIdentifier } ?? false)
+            if !isRacerPid && (info.pid == nil || isProcessAlive(info.pid!)) {
+                BootTracer.shared.mark("port_file_seen", once: true, launchOnly: true)
+                checkServerAlive(port: info.port, timeout: 0.6) { [weak self] alive in
+                    guard let self, !self.quitting, gen == self.daemonAttachGen else { return }
+                    if alive {
+                        BootTracer.shared.mark("backend_alive", once: true, launchOnly: true)
+                        let wasRacing = self.isRacingDaemon
+                        self.switchingBackend = false
+                        self.isRacingDaemon = false
+                        var racerToStop: Process?
+                        if self.spawnedNode, self.serverPort != info.port, let dying = self.nodeProc {
+                            self.nodeProc = nil
+                            self.spawnedNode = false
+                            racerToStop = dying
                         }
+                        self.serverPort = info.port
+                        self.spawnedNode = false
+                        if wasRacing {
+                            BootTracer.shared.mark("daemon_migrated", once: true, launchOnly: true)
+                        }
+                        self.status?.start(port: info.port)
+                        self.syncAllSettingsUI()
+                        if self.window.isVisible {
+                            if self.loaded {
+                                self.syncBackendToWeb()
+                            } else {
+                                self.loadDashboard(port: info.port)
+                            }
+                        }
+                        if let dying = racerToStop {
+                            self.retireProc(dying, delay: 0.2)
+                        }
+                        return
                     }
-                    return
-                }
-                if attemptsLeft > 1 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                        self.attachToDaemonPort(attemptsLeft: attemptsLeft - 1)
+                    if attemptsLeft > 1 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            self.attachToDaemonPort(attemptsLeft: attemptsLeft - 1, gen: gen)
+                        }
+                    } else {
+                        self.promoteOrSpawnFallback()
                     }
-                } else {
-                    // Fallback so UI never stays disconnected if launchd couldn't spawn in this session
-                    self.switchingBackend = false
-                    self.spawnBackend(portOverride: nil)
                 }
+                return
             }
-        } else if attemptsLeft > 1 {
+        }
+        if attemptsLeft > 1 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                self?.attachToDaemonPort(attemptsLeft: attemptsLeft - 1)
+                self?.attachToDaemonPort(attemptsLeft: attemptsLeft - 1, gen: gen)
             }
         } else {
-            switchingBackend = false
-            spawnBackend(portOverride: nil)
+            promoteOrSpawnFallback()
         }
     }
 
@@ -2671,7 +2795,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     func pushUpdateToWeb() {
-        guard let w = web, loaded else { return }
+        guard let w = web, pageLoaded else { return }
         let current = (Bundle.main.object(forInfoDictionaryKey:
             "CFBundleShortVersionString") as? String) ?? "1.0"
         // `current` always rides along — the "up to date" card shows it too.
@@ -2812,10 +2936,13 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         if message.name == "pulseTrace" {
             guard let body = message.body as? [String: Any],
                   let stage = body["stage"] as? String else { return }
-            let allowed: Set<String> = ["dom_content_loaded", "first_sse_message", "first_render"]
+            let allowed: Set<String> = ["dom_content_loaded", "skeleton_paint", "first_sse_message", "first_render"]
             guard allowed.contains(stage) else { return }
             let ts = (body["t"] as? NSNumber)?.int64Value
             BootTracer.shared.mark(stage, tsOverrideMs: ts, once: true)
+            if stage == "skeleton_paint" {
+                revealWebView()
+            }
             return
         }
         if message.name == "pulseSettings" {
@@ -2873,11 +3000,43 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "Pulse"
+        window.appearance = NSAppearance(named: .darkAqua)
         window.minSize = NSSize(width: 940, height: 620)
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.backgroundColor = darkBg
+        let rootView = NSView(frame: rect)
+        rootView.wantsLayer = true
+        rootView.layer?.backgroundColor = darkBg.cgColor
+        window.contentView = rootView
+
+        // Immediate AppKit splash shown inside rootView until WebKit paints `skeleton_paint`.
+        let splash = NSStackView()
+        splash.orientation = .horizontal
+        splash.alignment = .centerY
+        splash.spacing = 10
+        splash.translatesAutoresizingMaskIntoConstraints = false
+        let dot = NSView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor(srgbRed: 1, green: 0x9f / 255.0, blue: 0x43 / 255.0, alpha: 1).cgColor
+        dot.layer?.cornerRadius = 6
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: 12),
+            dot.heightAnchor.constraint(equalToConstant: 12),
+        ])
+        let wordmark = NSTextField(labelWithString: "Pulse")
+        wordmark.font = .systemFont(ofSize: 18, weight: .bold)
+        wordmark.textColor = NSColor(srgbRed: 0xe8 / 255.0, green: 0xec / 255.0, blue: 0xf4 / 255.0, alpha: 0.9)
+        splash.addArrangedSubview(dot)
+        splash.addArrangedSubview(wordmark)
+        rootView.addSubview(splash)
+        NSLayoutConstraint.activate([
+            splash.centerXAnchor.constraint(equalTo: rootView.centerXAnchor),
+            splash.centerYAnchor.constraint(equalTo: rootView.centerYAnchor),
+        ])
+        launchSplash = splash
 
         // Update strip along the top edge — the quiet, persistent “an update is
         // available, click to install” indicator (hidden until one is).
@@ -2893,6 +3052,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         startServer()
 
         _ = ensureWebView()
+        BootTracer.shared.mark("webview_ready", once: true, launchOnly: true)
 
         // Main menu: App (About, Settings Cmd-,, Updates, Quit Cmd-Q), Edit (Copy/Paste/Find), View (Reload), Window (Close Cmd-W).
         let mainMenu = NSMenu()
@@ -2940,11 +3100,11 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
         NSApp.mainMenu = mainMenu
 
+        if !loaded {
+            loadDashboard(port: serverPort)
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if let port = serverPort, !loaded {
-            loadDashboard(port: port)
-        }
 
         // A raw SPUUpdater with Pulse's own user driver: the stock driver handles
         // everything except the dead-end “you're up to date” modal, which the
@@ -3023,13 +3183,21 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         }
 
         let agent = LaunchAgentManager.shared
-        if let p = readPortFile() {
+        if let info = readPortFileInfo() {
+            if let pid = info.pid, !isProcessAlive(pid) {
+                if agent.plistExists {
+                    refreshDaemonOrSpawn()
+                } else {
+                    spawnBackend(portOverride: nil)
+                }
+                return
+            }
             BootTracer.shared.mark("port_probe_start")
-            checkServerAlive(port: p, timeout: 1.0) { [weak self] alive in
+            checkServerAlive(port: info.port, timeout: 1.0) { [weak self] alive in
                 guard let self else { return }
                 if alive {
                     BootTracer.shared.mark("daemon_reused")
-                    self.serverPort = p
+                    self.serverPort = info.port
                     self.spawnedNode = false
                     self.beginService()
                     return
@@ -3052,26 +3220,37 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     private func refreshDaemonOrSpawn() {
+        daemonAttachGen += 1
+        let gen = daemonAttachGen
+        switchingBackend = true
         findNodeAsync { [weak self] node in
-            guard let self else { return }
+            guard let self, !self.quitting, gen == self.daemonAttachGen else { return }
             guard let node else {
+                self.switchingBackend = false
                 self.spawnBackend(portOverride: nil)
                 return
             }
+            // Launch a direct racer in parallel with LaunchAgent bootstrap/kickstart
+            // (~300ms first snapshot vs ~2.5s under Background QoS), then swap live.
+            if !self.spawnedNode {
+                BootTracer.shared.mark("race_start", once: true, launchOnly: true)
+                self.isRacingDaemon = true
+                self.spawnBackend(portOverride: nil, nodePath: node, isRace: true)
+            }
             let agent = LaunchAgentManager.shared
-            self.switchingBackend = true
             agent.workQueue.async { [weak self] in
                 let needsInstall = agent.needsPlistRefresh(nodePath: node) || !agent.isLoaded()
                 if needsInstall {
+                    BootTracer.shared.mark("bootstrap_call", once: true, launchOnly: true)
                     let res = agent.installAndBootstrap(nodePath: node)
+                    BootTracer.shared.mark("bootstrap_done", once: true, launchOnly: true)
                     DispatchQueue.main.async {
-                        guard let self else { return }
+                        guard let self, !self.quitting, gen == self.daemonAttachGen else { return }
                         switch res {
                         case .success:
-                            self.attachToDaemonPort(attemptsLeft: 25)
+                            self.attachToDaemonPort(attemptsLeft: 40, gen: gen)
                         case .failure:
-                            self.switchingBackend = false
-                            self.spawnBackend(portOverride: nil)
+                            self.promoteOrSpawnFallback(nodePath: node)
                         }
                     }
                 } else {
@@ -3082,16 +3261,31 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                     var kicked = false
                     if let p = readPortFile(), let disk = expectedServerMtime(),
                        let sm = agent.probeServerMtime(port: p), sm != disk {
+                        BootTracer.shared.mark("kickstart_call", once: true, launchOnly: true)
                         kicked = agent.kickstart()
+                        BootTracer.shared.mark("kickstart_done", once: true, launchOnly: true)
                     }
                     DispatchQueue.main.async {
-                        // Give the (re)started daemon a moment to bind and serve fresh data
-                        // (e.g. still finishing its first sample right after boot).
-                        self?.attachToDaemonPort(attemptsLeft: kicked ? 25 : 20)
+                        guard let self, !self.quitting, gen == self.daemonAttachGen else { return }
+                        self.attachToDaemonPort(attemptsLeft: kicked ? 40 : 30, gen: gen)
                     }
                 }
             }
         }
+    }
+
+    private func promoteOrSpawnFallback(nodePath: String? = nil) {
+        switchingBackend = false
+        if isRacingDaemon, spawnedNode, let port = serverPort, let proc = nodeProc, proc.isRunning {
+            isRacingDaemon = false
+            // If launchd finishes binding after the 40-attempt (~4.8s) attach window,
+            // it leaves a second sampler running for this session and self-heals on next
+            // launch/toggle via the pid-owned port file.
+            writePortFileIfUnowned(port: port, pid: proc.processIdentifier)
+            return
+        }
+        isRacingDaemon = false
+        spawnBackend(portOverride: nil, nodePath: nodePath, isRace: false)
     }
 
     func handleStaleBackend() {
@@ -3099,10 +3293,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         if spawnedNode {
             restartSpawnedBackend()
         } else if LaunchAgentManager.shared.plistExists {
-            loaded = false
             refreshDaemonOrSpawn()
         } else {
-            loaded = false
             spawnBackend(portOverride: nil)
         }
     }
@@ -3112,10 +3304,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         restartingBackend = true
         if let old = nodeProc {
             nodeProc = nil
-            if old.isRunning { old.terminate() }
+            retireProc(old)
         }
         serverPort = nil
-        loaded = false
+        injectedBackendUrl = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, !self.quitting else { return }
             self.restartingBackend = false
@@ -3123,12 +3315,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         }
     }
 
-    func spawnBackend(portOverride: Int?) {
+    func spawnBackend(portOverride: Int?, nodePath: String? = nil, isRace: Bool = false) {
         BootTracer.shared.mark("backend_spawn")
-        findNodeAsync { [weak self] node in
+        let startWithNode: (String?) -> Void = { [weak self] node in
             guard let self, !self.quitting else { return }
+            if isRace && !self.isRacingDaemon { return }
             guard let node else {
                 self.switchingBackend = false
+                self.isRacingDaemon = false
                 self.showFatal("Node.js was not found.\nInstall it (brew install node) or set PULSE_NODE=/path/to/node, then reopen Pulse.")
                 return
             }
@@ -3139,6 +3333,12 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             env["PULSE"] = "1"
             env["PORT"] = portOverride.map(String.init) ?? "0"
             env["NODE_OPTIONS"] = "--max-old-space-size=64 --max-semi-space-size=8"
+            if isSelfTest {
+                env["PULSE_PORT_FILE"] = portFilePath()
+            }
+            if isRace {
+                env["PULSE_RACE"] = "1"
+            }
             if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
                 env["PULSE_VERSION"] = v
             }
@@ -3149,6 +3349,12 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             p.terminationHandler = { [weak self] proc in
                 DispatchQueue.main.async {
                     guard let self, !self.quitting, proc === self.nodeProc else { return }
+                    if isRace && self.isRacingDaemon {
+                        self.nodeProc = nil
+                        self.spawnedNode = false
+                        self.isRacingDaemon = false
+                        return
+                    }
                     if proc.terminationReason == .uncaughtSignal || proc.terminationStatus != 0 {
                         self.showFatal("The Pulse backend exited unexpectedly (status \(proc.terminationStatus)).\nReopen the app to try again.")
                     }
@@ -3161,7 +3367,11 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 self.lastBackendMtime = expectedServerMtime()
             } catch {
                 self.switchingBackend = false
-                self.showFatal("Could not start the Pulse backend:\n\(error.localizedDescription)")
+                if !isRace {
+                    self.showFatal("Could not start the Pulse backend:\n\(error.localizedDescription)")
+                } else {
+                    self.isRacingDaemon = false
+                }
                 return
             }
             DispatchQueue.global().async { [weak self] in
@@ -3172,19 +3382,23 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                     for line in s.components(separatedBy: "\n") where line.hasPrefix("PULSE_LISTENING=") {
                         if let port = Int(line.dropFirst("PULSE_LISTENING=".count)) {
                             DispatchQueue.main.async {
-                                guard let self else { return }
+                                guard let self, !self.quitting, p === self.nodeProc else { return }
                                 BootTracer.shared.mark("pulse_listening", once: true)
-                                let samePortAndLoaded = (self.serverPort == port && self.loaded)
-                                self.switchingBackend = false
+                                if isRace {
+                                    BootTracer.shared.mark("race_backend_ready", once: true, launchOnly: true)
+                                } else {
+                                    self.switchingBackend = false
+                                }
+                                let target = "http://\(host):\(port)"
+                                let samePortAndLoaded = (self.serverPort == port && self.loaded && self.injectedBackendUrl == target)
                                 self.serverPort = port
                                 if samePortAndLoaded {
                                     self.status?.start(port: port)
                                     self.syncAllSettingsUI()
                                     if self.window.isVisible {
-                                        self.web?.evaluateJavaScript("window.__pulseWake && window.__pulseWake()", completionHandler: nil)
+                                        self.syncBackendToWeb()
                                     }
                                 } else {
-                                    self.loaded = false
                                     self.beginService()
                                 }
                             }
@@ -3193,15 +3407,26 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 }
             }
         }
+        if let nodePath {
+            startWithNode(nodePath)
+        } else {
+            findNodeAsync(completion: startWithNode)
+        }
     }
 
     func beginService() {
-        guard let port = serverPort, !loaded else { return }
-        if window.isVisible {
-            loadDashboard(port: port)
-        }
+        guard let port = serverPort else { return }
         status?.start(port: port)
-        if isSelfTest {
+        syncAllSettingsUI()
+        if window.isVisible {
+            if loaded {
+                syncBackendToWeb()
+            } else {
+                loadDashboard(port: port)
+            }
+        }
+        if isSelfTest && !selfTestScheduled {
+            selfTestScheduled = true
             scheduleSelfTest()
         }
     }
@@ -3320,6 +3545,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     private var selfTestBgCheckPending = false
     private var selfTestBackgroundDone = false
     private var selfTestBackground: [String: Any]?
+    private var selfTestStartingProbe: [String: Any]?
     private var selfTestLifecycleDone = false
     private var selfTestFinishFired = false
     private var selfTestFinishHandler: (() -> Void)?
@@ -3367,7 +3593,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         selfTestFlowArmed = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self else { return }
-            if let w = self.web, self.loaded {
+            if let w = self.web, self.pageLoaded {
                 w.evaluateJavaScript(Self.selfTestCardJS) { d, _ in
                     if let s = d as? String,
                        var obj = (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] {
@@ -3439,7 +3665,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             }
             return
         }
-        guard let w = web, loaded else {
+        guard let w = web, pageLoaded else {
             guard attempts > 0 else { return resolveSelfTestFlow() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                 self?.landSelfTestCheck(attempts: attempts - 1)
@@ -3533,24 +3759,52 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 self.selfTestFinishHandler = {
                     // LaunchAgent install/remove round-trip (uses isolated label local.pulse.monitor.selftest).
                     var daemonRoundTripOk = false
+                    var daemonPortOwnerOk = false
                     if let node = findNodeFast() {
                         let mgr = LaunchAgentManager.shared
+                        let pf = portFilePath()
+                        try? FileManager.default.removeItem(atPath: pf)
                         if case .success = mgr.installAndBootstrap(nodePath: node) {
                             let installedOk = mgr.plistExists && mgr.isLoaded()
+                            let deadline = Date().addingTimeInterval(3.0)
+                            while Date() < deadline {
+                                if let info = readPortFileInfo(path: pf),
+                                   let pid = info.pid, pid != getpid(), isProcessAlive(pid) {
+                                    daemonPortOwnerOk = true
+                                    break
+                                }
+                                usleep(50_000)
+                            }
                             _ = mgr.uninstall()
                             let removedOk = !mgr.plistExists && !mgr.isLoaded()
+                            try? FileManager.default.removeItem(atPath: pf)
                             daemonRoundTripOk = installedOk && removedOk
                         }
                     }
                     let traceText = (try? String(contentsOfFile: BootTracer.shared.logPath, encoding: .utf8)) ?? ""
                     let traceOk = traceText.contains("stage=app_launch") &&
+                                  traceText.contains("stage=skeleton_paint") &&
                                   traceText.contains("stage=first_render") &&
                                   traceText.contains("stage=window_reopen")
                     try? FileManager.default.removeItem(atPath: BootTracer.shared.logPath)
                     try? FileManager.default.removeItem(atPath: pulseDir + "/daemon-selftest.log")
 
+                    var startingSkeletonOk = false
+                    if let sk = self.selfTestStartingProbe {
+                        startingSkeletonOk =
+                            (sk["protocol"] as? String) == "file:" &&
+                            (sk["live"] as? String) == "starting…" &&
+                            ((sk["skelRows"] as? Int) ?? 0) > 0 &&
+                            (sk["hasSetter"] as? Bool) == true &&
+                            ((sk["cpuText"] as? String) ?? "") == ""
+                    }
+
                     restoreSettings()
                     var merged = (try? JSONSerialization.jsonObject(with: Data(initialJson.utf8)) as? [String: Any]) ?? [:]
+                    if let sk = self.selfTestStartingProbe {
+                        merged["startingSkeleton"] = sk
+                    }
+                    merged["startingSkeletonOk"] = startingSkeletonOk
                     merged["lifecycle"] = [
                         "settingsVisible": settingsVisible,
                         "settingsRoundTripOk": settingsRoundTripOk,
@@ -3560,6 +3814,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                         "reopenRenderOk": reopenOk,
                         "reopenMs": reopenMs,
                         "daemonRoundTripOk": daemonRoundTripOk,
+                        "daemonPortOwnerOk": daemonPortOwnerOk,
                         "bootTraceOk": traceOk,
                     ]
                     // Check flow: the mid-ramp sample is the sync regression assertion;
@@ -3661,13 +3916,63 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
 
     // MARK: WKNavigationDelegate
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        handleWebLoadFailure(error)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        handleWebLoadFailure(error)
+    }
+
+    private func handleWebLoadFailure(_ error: Error) {
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
+        revealWebView()
+        showFatal("Could not load the Pulse dashboard:\n\(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        pageLoaded = false
+        if let url = webView.url,
+           let comp = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let b = comp.queryItems?.first(where: { $0.name == "backend" })?.value {
+            injectedBackendUrl = b
+        } else {
+            injectedBackendUrl = nil
+        }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pageLoaded = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            self?.revealWebView()
+        }
         pushSettingsToWeb()
         pushUpdateToWeb()
         selfTestWebStatePushedAt = Date()
         if ProcessInfo.processInfo.environment["PULSE_AUTOCONFIRM"] == "1" {
-            web?.evaluateJavaScript("window.__autoconfirm = true") { _, _ in }
+            web?.evaluateJavaScript("window.__autoconfirm = true; true") { _, _ in }
         }
+        if isSelfTest && selfTestStartingProbe == nil && injectedBackendUrl == nil {
+            let probeJs = """
+            JSON.stringify({
+              protocol: location.protocol,
+              live: document.querySelector('#live-text')?.textContent || '',
+              skelRows: document.querySelectorAll('.skel-row').length,
+              hasSetter: typeof window.__pulseSetBackend === 'function',
+              cpuText: document.querySelector('#cpu-big')?.textContent || ''
+            })
+            """
+            webView.evaluateJavaScript(probeJs) { [weak self] res, _ in
+                if let s = res as? String,
+                   let obj = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any] {
+                    self?.selfTestStartingProbe = obj
+                }
+                self?.syncBackendToWeb()
+            }
+            return
+        }
+        syncBackendToWeb()
     }
 
     // MARK: WKUIDelegate — native dialogs for confirm()/alert()/prompt()
@@ -3710,14 +4015,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         quitting = true
-        // Kill any backend spawned directly by this app process (a LaunchAgent daemon is left running unless quitAndStopBackground was chosen).
-        if spawnedNode, let p = nodeProc, p.isRunning {
-            p.terminate()
-            let deadline = Date().addingTimeInterval(2)
-            while p.isRunning && Date() < deadline { usleep(50_000) }
-            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
-            while p.isRunning { usleep(50_000) }
-        }
+        // Kill any backend (active or retiring racer) spawned directly by this app process.
+        var toStop = retiredProcs
+        if spawnedNode, let p = nodeProc { toStop.append(p) }
+        for p in toStop where p.isRunning { p.terminate() }
+        let deadline = Date().addingTimeInterval(2)
+        while toStop.contains(where: { $0.isRunning }) && Date() < deadline { usleep(50_000) }
+        for p in toStop where p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        while toStop.contains(where: { $0.isRunning }) { usleep(50_000) }
         return .terminateNow
     }
 

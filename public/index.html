@@ -6,6 +6,7 @@
 <title>Pulse — Mac Resource Monitor</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0b0d12;
     --panel: #12151d;
     --panel2: #171b25;
@@ -25,7 +26,7 @@
     --danger: #ff5f57;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
+  html, body { height: 100%; background: var(--bg); }
   body {
     background: var(--bg);
     color: var(--text);
@@ -112,18 +113,45 @@
   .toolbar .hint { color: var(--faint); font-size: 12px; }
   .toolbar .live { margin-left: auto; color: var(--faint); font-size: 11.5px; display: flex; align-items: center; gap: 6px; }
   .toolbar .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--net); }
+  .toolbar .live.starting .dot { background: var(--cpu); animation: dot-pulse 1.2s ease-in-out infinite; }
   .toolbar .live.connecting .dot { background: var(--cpu); }
   .toolbar .live.off .dot { background: var(--danger); }
 
   /* ---------- connecting skeleton ---------- */
+  @keyframes dot-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+  @keyframes pulse-shimmer {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
+  .skel-shimmer,
+  .skel-row .skel-box,
+  .skel-row .skel-icon,
+  .membar.is-skel,
+  .row .icon.skel-icon-ph,
+  canvas.spark.is-skel {
+    background: linear-gradient(90deg, #1d2434 20%, #323e59 50%, #1d2434 80%);
+    background-size: 200% 100%;
+    animation: pulse-shimmer 1.25s ease-in-out infinite;
+  }
   .skel-list { display: flex; flex-direction: column; }
   .skel-row {
     display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 68px 74px;
     gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #1a1f2b;
-    opacity: .55;
+    opacity: .72;
   }
-  .skel-box { background: #1c2230; border-radius: 5px; height: 10px; }
-  .skel-icon { width: 26px; height: 26px; border-radius: 6px; background: #1c2230; }
+  .skel-box { background: #1f2636; border-radius: 5px; height: 10px; }
+  .skel-icon { width: 26px; height: 26px; border-radius: 6px; background: #1f2636; }
+  .skel-inline { display: inline-block; vertical-align: middle; height: 10px; border-radius: 5px; }
+  .skel-big { display: inline-block; width: 96px; height: 26px; border-radius: 7px; vertical-align: middle; }
+  .skel-sub { display: inline-block; width: 78px; height: 11px; border-radius: 5px; vertical-align: middle; }
+  .membar.is-skel { height: 8px; }
+  .memlegend .ml.is-skel i { background: #323e59 !important; }
+  .memlegend .skel-chip { display: inline-block; width: 44px; height: 10px; border-radius: 4px; vertical-align: middle; }
+  canvas.spark.is-skel { border-radius: 6px; opacity: .75; }
+  @media (prefers-reduced-motion: reduce) {
+    .skel-shimmer, .skel-row .skel-box, .skel-row .skel-icon, .membar.is-skel,
+    .toolbar .live.starting .dot, .row .icon.skel-icon-ph, canvas.spark.is-skel { animation: none !important; }
+  }
 
   /* ---------- panels ---------- */
   .panels { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
@@ -149,7 +177,8 @@
   .row:hover { background: var(--panel2); }
   .row.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--cpu); }
   .row.closing { opacity: .6; }
-  .row .icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: #1d2330; }
+  .row .icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: #1d2330; transition: opacity .15s ease; }
+  .row .icon.loading { opacity: .25; }
   .row .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--dim); }
   .row .icon.placeholder.cli { font-size: 10px; font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: -.5px; }
   .row .name { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -438,7 +467,7 @@
 <div id="app">
   <header>
     <div class="logo"><span class="dot"></span>Pulse <span class="ver" id="ver"></span></div>
-    <div class="machine" id="machine">reading system…</div>
+    <div class="machine" id="machine"><span class="skel-inline skel-shimmer" style="width:124px"></span> · <span class="skel-inline skel-shimmer" style="width:92px"></span> · <span class="skel-inline skel-shimmer" style="width:86px"></span></div>
     <div class="hmeta">
       <span>uptime <b id="h-uptime">—</b></span>
       <span id="h-batt-wrap">battery <b id="h-batt">—</b></span>
@@ -451,30 +480,35 @@
 
   <section class="cards">
     <div class="card cpu">
-      <div class="top"><span class="label">CPU</span><span class="sub" id="cpu-sub"></span></div>
-      <div class="big" id="cpu-big">—</div>
-      <canvas class="spark" id="spark-cpu"></canvas>
+      <div class="top"><span class="label">CPU</span><span class="sub" id="cpu-sub"><span class="skel-sub skel-shimmer"></span></span></div>
+      <div class="big" id="cpu-big"><span class="skel-big skel-shimmer"></span></div>
+      <canvas class="spark is-skel" id="spark-cpu"></canvas>
     </div>
     <div class="card mem">
-      <div class="top"><span class="label">Memory<button class="infobtn" id="mem-info" title="What are wired / compressed / cache, and how do I free them?">i</button></span><span class="sub" id="mem-sub"></span></div>
-      <div class="big" id="mem-big">—</div>
-      <div class="membar" id="membar"></div>
-      <div class="memlegend" id="memlegend"></div>
+      <div class="top"><span class="label">Memory<button class="infobtn" id="mem-info" title="What are wired / compressed / cache, and how do I free them?">i</button></span><span class="sub" id="mem-sub"><span class="skel-sub skel-shimmer"></span></span></div>
+      <div class="big" id="mem-big"><span class="skel-big skel-shimmer"></span></div>
+      <div class="membar is-skel" id="membar"></div>
+      <div class="memlegend" id="memlegend">
+        <span class="ml is-skel"><i></i><span class="skel-chip skel-shimmer"></span></span>
+        <span class="ml is-skel"><i></i><span class="skel-chip skel-shimmer"></span></span>
+        <span class="ml is-skel"><i></i><span class="skel-chip skel-shimmer"></span></span>
+        <span class="ml is-skel"><i></i><span class="skel-chip skel-shimmer"></span></span>
+      </div>
     </div>
     <div class="card net">
-      <div class="top"><span class="label">Network</span><span class="sub" id="net-sub"></span></div>
-      <div class="big" id="net-big">—</div>
-      <canvas class="spark" id="spark-net"></canvas>
+      <div class="top"><span class="label">Network</span><span class="sub" id="net-sub"><span class="skel-sub skel-shimmer"></span></span></div>
+      <div class="big" id="net-big"><span class="skel-big skel-shimmer"></span></div>
+      <canvas class="spark is-skel" id="spark-net"></canvas>
     </div>
     <div class="card disk">
-      <div class="top"><span class="label">Disk</span><span class="sub" id="disk-sub"></span></div>
-      <div class="big" id="disk-big">—</div>
-      <canvas class="spark" id="spark-disk"></canvas>
+      <div class="top"><span class="label">Disk</span><span class="sub" id="disk-sub"><span class="skel-sub skel-shimmer"></span></span></div>
+      <div class="big" id="disk-big"><span class="skel-big skel-shimmer"></span></div>
+      <canvas class="spark is-skel" id="spark-disk"></canvas>
     </div>
     <div class="card gpu">
-      <div class="top"><span class="label">GPU</span><span class="sub" id="gpu-sub"></span></div>
-      <div class="big" id="gpu-big">—</div>
-      <canvas class="spark" id="spark-gpu"></canvas>
+      <div class="top"><span class="label">GPU</span><span class="sub" id="gpu-sub"><span class="skel-sub skel-shimmer"></span></span></div>
+      <div class="big" id="gpu-big"><span class="skel-big skel-shimmer"></span></div>
+      <canvas class="spark is-skel" id="spark-gpu"></canvas>
     </div>
   </section>
 
@@ -667,6 +701,15 @@ const HIST = 90;
 const TOP_N = 20;
 const $ = (s) => document.querySelector(s);
 
+const __urlParams = new URLSearchParams(location.search);
+let __backend = (__urlParams.get('backend') || '').replace(/\/+$/, '');
+const apiUrl = (p) => {
+  if (!p) return p;
+  if (/^https?:\/\//i.test(p)) return p;
+  return __backend ? __backend + (p.startsWith('/') ? p : '/' + p) : p;
+};
+const hasBackend = () => !!__backend || location.protocol !== 'file:';
+
 /* ================= formatters ================= */
 function fmtBytes(n) {
   if (n == null || !isFinite(n)) return '—';
@@ -705,7 +748,19 @@ function drawSpark(canvas, data, color) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  if (!data || data.length < 2) return;
+  if (!data || data.length < 2) {
+    canvas.classList.add('is-skel');
+    ctx.beginPath();
+    ctx.moveTo(0, h - 2);
+    ctx.lineTo(w, h - 2);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = .25;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  canvas.classList.remove('is-skel');
   const max = Math.max(...data, 1e-9);
   const step = w / (HIST - 1);
   const x0 = w - (data.length - 1) * step;
@@ -784,11 +839,14 @@ function updateRow(panel, key, data, metric, total) {
   if (!r) r = makeRow(panel, key);
   const v = metric === 'cpu' ? data.cpu : data.mem;
   // icon
-  if (data.icon) {
+  const iconUrl = data.icon ? apiUrl(data.icon) : '';
+  if (iconUrl) {
+    r.firstIconMissAt = 0;
     if (r.icon.tagName !== 'IMG') {
       const img = document.createElement('img');
-      img.className = 'icon';
+      img.className = 'icon loading';
       img.alt = '';
+      img.onload = () => img.classList.remove('loading');
       img.onerror = () => {
         const ph = document.createElement('div');
         ph.className = placeholderClass(data);
@@ -799,14 +857,26 @@ function updateRow(panel, key, data, metric, total) {
       r.el.replaceChild(img, r.icon);
       r.icon = img;
     }
-    if (r.icon.src !== data.icon) r.icon.src = data.icon;
+    if ((r.icon.getAttribute('src') || '') !== iconUrl) {
+      r.icon.classList.add('loading');
+      r.icon.src = iconUrl;
+      if (r.icon.complete && r.icon.naturalWidth > 0) r.icon.classList.remove('loading');
+    }
   } else {
     if (r.icon.tagName === 'IMG') {
       const ph = document.createElement('div');
       r.el.replaceChild(ph, r.icon);
       r.icon = ph;
     }
-    const cls = placeholderClass(data), txt = placeholderGlyph(data);
+    const waitBundle = data.kind === 'app' && data.bundle;
+    if (waitBundle) {
+      if (!r.firstIconMissAt) r.firstIconMissAt = Date.now();
+    } else {
+      r.firstIconMissAt = 0;
+    }
+    const waitingIcon = waitBundle && (Date.now() - r.firstIconMissAt < 4000);
+    const cls = waitingIcon ? 'icon skel-icon-ph' : placeholderClass(data);
+    const txt = waitingIcon ? '' : placeholderGlyph(data);
     if (r.icon.className !== cls) r.icon.className = cls;
     if (r.icon.textContent !== txt) r.icon.textContent = txt;
   }
@@ -943,13 +1013,17 @@ async function purgeCache() {
   st.className = 'mp-status';
   st.textContent = 'Approve the macOS security prompt to continue…';
   let r = { ok: false, error: 'no response from the server' };
-  try {
-    const res = await fetch('/api/purge', { method: 'POST' });
-    try { r = await res.json(); }
-    // Non-JSON body = the running backend predates this feature (a reused
-    // live server; the page is always fresh but its code is stale).
-    catch { r = { ok: false, error: 'stale backend — quit Pulse and relaunch (or restart node server.js), then try again' }; }
-  } catch (e) { r = { ok: false, error: e.message || String(e) }; }
+  if (!hasBackend()) {
+    r = { ok: false, error: 'sampler is still starting — try again in a second' };
+  } else {
+    try {
+      const res = await fetch(apiUrl('/api/purge'), { method: 'POST' });
+      try { r = await res.json(); }
+      // Non-JSON body = the running backend predates this feature (a reused
+      // live server; the page is always fresh but its code is stale).
+      catch { r = { ok: false, error: 'stale backend — quit Pulse and relaunch (or restart node server.js), then try again' }; }
+    } catch (e) { r = { ok: false, error: e.message || String(e) }; }
+  }
   if (r.ok) {
     st.className = 'mp-status good';
     st.textContent = `✓ Cleared ${fmtBytes(r.freed)} — it will refill as you work`;  // honest: the cache is for a reason
@@ -989,7 +1063,7 @@ function renderDrawer() {
   const phGlyph = esc(placeholderGlyph(d));
   const phCls = placeholderClass(d);
   const iconHtml = d.icon
-    ? `<img class="icon" src="${esc(d.icon)}" onerror="this.outerHTML='<div class=\\'${phCls}\\'>${phGlyph}</div>'">`
+    ? `<img class="icon" src="${esc(apiUrl(d.icon))}" onerror="this.outerHTML='<div class=\\'${phCls}\\'>${phGlyph}</div>'">`
     : `<div class="${phCls}">${phGlyph}</div>`;
   $('#dhead').innerHTML = `
     <div class="t1">
@@ -1070,8 +1144,9 @@ function renderDrawer() {
   });
 }
 async function killProc(pid, sig, btn) {
+  if (!hasBackend()) return false;
   try {
-    const r = await fetch('/api/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, sig }) });
+    const r = await fetch(apiUrl('/api/kill'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, sig }) });
     const j = await r.json();
     if (!j.ok) { alert(j.error || 'kill failed'); return false; }
     S.killedPids.set(pid, { sig, t: Date.now() });
@@ -1279,11 +1354,21 @@ function tempHue(therm, tRaw) {
   return 120 * (1 - Math.min(1, Math.max(0, (Math.round(tRaw) - lo) / span)));
 }
 
+let firstSysWall = 0;
+
 function renderSys() {
   const s = S.sys;
   if (!s) return;
-  // header
-  $('#machine').innerHTML = `<b>${esc(s.model)}</b> · ${esc(s.chip || '')} · ${esc(s.memLabel || fmtBytes(s.memTotal))} · ${s.cores} cores`;
+  const nowWall = Date.now();
+  if (!firstSysWall) firstSysWall = nowWall;
+  const sysAge = nowWall - firstSysWall;
+
+  // header — keep a compact shimmering placeholder for chip until system_profiler resolves
+  const totalMemText = esc(s.memLabel || fmtBytes(s.memTotal).replace(/\.0 /, ' '));
+  const chipHtml = s.chip
+    ? ` · ${esc(s.chip)}`
+    : (sysAge < 6000 ? ' · <span class="skel-inline skel-shimmer" style="width:92px"></span>' : '');
+  $('#machine').innerHTML = `<b>${esc(s.model)}</b>${chipHtml} · ${totalMemText} · ${s.cores} cores`;
   $('#h-uptime').textContent = fmtDur(s.uptime);
   const bw = $('#h-batt-wrap');
   if (s.batt && s.batt.pct != null) {
@@ -1318,11 +1403,20 @@ function renderSys() {
   pushHist(S.sysHist.cpu, s.cpu.total);
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
 
-  // gpu card (Apple Silicon ioreg — "—" on machines without an AGX GPU node)
+  // gpu card (Apple Silicon ioreg — keeps skeleton pill until first sample arrives; settles to "—" on Intel)
   const g = s.gpu;
-  $('#gpu-big').textContent = g && g.pct != null ? fmtPct(g.pct) : '—';
-  $('#gpu-sub').innerHTML = `<span>${esc((g && g.name) || '—')}${g && g.cores ? ` · ${g.cores} cores` : ''}</span>`;
-  pushHist(S.sysHist.gpu, g && g.pct != null ? g.pct : 0);
+  const gpuBig = $('#gpu-big');
+  if (g && g.pct != null) {
+    gpuBig.textContent = fmtPct(g.pct);
+    pushHist(S.sysHist.gpu, g.pct);
+  } else if (!g || (!g.name && sysAge > 10000)) {
+    gpuBig.textContent = '—';
+  }
+  if (g && g.name) {
+    $('#gpu-sub').innerHTML = `<span>${esc(g.name)}${g.cores ? ` · ${g.cores} cores` : ''}</span>`;
+  } else if (sysAge > 10000) {
+    $('#gpu-sub').innerHTML = '<span>—</span>';
+  }
   drawSpark($('#spark-gpu'), S.sysHist.gpu, '#34c759');
 
   // memory card — Activity Monitor's "Memory Used" (Apps + Wired + Compressed,
@@ -1347,6 +1441,7 @@ function renderSys() {
     ['cache', 'File cache', s.mem.cache],
   ];
   const bar = $('#membar');
+  bar.classList.remove('is-skel');
   const staleFree = bar.querySelector('.seg.free');
   if (staleFree) staleFree.remove();
   for (const [c, label, v] of segs) {
@@ -1357,6 +1452,7 @@ function renderSys() {
   }
   bar.title = `In use: ${inUseStr} · Cache: ${fmtBytes(s.mem.cache)} · Free: ${fmtBytes(s.mem.free)}`;
   const leg = $('#memlegend');
+  leg.querySelectorAll('.ml.is-skel').forEach((n) => n.remove());
   const legItems = [
     ['apps', 'Apps', s.mem.apps, 'var(--mem)', false],
     ['wired', 'Wired', s.mem.wired, 'var(--wired)', true],
@@ -1382,17 +1478,21 @@ function renderSys() {
   pushHist(S.sysHist.comp, s.mem.compressed);
   pushHist(S.sysHist.cache, s.mem.cache);
 
-  // net card — headline matches the combined ↓+↑ sparkline; subtitle splits ↓ and ↑
-  $('#net-big').textContent = fmtRate(s.net.down + s.net.up);
-  $('#net-sub').innerHTML = `<span>↓ <b>${fmtRate(s.net.down)}</b></span><span>↑ <b>${fmtRate(s.net.up)}</b></span>`;
-  pushHist(S.sysHist.net, s.net.down + s.net.up);
+  // net card — headline matches the combined ↓+↑ sparkline; keep skeleton until 2nd netstat delta lands
+  if (s.net && s.net.ready !== false) {
+    $('#net-big').textContent = fmtRate(s.net.down + s.net.up);
+    $('#net-sub').innerHTML = `<span>↓ <b>${fmtRate(s.net.down)}</b></span><span>↑ <b>${fmtRate(s.net.up)}</b></span>`;
+    pushHist(S.sysHist.net, s.net.down + s.net.up);
+  }
   drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');
 
-  // disk card
-  const mbps = s.disk.mbps || 0;
-  $('#disk-big').textContent = mbps >= 1024 ? (mbps / 1024).toFixed(2) + ' GB/s' : (mbps >= 10 ? mbps.toFixed(0) : mbps.toFixed(1)) + ' MB/s';
-  $('#disk-sub').innerHTML = '<span>read + write</span>';
-  pushHist(S.sysHist.disk, mbps);
+  // disk card — keep skeleton until first iostat window completes
+  if (s.disk && s.disk.ready !== false) {
+    const mbps = s.disk.mbps || 0;
+    $('#disk-big').textContent = mbps >= 1024 ? (mbps / 1024).toFixed(2) + ' GB/s' : (mbps >= 10 ? mbps.toFixed(0) : mbps.toFixed(1)) + ' MB/s';
+    $('#disk-sub').innerHTML = '<span>read + write</span>';
+    pushHist(S.sysHist.disk, mbps);
+  }
   drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
 
   $('#hint').textContent = `${s.procCount} processes · ${s.appCount} apps`;
@@ -1410,9 +1510,13 @@ function traceStage(stage) {
   } catch { /* web mode: no native handler */ }
 }
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => traceStage('dom_content_loaded'), { once: true });
+  document.addEventListener('DOMContentLoaded', () => {
+    traceStage('dom_content_loaded');
+    requestAnimationFrame(() => traceStage('skeleton_paint'));
+  }, { once: true });
 } else {
   traceStage('dom_content_loaded');
+  requestAnimationFrame(() => traceStage('skeleton_paint'));
 }
 
 /* ================= tick ================= */
@@ -1422,15 +1526,26 @@ let bootServerMtime = null;
 let bootUiMtime = null;
 let skelCleared = false;
 
+function reloadPage() {
+  if (location.protocol === 'file:') {
+    const u = new URL(location.href);
+    u.searchParams.set('r', String(Date.now()));
+    if (__backend) u.searchParams.set('backend', __backend);
+    location.replace(u.toString());
+  } else {
+    location.reload();
+  }
+}
+
 function onTick(p) {
   if (!p || !p.sys || !Array.isArray(p.apps)) return;
   if (p.serverMtime) {
     if (bootServerMtime === null) bootServerMtime = p.serverMtime;
-    else if (p.serverMtime !== bootServerMtime) { location.reload(); return; }
+    else if (p.serverMtime !== bootServerMtime) { reloadPage(); return; }
   }
   if (p.uiMtime) {
     if (bootUiMtime === null) bootUiMtime = p.uiMtime;
-    else if (p.uiMtime !== bootUiMtime) { location.reload(); return; }
+    else if (p.uiMtime !== bootUiMtime) { reloadPage(); return; }
   }
   const now = Date.now();
   // Never re-render an older or duplicate snapshot, and never mark >10s-old data as live.
@@ -1501,9 +1616,38 @@ function onTick(p) {
   if (ctxTarget && !S.apps.get(ctxTarget.key)) closeCtxMenu();
 }
 
-function setLive(on) {
+let startingTimer = null;
+function clearStartingTimer() {
+  if (startingTimer) { clearTimeout(startingTimer); startingTimer = null; }
+}
+function enterStartingState() {
   const el = $('#live');
-  el.classList.remove('connecting');
+  el.classList.remove('connecting', 'off');
+  el.classList.add('starting');
+  $('#live-text').textContent = 'starting…';
+  $('#hint').textContent = 'starting local sampler…';
+  clearStartingTimer();
+  startingTimer = setTimeout(() => {
+    if (!hasBackend()) {
+      el.classList.remove('starting');
+      el.classList.add('off');
+      $('#live-text').textContent = 'offline';
+      $('#hint').textContent = 'sampler unavailable';
+    }
+  }, 30000);
+}
+function enterConnectingState() {
+  clearStartingTimer();
+  const el = $('#live');
+  el.classList.remove('starting', 'off');
+  el.classList.add('connecting');
+  $('#live-text').textContent = 'connecting…';
+  $('#hint').textContent = 'connecting to local sampler…';
+}
+function setLive(on) {
+  clearStartingTimer();
+  const el = $('#live');
+  el.classList.remove('starting', 'connecting');
   el.classList.toggle('off', !on);
   $('#live-text').textContent = on ? 'live' : 'reconnecting…';
 }
@@ -1516,10 +1660,10 @@ let sseFails = 0;
 let pollBusy = false;
 
 async function pollOnce(fresh = false) {
-  if (pollBusy) return;
+  if (!hasBackend() || pollBusy) return;
   pollBusy = true;
   try {
-    const r = await fetch(fresh ? '/api/snapshot?fresh=1' : '/api/snapshot', { cache: 'no-store' });
+    const r = await fetch(apiUrl(fresh ? '/api/snapshot?fresh=1' : '/api/snapshot'), { cache: 'no-store' });
     if (r.ok) {
       const data = await r.json();
       if (!tracedFirstMsg && data && data.sys) { tracedFirstMsg = true; traceStage('first_sse_message'); }
@@ -1534,6 +1678,7 @@ async function pollOnce(fresh = false) {
 }
 
 function connect(forceReset = false) {
+  if (!hasBackend()) return;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (forceReset && es) {
     try { es.close(); } catch { /* noop */ }
@@ -1549,7 +1694,7 @@ function connect(forceReset = false) {
   }
   if (es) return;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  const stream = new EventSource('/events');
+  const stream = new EventSource(apiUrl('/events'));
   es = stream;
   stream.onopen = () => { sseFails = 0; };
   stream.onmessage = (e) => {
@@ -1574,9 +1719,28 @@ function connect(forceReset = false) {
   };
 }
 
+// Inject or swap the loopback backend URL from the native shell without reloading.
+window.__pulseSetBackend = function(url) {
+  const clean = String(url || '').replace(/\/+$/, '');
+  if (!clean || clean === __backend) return;
+  const hadBackend = !!__backend;
+  __backend = clean;
+  if (!hadBackend) enterConnectingState();
+  sseFails = 0;
+  pollOnce(true);
+  connect(true);
+  if (!postNativeSetting({ action: 'sync' })) fetchSettingsFallback();
+  if (S.apps.size) {
+    renderPanel('cpu');
+    renderPanel('mem');
+    if (S.drawerKey) renderDrawer();
+  }
+};
+
 // Liveness watchdog: never claim "live" when ticks have stalled (sleep/wake,
 // hung socket, restarted server), and actively recover right away.
 setInterval(() => {
+  if (!hasBackend()) return;
   const silence = lastFreshWall ? Date.now() - lastFreshWall : Infinity;
   if (silence > 4500) {
     setLive(false);
@@ -1586,6 +1750,7 @@ setInterval(() => {
 }, 1500);
 
 window.__pulseWake = () => {
+  if (!hasBackend()) return;
   if (!lastFreshWall || Date.now() - lastFreshWall > 1800) {
     pollOnce(true);
     if (!es || es.readyState !== 1) connect(true);
@@ -1820,8 +1985,9 @@ function postNativeSetting(payload) {
 }
 
 async function fetchSettingsFallback() {
+  if (!hasBackend()) return;
   try {
-    const r = await fetch('/api/settings', { cache: 'no-store' });
+    const r = await fetch(apiUrl('/api/settings'), { cache: 'no-store' });
     if (r.ok) {
       const d = await r.json();
       Object.assign(settingsState, d);
@@ -1831,8 +1997,9 @@ async function fetchSettingsFallback() {
 }
 
 async function saveSettingsFallback(patch) {
+  if (!hasBackend()) return;
   try {
-    const r = await fetch('/api/settings', {
+    const r = await fetch(apiUrl('/api/settings'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -2183,10 +2350,14 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
-window.addEventListener('resize', () => {
+function drawIdleSparks() {
   drawSpark($('#spark-cpu'), S.sysHist.cpu, '#ff9f43');
   drawSpark($('#spark-net'), S.sysHist.net, '#2dd4a7');
   drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
+  drawSpark($('#spark-gpu'), S.sysHist.gpu, '#34c759');
+}
+window.addEventListener('resize', () => {
+  drawIdleSparks();
   if (memPop) {
     const r = $('#mem-info').getBoundingClientRect();
     const pop = $('#mempop');
@@ -2196,8 +2367,13 @@ window.addEventListener('resize', () => {
     pop.style.top = Math.min(r.bottom + 8, maxTop) + 'px';
   }
 });
+drawIdleSparks();
 if (!postNativeSetting({ action: 'sync' })) fetchSettingsFallback();
-connect();
+if (hasBackend()) {
+  connect();
+} else {
+  enterStartingState();
+}
 </script>
 </body>
 </html>

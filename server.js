@@ -46,6 +46,7 @@ const SERVER_MTIME = (() => {
 // Shared state lives in ~/.pulse (port file + icon cache) — never inside the app
 // bundle, which should stay immutable.
 const PULSE_DIR = path.join(os.homedir(), '.pulse');
+const PORT_FILE = process.env.PULSE_PORT_FILE || path.join(PULSE_DIR, 'port');
 const ICON_DIR = path.join(PULSE_DIR, 'icons');
 const _PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -671,6 +672,7 @@ const clients = new Set();
 // The rate is computed over the real elapsed time between completions.
 let netCounters = null; // { ib, ob, t }
 let netRate = { down: 0, up: 0 };
+let netRateReady = false;
 let netBusy = false;
 let lastBattOut = null;
 let lastBattT = 0;
@@ -776,6 +778,7 @@ function kickNetstat() {
       const dt = Math.max((now - netCounters.t) / 1000, 0.5);
       netRate.down = Math.max(0, (n.ib - netCounters.ib) / dt);
       netRate.up = Math.max(0, (n.ob - netCounters.ob) / dt);
+      netRateReady = true;
     }
     netCounters = { ib: n.ib, ob: n.ob, t: now };
   });
@@ -1010,7 +1013,8 @@ async function sample(fast = false) {
   // guard, so a stalled sampler never displays a frozen "live" number.
   const top = Date.now() - lastTopCpuT < 15000 ? lastTopCpu : { user: 0, sys: 0, idle: 100, total: 0 };
   const batt = parseBatt(battOut);
-  const diskMbps = Date.now() - lastDiskT < 15000 ? lastDiskMbps : 0;
+  const diskReady = lastDiskT > 0 && (Date.now() - lastDiskT < 15000);
+  const diskMbps = diskReady ? lastDiskMbps : 0;
 
   const memTotal = sysc.memTotal;
   // Clamp: vm_stat can transiently report more free bytes than the machine has.
@@ -1030,7 +1034,8 @@ async function sample(fast = false) {
   const inUse = Math.max(0, used - cache);
 
   let netDown = 0, netUp = 0;
-  if (netCounters && Date.now() - netCounters.t < 15000) {
+  const netReady = !!(netCounters && netRateReady && (Date.now() - netCounters.t < 15000));
+  if (netReady) {
     netDown = netRate.down;
     netUp = netRate.up;
   }
@@ -1061,8 +1066,8 @@ async function sample(fast = false) {
       },
       swap: { used: sysc.swapUsed },  // total omitted: auto-allocated on macOS, means nothing
       uptime: sysc.bootTime ? Math.max(0, Math.floor(Date.now() / 1000 - sysc.bootTime)) : 0,
-      net: { down: netDown, up: netUp },
-      disk: { mbps: diskMbps },
+      net: { down: netDown, up: netUp, ready: netReady },
+      disk: { mbps: diskMbps, ready: diskReady },
       batt,
       gpu: {
         pct: gpuPct == null ? null : +gpuPct.toFixed(1),
@@ -1245,7 +1250,20 @@ function settlePurgeQueue(id, result) {
  *  /api/purge-result POST { id, ok, cancelled } ← Pulse.swift (in-app outcome)
  *  /icons/*        cached app icons
  * ------------------------------------------------------------------ */
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '86400',
+};
+
 const server = http.createServer((req, res) => {
+  for (const [k, v] of Object.entries(CORS_HEADERS)) res.setHeader(k, v);
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   const url = (req.url || '/').split('?')[0];
 
   if (url === '/' || url === '/index.html') {
@@ -1435,14 +1453,49 @@ const server = http.createServer((req, res) => {
  * ------------------------------------------------------------------ */
 let actualPort = PORT;
 
-// Tell the world where we are: a stdout line for the app shell, plus a port file
-// so a later launch (app or web) can find and reuse this server.
+function parsePortFile(text) {
+  if (!text) return null;
+  const lines = String(text).trim().split(/\r?\n/);
+  const port = Math.floor(+lines[0]);
+  if (!Number.isFinite(port) || port <= 0 || port >= 65536) return null;
+  let pid = null;
+  if (lines.length > 1 && lines[1].trim() !== '') {
+    const p = Math.floor(+lines[1].trim());
+    if (Number.isFinite(p) && p > 0) pid = p;
+  }
+  return { port, pid };
+}
+
+function isPidAlive(pid) {
+  if (!pid || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return !!(e && e.code === 'EPERM'); }
+}
+
+function canWritePortFile(existingText, selfPid, checkAlive = isPidAlive) {
+  if (!existingText) return true;
+  const parsed = parsePortFile(existingText);
+  if (!parsed || !parsed.pid) return true;
+  if (parsed.pid === selfPid) return true;
+  return !checkAlive(parsed.pid);
+}
+
+const skipPortFile = () =>
+  process.env.PULSE_RACE === '1'
+  || (process.env.PULSE_SELFTEST === '1' && !process.env.PULSE_PORT_FILE);
+
+// Tell the world where we are: a stdout line for the app shell, plus a pid-owned
+// port file (`<port>\n<pid>\n`) so a later launch (app or web) can find and reuse this server.
 function announcePort() {
   console.log(`PULSE_LISTENING=${actualPort}`);
-  if (process.env.PULSE_SELFTEST === '1') return; // don't clobber a live session's port file
+  if (skipPortFile()) return; // don't clobber a live session's port file
   try {
-    fs.mkdirSync(PULSE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(PULSE_DIR, 'port'), String(actualPort) + '\n');
+    fs.mkdirSync(path.dirname(PORT_FILE), { recursive: true });
+    let existing = null;
+    try { existing = fs.readFileSync(PORT_FILE, 'utf8'); } catch { /* absent */ }
+    if (canWritePortFile(existing, process.pid)) {
+      fs.writeFileSync(PORT_FILE, `${actualPort}\n${process.pid}\n`);
+    }
   } catch { /* non-fatal */ }
 }
 
@@ -1451,11 +1504,14 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 // Remove the port file on ANY exit path (signals, watchdog, crash) so a stale
-// file never points at a dead server. Synchronous fs is allowed in exit handlers.
+// file never points at a dead server, and only if BOTH port and pid match self.
 process.on('exit', () => {
+  if (skipPortFile()) return;
   try {
-    const f = path.join(PULSE_DIR, 'port');
-    if (fs.readFileSync(f, 'utf8').trim() === String(actualPort)) fs.unlinkSync(f);
+    const parsed = parsePortFile(fs.readFileSync(PORT_FILE, 'utf8'));
+    if (parsed && parsed.port === actualPort && (!parsed.pid || parsed.pid === process.pid)) {
+      fs.unlinkSync(PORT_FILE);
+    }
   } catch { /* file already gone */ }
 });
 

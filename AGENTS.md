@@ -30,7 +30,7 @@ macOS: ps · vm_stat · sysctl · top · netstat · iostat · pmset · system_pr
    ▼
 server.js  →  one JSON "snapshot" per tick (schema in docs/contracts.md)
    │
-   ├─ GET  /               → index.html (the UI)
+   ├─ GET  /               → index.html (web mode; app loads file:// at t=0 + __pulseSetBackend)
    ├─ GET  /events         → SSE stream of snapshots  →  index.html (live updates)
    ├─ GET  /api/snapshot   → last snapshot            →  index.html (polling fallback)
    ├─ GET  /api/status     → lightweight status       →  Pulse.swift menu-bar item (2s poll)

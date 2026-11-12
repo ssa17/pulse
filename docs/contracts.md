@@ -36,8 +36,8 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     },
     swap: { used },                // bytes (total is auto-allocated on macOS — not shipped)
     uptime: <seconds>,
-    net:  { down, up },         // bytes/sec
-    disk: { mbps },             // MB/s, read + write
+    net:  { down, up, ready },  // bytes/sec; ready=false until 2nd netstat delta lands (or stale >15s)
+    disk: { mbps, ready },      // MB/s, read + write; ready=false until 1st iostat window completes (or stale >15s)
     batt: { pct, charging },        // pct null when on AC / no battery
     gpu:  { pct, mem, name, cores }, // Apple Silicon only (ioreg AGX/IOAccelerator); pct null elsewhere.
                                      // pct = delta of accumulatedGPUTime ÷ window ÷ MGPU units; mem = in use system memory (bytes);
@@ -108,17 +108,36 @@ not an app.
 
 ## Cross-component protocols
 
-- **Port discovery**: the backend writes `~/.pulse/port` on startup and removes it on
-  exit (only if the file still points at ITSELF — another live backend may have
-  overwritten it since). A new launch (app or web) reuses a
-  running backend only if that port answers `/api/snapshot` with a fresh Pulse
-  payload matching `serverMtime` (`checkServerAlive` in `Pulse.swift` runs
-  asynchronously with a 1.0s cap so it never blocks the main thread). If the
-  LaunchAgent daemon is loaded but serving a STALE `server.js` (a rebuild changes
-  the code, which the plist doesn't track), the app restarts the daemon
-  (`launchctl kickstart -k`) before attaching instead of spawning a parallel
-  backend of its own — and when it adopts the daemon it releases any backend it
-  spawned while waiting, so exactly one sampler ever runs.
+- **UI delivery & `file://` backend injection**: in app mode, `Pulse.swift` loads
+  `public/index.html` immediately at launch via `WKWebView.loadFileURL` with
+  `?r=<ts>` (and `&backend=http://127.0.0.1:<port>` on warm reuse or reopen),
+  resolving `public/` from a dev checkout if present or `Contents/Resources/public/`
+  otherwise (`reload()` uses the same loader to bust WebKit cache cleanly). On
+  cold launch before any backend answers, `index.html` (`!hasBackend()`) paints
+  full chrome + shimmering skeletons in `starting…` state without polling `file://`.
+  When a backend becomes ready, `Pulse.swift` invokes
+  `window.__pulseSetBackend("http://127.0.0.1:<port>")` via `evaluateJavaScript`
+  (kept non-`async` in JS because `WKWebView` rejects Promise returns) so
+  SSE/fetch/icons connect in place with no reload; switching backends (e.g., race
+  → LaunchAgent daemon) calls `__pulseSetBackend` again seamlessly. All UI network and icon requests go
+  through `apiUrl()`, and `server.js` emits `Access-Control-Allow-Origin: *`
+  (`GET`/`POST`/`OPTIONS` preflight `204`) — safe under invariant 1 because
+  `server.js` binds exclusively to `127.0.0.1`. Web mode continues to serve
+  `index.html` directly over HTTP from `GET /`.
+- **Port discovery & spawn-race**: the backend writes `<port>\n<pid>\n` to
+  `~/.pulse/port` (`PULSE_PORT_FILE` overrides in self-tests) when no different
+  live owner holds it (`canWritePortFile()` / `isPidAlive()`), and removes it on
+  exit only if the file still matches both its own port and pid. A new launch
+  reuses a running backend when its pid (if present) is alive and that port
+  answers `/api/snapshot` with a matching `serverMtime` (`checkServerAlive` in
+  `Pulse.swift`, 1.0s async cap). If the LaunchAgent daemon is configured but
+  cold/stale (causing `launchd` `ProcessType: Background` startup to take ~2.5s),
+  `refreshDaemonOrSpawn()` launches a direct `node` racer (`PULSE_RACE=1`, which
+  skips writing the port file) in parallel with `bootstrap`/`kickstart`: the
+  racer feeds the UI in ~400ms, then when the LaunchAgent daemon is up and healthy
+  (`pid != racer`), `Pulse.swift` swaps live via `__pulseSetBackend`, marks
+  `daemon_migrated`, and terminates the racer (promoting the racer via
+  `writePortFileIfUnowned` if the daemon fails or times out).
 - **App-spawned vs LaunchAgent backend**:
   * **App-spawned**: when no daemon is running, `Pulse.swift` resolves `node`
     (`findNodeFast` → async login-shell fallback) and spawns `node server.js`
@@ -182,15 +201,23 @@ not an app.
   login" toggle always reflects actual `launchctl` / plist state.
 - **Startup & reopen trace (`~/.pulse/boot-trace.log`)**:
   `BootTracer` in `Pulse.swift` and the `pulseTrace` `WKScriptMessageHandler` in
-  `index.html` log timestamped stages (`app_launch`, `port_probe_start`,
-  `daemon_reused` / `backend_spawn`, `pulse_listening`, `webview_load`,
-  `dom_content_loaded`, `backend_first_snapshot`, `menubar_first_sample`,
-  `first_sse_message`, `first_render`, plus `window_reopen` sessions), keeping
-  the last 10 sessions. **Privacy invariant**: only stage names and numeric
-  timestamps are ever written — never process names, arguments, or paths.
+  `index.html` log timestamped stages (`app_launch`, `webview_ready`,
+  `port_probe_start` / `race_start`, `daemon_reused` / `backend_spawn`,
+  `pulse_listening` / `race_backend_ready`, `bootstrap_call` / `bootstrap_done` /
+  `kickstart_call` / `kickstart_done`, `port_file_seen`, `backend_alive`,
+  `webview_load`, `dom_content_loaded`, `skeleton_paint`,
+  `backend_first_snapshot`, `menubar_first_sample`, `first_sse_message`,
+  `first_render`, `daemon_migrated`, plus `window_reopen` sessions), keeping
+  the last 10 sessions (`boot-trace-selftest.log` when `PULSE_SELFTEST=1`).
+  **Privacy invariant**: only stage names and numeric timestamps are ever
+  written — never process names, arguments, or paths.
 - **Self-test DOM & lifecycle contract**: with `PULSE_SELFTEST=1`, `Pulse.swift`
-  clicks `#rows-cpu .row`, counts `#dtable .prow`, reads `#machine`, `#cpu-big`,
-  `#mem-big`, `#live-text`, `#ver` from `index.html`, exercises the memory info
+  captures the pre-injection `file://` skeleton (`startingSkeletonOk`: `starting…`,
+  `.skel-row > 0`, `__pulseSetBackend` function, blank `#cpu-big`), then clicks
+  `#rows-cpu .row`, counts `#dtable .prow`, reads `#machine`, `#cpu-big`,
+  `#mem-big`, `#live-text`, `#ver` from `index.html`, exercises the LaunchAgent
+  install/remove round-trip via isolated `port-selftest` (`daemonRoundTripOk` +
+  `daemonPortOwnerOk`), verifies `skeleton_paint` in `bootTraceOk`, exercises the memory info
   popover (clicks `#mem-info` → reads `#mempop` open + `#pop-wired`, `#pop-comp`,
   `#pop-cache`, `#pop-webkit-note` → closes it), exercises the in-dashboard
   Settings modal (`#settings-btn` → `#settings-scrim.on` → `#settings-close`,

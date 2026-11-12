@@ -9,7 +9,11 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Changed
+- Startup: the dashboard window opens immediately with shimmering skeleton placeholders and fills each metric independently as its measurement lands, while cold app launches show live CPU, memory, and app rows in under half a second
+
 ### Fixed
+- Startup: the dashboard window no longer flashes white before its first frame paints
 - Updates: the card no longer claims it “couldn't check for updates” after a successful check that found no update — the failure state was inverted, which is also why real failures (no network, unreachable feed) went unreported
 - Updates: when a check genuinely fails, the card now says so — including how long ago that attempt was (“· tried 5m ago”)
 

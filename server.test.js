@@ -1009,6 +1009,57 @@ function parseGpuMem(out) {
   assert(parseGpuMem('no memory field') === null, 'parseGpuMem: missing field → null');
 }
 
+/* ── port-file ownership & readiness flags ── */
+console.log('\n--- port-file & ready flags ---');
+
+function parsePortFile(text) {
+  if (!text) return null;
+  const lines = String(text).trim().split(/\r?\n/);
+  const port = Math.floor(+lines[0]);
+  if (!Number.isFinite(port) || port <= 0 || port >= 65536) return null;
+  let pid = null;
+  if (lines.length > 1 && lines[1].trim() !== '') {
+    const p = Math.floor(+lines[1].trim());
+    if (Number.isFinite(p) && p > 0) pid = p;
+  }
+  return { port, pid };
+}
+
+function canWritePortFile(existingText, selfPid, checkAlive) {
+  if (!existingText) return true;
+  const parsed = parsePortFile(existingText);
+  if (!parsed || !parsed.pid) return true;
+  if (parsed.pid === selfPid) return true;
+  return !checkAlive(parsed.pid);
+}
+
+{
+  const p1 = parsePortFile('54321\n');
+  assert(p1 && p1.port === 54321 && p1.pid === null, 'parsePortFile: legacy 1-line format');
+  const p2 = parsePortFile('54321\n9876\n');
+  assert(p2 && p2.port === 54321 && p2.pid === 9876, 'parsePortFile: 2-line port+pid format');
+  assert(parsePortFile('') === null, 'parsePortFile: empty → null');
+  assert(parsePortFile('0\n123\n') === null && parsePortFile('70000\n123\n') === null, 'parsePortFile: rejects invalid ports');
+  assert(parsePortFile('8787\nnotapid\n').pid === null, 'parsePortFile: ignores malformed pid line');
+
+  assert(canWritePortFile(null, 100, () => true) === true, 'canWritePortFile: absent → allowed');
+  assert(canWritePortFile('garbage', 100, () => true) === true, 'canWritePortFile: corrupt → allowed');
+  assert(canWritePortFile('8787\n', 100, () => true) === true, 'canWritePortFile: legacy without pid → allowed');
+  assert(canWritePortFile('8787\n100\n', 100, () => true) === true, 'canWritePortFile: owner == self → allowed');
+  assert(canWritePortFile('8787\n200\n', 100, () => true) === false, 'canWritePortFile: live foreign pid → blocked');
+  assert(canWritePortFile('8787\n200\n', 100, () => false) === true, 'canWritePortFile: dead foreign pid → allowed');
+
+  const isFresh = (t, now) => t > 0 && (now - t < 15000);
+  const netReady = (counters, rateReady, now) => !!(counters && rateReady && isFresh(counters.t, now));
+  assert(netReady(null, false, 10000) === false, 'netReady: no netstat yet → false');
+  assert(netReady({ t: 9000 }, false, 10000) === false, 'netReady: 1st netstat read (baseline only) → false');
+  assert(netReady({ t: 9000 }, true, 10000) === true, 'netReady: 2nd netstat read and fresh → true');
+  assert(netReady({ t: 9000 }, true, 30000) === false, 'netReady: stale (>15s) → false');
+  assert(isFresh(0, 10000) === false, 'diskReady: no iostat yet → false');
+  assert(isFresh(9500, 10000) === true, 'diskReady: fresh iostat → true');
+  assert(isFresh(9500, 30000) === false, 'diskReady: stale (>15s) → false');
+}
+
 // ---------------------------------------------------------------------------
 //  Wrap up
 // ---------------------------------------------------------------------------
