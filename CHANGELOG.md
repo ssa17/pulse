@@ -15,6 +15,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Dashboard: a live progress bar in the Updates card while an update check runs — the check button greys out and the bar and the result land together (a green “Up to date” or the highlighted new version), so the word never says “up to date” while the bar is still running — and the brief macOS progress window no longer flashes for checks started from the dashboard
 
 ### Changed
+- The update strip along the top of the window is now taller (30px) and shows text ("Pulse X.X.X is available — click to update") so it's easier to see and click
 - Settings: the Updates card button shows “Checking…” while a check is in flight, and its badge is now visible when up to date, showing the last check time
 - Dashboard: in the browser without the Pulse app, “Check for Updates” now explains that update checks run from the app, instead of doing nothing
 - Dashboard: the Updates card shows when Pulse last verified your version — “· checked just now” while fresh, a clock time (“at 14:32”) once it’s an hour old

@@ -2100,6 +2100,57 @@ final class ClickableView: NSView {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
+/// A clickable, text-labeled update strip.
+final class UpdateStripView: NSView {
+    private let labelField = NSTextField(labelWithString: "")
+    var onClick: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(red: 0.17, green: 0.83, blue: 0.65, alpha: 1).cgColor  // --net
+        labelField.isEditable = false
+        labelField.isSelectable = false
+        labelField.alignment = .center
+        labelField.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        labelField.textColor = NSColor.white
+        addSubview(labelField)
+        wantsLayer = true
+    }
+
+    override func layout() {
+        super.layout()
+        // Padding of 6px top/bottom, label fills the rest
+        let labelHeight = bounds.height - 12
+        let labelY = bounds.minY + 6
+        labelField.frame = NSRect(x: 8, y: labelY, width: bounds.width - 16, height: max(labelHeight, 14))
+    }
+
+    func setVersion(_ version: String?) {
+        if let v = version {
+            labelField.stringValue = "Pulse \(v) is available — click to update"
+            isHidden = false
+            toolTip = "Update to Pulse \(v)"
+        } else {
+            labelField.stringValue = ""
+            isHidden = true
+            toolTip = nil
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
 /// Sparkle's standard user driver, minus one modal: the “you're up to date”
 /// alert. Manually checking for updates while already current used to end in a
 /// dialog that required an OK click for nothing — instead the dashboard's
@@ -2229,10 +2280,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var pendingUpdateVersion: String?   // newest appcast version not yet installed
     var lastCheckAtMs: Int?             // epoch ms of the last completed check that found nothing
     var updateChecking = false          // a check is in flight — drives the “Checking…” states
-    var lastCheckFailed = false         // the last check errored — “couldn't check” ≠ “up to date”
+    var lastCheckFailed = false         // the last check errored — “couldn't check” ≠ “up to date"
     var checkFromWeb = false            // the in-flight check was initiated from the dashboard card
     var checkSafetyTimer: Timer?        // a canceled/dropped check never gets a result callback
-    let updateStrip = ClickableView()
+    let updateStrip = UpdateStripView()
     var activityToken: NSObjectProtocol?
     let darkBg = NSColor(red: 0.043, green: 0.055, blue: 0.07, alpha: 1)
 
@@ -2583,7 +2634,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     /// is replaced when the web opens/closes/reopens.
     func syncUpdateStrip() {
         guard let cv = window.contentView else { return }
-        updateStrip.frame = NSRect(x: 0, y: cv.frame.maxY - 4, width: cv.frame.width, height: 4)
+        // Height: 30px for the strip, positioned at top
+        updateStrip.frame = NSRect(x: 0, y: cv.frame.maxY - 30, width: cv.frame.width, height: 30)
         cv.addSubview(updateStrip)
     }
 
@@ -2610,8 +2662,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     /// can be read directly here.
     func setUpdateIndicators() {
         let v = pendingUpdateVersion
-        updateStrip.isHidden = v == nil
-        updateStrip.toolTip = v.map { "Pulse \($0) is available — click to update" }
+        updateStrip.setVersion(v)
         syncUpdateStrip()
         status?.showUpdateRow(v)
         settingsController?.syncFromState()
@@ -2787,11 +2838,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         window.delegate = self
         window.backgroundColor = darkBg
 
-        // Very thin strip along the top edge — the quiet, persistent “an update is
+        // Update strip along the top edge — the quiet, persistent “an update is
         // available, click to install” indicator (hidden until one is).
-        updateStrip.wantsLayer = true
-        updateStrip.layer?.backgroundColor = NSColor(red: 0.17, green: 0.83, blue: 0.65, alpha: 1).cgColor  // --net
-        updateStrip.isHidden = true
+        updateStrip.setVersion(nil)
         updateStrip.autoresizingMask = [.width, .minYMargin]
         updateStrip.onClick = { [weak self] in self?.checkForUpdates() }
 
