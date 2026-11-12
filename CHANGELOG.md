@@ -8,28 +8,17 @@ in the auto-update dialog), then resets the section to a fresh empty bucket.
 Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
-- The thermal state word (nominal / slowed / throttled) is now colored by the actual SMC throttle level — nominal reads neutral instead of red — while the CPU temperature keeps its own green→red ramp, on both the dashboard CPU card and the menu bar
-
 ### Added
-- Settings: the Updates card now shows your current version and the latest one, with an “Available” badge when a newer build is out
-- Dashboard: a live progress bar in the Updates card while an update check runs — the check button greys out and the bar and the result land together (a green “Up to date” or the highlighted new version), so the word never says “up to date” while the bar is still running — and the brief macOS progress window no longer flashes for checks started from the dashboard
+- Settings: a fuller Updates card — your current version and the latest one, an inline progress bar while a check runs, the last check time, and a highlighted card when a new version is out
+- The update strip along the top of the window is taller and shows its version — “Pulse X.X is available — click to update” — so it's obvious what it means
 
 ### Changed
-- The update strip along the top of the window is now taller (30px) and shows text ("Pulse X.X.X is available — click to update") so it's easier to see and click
-- Settings: the Updates card button shows “Checking…” while a check is in flight, and its badge is now visible when up to date, showing the last check time
-- Dashboard: in the browser without the Pulse app, “Check for Updates” now explains that update checks run from the app, instead of doing nothing
-- Dashboard: the Updates card shows when Pulse last verified your version — “· checked just now” while fresh, a clock time (“at 14:32”) once it’s an hour old
-- Dashboard: the Updates card no longer reserves space for the progress bar when the check isn’t running — the slot folds in so the card is as compact as any other settings card
+- Thermal: the throttle word (nominal / slowed / throttled) is now colored by the actual SMC throttle level — nominal reads neutral instead of red
 
 ### Fixed
-- Updates: the scheduled hourly update check now actually runs — the Sparkle 2 migration renamed the auto-check key (to `SUEnableAutomaticChecks`) and it was never added, so since v1.4 Pulse only ever checked when you manually clicked (the v1.4 “hourly checks” note was aspirational); new releases are now noticed within the hour, and the menu/strip/card still offer manual checks
-- Dashboard: a failed update check now says “Couldn’t check for updates” in the Updates card instead of silently keeping a stale “up to date” claim
-- Dashboard: the Updates card progress bar no longer pulses back to life every 15s after a check completes — it fades out once and stays out until the next check
-- Settings: after a failed check the Updates badge now says “Couldn’t check” instead of a stale “Up to date” stamp
-- Settings: when you're on the latest version, the Updates card shows “You have vX — up to date” instead of a ghost “New update available” card with empty versions (the card's hidden state was defeated by its styling, so it lingered with placeholder text)
-- Settings: a manual update check that finds nothing no longer pops a macOS “you're up to date” dialog you must click OK on — the Updates card confirms it inline instead ("You have v1.4. Up to date · checked just now")
-- Dashboard: the updates section re-syncs when the window re-opens, so it always agrees with the menu bar and the app's Settings
-- Dashboard: clicking outside the right-click context menu now dismisses it without also triggering whatever is underneath (the dismissing click no longer opens a drawer)
+- Updates: the scheduled hourly check now actually runs — it silently stopped after the Sparkle 2 migration, so new releases went unnoticed until you checked manually
+- Settings: “Check for Updates” no longer pops a pointless “you're up to date” dialog, shows a clear error when a check fails, and keeps up-to-date text out of its “New update available” card
+- The update card in Settings now says “up to date” correctly and folds its progress slot away when idle
 
 ## [1.4] - 2026-11-10
 
