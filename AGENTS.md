@@ -82,16 +82,15 @@ Never store state inside the .app bundle — it must stay immutable and rebuilda
 ## Run & test
 
 ```bash
-node server.js                          # web mode → http://127.0.0.1:8787
-./app/build.sh                          # build dist/Pulse.app (needs Xcode CLT + node;
-                                        #   auto re-notarizes if the previous build was)
+node server.js                          # web mode → http://127.0.0.1:8787 (use PORT=8797 beside a live app)
+./app/build.sh --no-notarize            # fast dev build (~6s, password-only Purge prompt)
+./app/build.sh                          # build dist/Pulse.app (auto re-notarizes if previous build was)
 ./app/build.sh --notarize               # force notarize & staple (needed for Touch ID on Purge)
 open dist/Pulse.app
-# Self-test (needs a GUI session): renders the page, opens the drawer, checks
-# confirm() wiring + the menu-bar item, prints SELFTEST: {...} and exits:
+# Self-test (needs a GUI session; runs isolated alongside a live Pulse.app):
 PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse
 # Unit tests (off-line, no macOS dependencies):
-node server.test.js              # 136 parser unit tests — fast feedback loop
+node server.test.js              # 250 parser unit tests — fast feedback loop
 ```
 
 The self-test verifies: the page rendered (machine/cpu/mem populated), rows exist,
@@ -110,6 +109,7 @@ This file is deliberately short. Open the matching doc **only when the task need
 
 | Doc | Read it when you're touching… |
 |---|---|
+| `docs/testing.md` | Testing or debugging any change: fast dev loops (`--no-notarize`, `PORT=8797`, `swift -e`), running `PULSE_SELFTEST=1` safely beside a live app, and checking running vs built binaries |
 | `docs/contracts.md` | The data that flows between components: the snapshot schema (server.js ⇄ index.html), the `/api/status` shape (server.js ⇄ Pulse.swift), or the port-file / stdout / self-test / dialog protocols |
 | `docs/gotchas.md` | Sampling & parsing in `server.js`: ps, iostat, netstat, vm_stat, app-bundle attribution, icon cache |
 
