@@ -76,13 +76,19 @@ quirk of a macOS tool, verified against live output.
 - **Thermal readings & state**: CPU temperature comes from Apple Silicon on-die
   thermal sensors via the IOKit HID Event System (`app/pulse-thermal.c`, root-free),
   sampling `PMU tdie` sensors. It runs in the background and is non-blocking.
-  Throttling warning levels come from `pmset -g batt -g therm`: "No … has
-  been recorded" means level 0 (nominal); an active throttle prints
+  **Important `pmset` quirk**: `pmset` ignores additional `-g` flags when passed together
+  (e.g., `pmset -g batt -g therm` only prints `batt`!). Run `pmset -g batt`, `pmset -g therm`,
+  and `pmset -g assertions` as separate parallel invocations so none are dropped.
+  "No … has been recorded" means level 0 (nominal); an active throttle prints
   "… thermal level N" (0 = nominal, 1 = slowed, ≥2 = throttled).
-  The dashboard CPU card always shows the live CPU die temperature; the
-  menu-bar has a Thermal row pinned directly below CPU (no settings toggle,
-  no bar). Both colour the rounded reading on the machine's observed low–high
-  range (server ships `thermal.min`/`thermal.max`) with the span floored at
-  10°C — a quiet machine's few-degree range must not paint a 1° swing across
-  the whole green→red ramp, and the rounded value keeps the two UIs in lockstep.
-  Uptime is `kern.boottime` (already in the sysctl batch).
+  Both the dashboard and menu bar colour the rounded CPU die temperature on an absolute
+  `40°C → 90°C+` green→red ramp (using `(1 - frac) / 3` on Swift's `0..1` hue circle so cool
+  maps to `0.333` green rather than `1.0` red).
+  Uptime is `kern.boottime` (coloured amber at `≥7d` and coral-red at `≥14d`), and VM memory
+  pressure comes from `kern.memorystatus_vm_pressure_level` (`1=normal`, `2=warn`, `4=critical`).
+- **`lsof -nP -i`**: Always pass `-nP` (skip reverse DNS & service-name lookups) and scope
+  to open-drawer PIDs (`-a -p <pids>`) on demand rather than every tick so socket inspection
+  completes in ~45ms without blocking `sample()`.
+- **`top -stats pid,cpu,mem,power,idlew`**: `POWER` and cumulative `IDLEW` can carry trailing
+  `+`/`-` markers (or `-` for unavailable `POWER`), and `IDLEW` is cumulative idle wakeups —
+  subtract across ticks (`dt`) for live `wakeups/s` rather than plotting raw `IDLEW`.

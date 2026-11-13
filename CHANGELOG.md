@@ -9,10 +9,20 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Added
+- Dashboard: added live macOS VM memory pressure (`Normal` / `Warn` / `Critical`) and SSD swap usage to the Memory card, Memory explainer popover, and status-bar menu
+- Dashboard: added an **Energy** mode toggle on the Top CPU panel (power impact & idle wakeups/s), plus battery wattage and AC status in the header
+- Process drawer: added active sleep-preventing assertions (`pmset`), live network sockets & listening ports (`lsof`), **Reveal in Finder**, and **Copy Diagnostics**
+- Background & Login Items inspector: view registered LaunchAgents and LaunchDaemons, running PIDs, `RunAtLoad` / `KeepAlive` flags, and `.plist` locations
+- Process Blacklist (Auto-Kill): automatically terminate recurring or unwanted processes (e.g. `Siri AI`, `assistantd`) when they spawn, with pause/signal controls and core-system protections
+
 ### Changed
+- Redesigned Pulse's app icon, DMG drag-to-Applications installer, About window, Settings modal (with live menu-bar capsule preview), and custom native update dialog with smooth drawer & modal transitions
+- Dashboard: tightened Memory card and responsive grid breakpoints so stats fit cleanly down to the `940×620` minimum window size without legend clipping
 - Startup: the dashboard window opens immediately with shimmering skeleton placeholders and fills each metric independently as its measurement lands, while cold app launches show live CPU, memory, and app rows in under half a second
 
 ### Fixed
+- Thermal & uptime displays now color reliably across `40°C–90°C+` die temperatures and flag long uptimes when a reboot is overdue
 - Startup: the dashboard window no longer flashes white before its first frame paints
 - Updates: the card no longer claims it “couldn't check for updates” after a successful check that found no update — the failure state was inverted, which is also why real failures (no network, unreachable feed) went unreported
 - Updates: when a check genuinely fails, the card now says so — including how long ago that attempt was (“· tried 5m ago”)

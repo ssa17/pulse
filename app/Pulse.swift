@@ -1077,6 +1077,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     let compRow = LegendRowView(label: "Compressed", color: StatusController.compColor)
     let freeItem = NSMenuItem(title: "Free", action: nil, keyEquivalent: "")
     let freeRow = LegendRowView(label: "Free", color: StatusController.freeColor)
+    let memPressureItem = NSMenuItem(title: "Pressure", action: nil, keyEquivalent: "")
+    let memPressureRow = InfoRowView(label: "Pressure")
+    let swapItem = NSMenuItem(title: "Swap", action: nil, keyEquivalent: "")
+    let swapRow = InfoRowView(label: "Swap")
 
     let updateItem = NSMenuItem(title: "Update…", action: nil, keyEquivalent: "")
 
@@ -1111,6 +1115,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             (thermalItem, thermalRow), (loadAvgItem, loadAvgRow), (uptimeItem, uptimeRow),
             (gpuItem, gpuRow), (gpuMemItem, gpuMemRow),
             (memItem, memRow), (wiredItem, wiredRow), (activeItem, activeRow), (compItem, compRow), (freeItem, freeRow),
+            (memPressureItem, memPressureRow), (swapItem, swapRow),
             (netItem, netRow)
         ] {
             it.view = row
@@ -1213,6 +1218,8 @@ final class StatusController: NSObject, NSMenuDelegate {
                     newItems.append(activeItem)
                     newItems.append(compItem)
                     newItems.append(freeItem)
+                    newItems.append(memPressureItem)
+                    newItems.append(swapItem)
                 } else if id == "network" || id == "uptime" {
                     addSystemGroup()
                 }
@@ -1404,22 +1411,12 @@ final class StatusController: NSObject, NSMenuDelegate {
             let valStr = tempStr.map { "\(pretty) · \($0)" } ?? pretty
             thermalItem.title = "Thermal \(valStr)"
             // Two independent colours: the STATE word reflects the SMC throttle
-            // level (nominal = the system isn't acting → neutral, whatever the
-            // die temp is), and the TEMPERATURE sits on the machine's own
-            // observed range (coldest → hottest since the sampler started).
-            // The span is floored at 10°C so a quiet machine's few-degree range
-            // doesn't map a 1° swing onto the whole green→red ramp, and the
-            // colour uses the ROUNDED value so it always matches the number the
-            // user reads (and the dashboard's).
+            // level (nominal = the system isn't acting → neutral), and the
+            // TEMPERATURE uses an absolute die-temp ramp (40°C green → 90°C+ red).
             let stateColor: NSColor = lvl == 0 ? .labelColor : (lvl == 1 ? .systemOrange : .systemRed)
-            if let tRaw = cpuTemp,
-               let lo = (th["min"] as? NSNumber)?.doubleValue,
-               let hi = (th["max"] as? NSNumber)?.doubleValue,
-               hi - lo >= 1 {
-                let span = max(hi - lo, 10.0)
-                let rangeLo = lo - (span - (hi - lo)) / 2  // widen around the observed range
-                let frac = min(1, max(0, (Double(Int(tRaw.rounded())) - rangeLo) / span))
-                let tempColor = NSColor(hue: 1 - frac, saturation: 0.65, brightness: 0.85, alpha: 1)
+            if let tRaw = cpuTemp {
+                let frac = min(1, max(0, (Double(Int(tRaw.rounded())) - 40.0) / 50.0))
+                let tempColor = NSColor(hue: (1.0 - frac) / 3.0, saturation: 0.72, brightness: 0.88, alpha: 1)
                 thermalRow.set(state: pretty, value: tempStr!, stateColor: stateColor, valueColor: tempColor)
             } else {
                 thermalRow.set(value: valStr, color: stateColor)
@@ -1433,11 +1430,12 @@ final class StatusController: NSObject, NSMenuDelegate {
             loadAvgRow.set(value: s)
         }
 
-        // Uptime
+        // Uptime (amber >= 7d, coral-red >= 14d as a gentle reboot nudge)
         if let bt = (o["bootTime"] as? NSNumber)?.intValue, bt > 0 {
             let up = max(0, Int(Date().timeIntervalSince1970) - bt)
             let d = up / 86_400, h = (up % 86_400) / 3_600, m = (up % 3_600) / 60
-            uptimeRow.set(value: d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m")
+            let upCol: NSColor = d >= 14 ? .systemRed : (d >= 7 ? .systemOrange : .labelColor)
+            uptimeRow.set(value: d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m", color: upCol)
         }
 
         // GPU
@@ -1485,6 +1483,26 @@ final class StatusController: NSObject, NSMenuDelegate {
                 segs = [.init(frac: p / 100, color: StatRowView.memColor)]
             }
             memRow.set(valueStr: valStr, segments: segs)
+        }
+        switch o["memPressure"] as? String {
+        case "normal":
+            memPressureRow.set(value: "Normal", color: NSColor(srgbRed: 0.18, green: 0.83, blue: 0.65, alpha: 1.0))
+        case "warn":
+            memPressureRow.set(value: "Warn", color: .systemOrange)
+        case "critical":
+            memPressureRow.set(value: "Critical", color: .systemRed)
+        default:
+            memPressureRow.set(value: "—", color: .secondaryLabelColor)
+        }
+        if let sw = (o["swapUsed"] as? NSNumber)?.doubleValue {
+            if sw < 1_048_576 {
+                swapRow.set(value: "0 MB", color: .secondaryLabelColor)
+            } else {
+                let swColor: NSColor = sw >= 4_294_967_296 ? .systemOrange : .labelColor
+                swapRow.set(value: fmtMem(sw), color: swColor)
+            }
+        } else {
+            swapRow.set(value: "—", color: .secondaryLabelColor)
         }
 
         // Network (bar-less info row showing both download and upload rates)
@@ -1672,107 +1690,175 @@ final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
 
 /* ================================================================== *
  *  Native AppKit Settings panel (used when dashboard window is closed)
- *  Styled to match Pulse's dark card UI (#0b0d12 / #171b25 / #232a38)
+ *  Styled to match Pulse's dark card UI (#0b0d12 / #12151d / #171b25 / #232a38)
  * ================================================================== */
+@MainActor
 final class SettingsWindowController: NSObject {
     weak var shell: Shell?
     let window: NSWindow
     let startAtLoginSwitch = NSSwitch()
     let loginStatusLabel = NSTextField(labelWithString: "")
-    let closeBehaviorSeg: NSSegmentedControl
+    private let bgCloseBtn = NSButton(title: "Keep in Menu Bar", target: nil, action: nil)
+    private let quitCloseBtn = NSButton(title: "Quit Pulse", target: nil, action: nil)
+    private var closeQuitSelected = false
     let keepMemSwitch = NSSwitch()
+
     private var menuRowSwitches: [String: NSSwitch] = [:]
     private var menuRowBarSwitches: [String: NSSwitch] = [:]
-    private var menuRowBarWords: [String: NSTextField] = [:]
-    private let updateCheckButton = NSButton(title: "Check for Updates…", target: nil, action: nil)
-    private let updateCurrentVerLabel = NSTextField(labelWithString: "")
-    private let updateLatestVerLabel = NSTextField(labelWithString: "")
-    private let updateStatusBadge = NSTextField(labelWithString: "")
+    private var menuRowUpButtons: [String: NSButton] = [:]
+    private var menuRowDownButtons: [String: NSButton] = [:]
+    private var menuRowDots: [String: NSView] = [:]
     private var menuRowLabels: [String: NSTextField] = [:]
-    private var menuRowFull: [String] = PulseSettings.allMenuRows // all rows, UI order (hidden included)
+    private var menuRowViews: [String: NSView] = [:]
+    private let rowsBox = NSStackView()
+    private let barPreviewImage = NSImageView()
+
+    private let updateCheckButton = NSButton(title: "Check for Updates…", target: nil, action: nil)
+    private let updateVerLabel = NSTextField(labelWithString: "")
+    private let updateStatusBadge = NSTextField(labelWithString: "")
+
+    private var menuRowFull: [String] = PulseSettings.allMenuRows
     private var menuRowHidden = Set(PulseSettings.allMenuRows).subtracting(PulseSettings.defaultMenuRows)
     private var menuRowBarOn = Set(PulseSettings.defaultBarRows)
 
-    private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
-    private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
+    private let bgDark = NSColor(red: 0.043, green: 0.051, blue: 0.071, alpha: 1)    // #0b0d12
+    private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)   // #12151d
+    private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)    // #171b25
+    private let raisedBg = NSColor(red: 0.114, green: 0.137, blue: 0.196, alpha: 1)  // #1d2332
     private let borderCol = NSColor(red: 0.137, green: 0.165, blue: 0.220, alpha: 1) // #232a38
     private let textCol = NSColor(red: 0.910, green: 0.925, blue: 0.957, alpha: 1)   // #e8ecf4
     private let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
+    private let faintCol = NSColor(red: 0.353, green: 0.388, blue: 0.459, alpha: 1)  // #5a6375
     private let accentGreen = NSColor(red: 0.176, green: 0.831, blue: 0.655, alpha: 1) // #2dd4a7
     private let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1)  // #ff9f43
+    private let accentBlue = NSColor(red: 0.302, green: 0.624, blue: 1.0, alpha: 1)    // #4d9fff
+    private let accentGpu = NSColor(red: 0.204, green: 0.780, blue: 0.349, alpha: 1)   // #34c759
+
     private static let checkTimeFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
     }()
 
     init(shell: Shell) {
         self.shell = shell
-        updateCheckButton.target = shell
-        updateCheckButton.action = #selector(Shell.checkForUpdates)
-        updateCurrentVerLabel.font = .systemFont(ofSize: 11)
-        updateCurrentVerLabel.textColor = textCol
-        updateLatestVerLabel.font = .systemFont(ofSize: 11)
-        updateLatestVerLabel.textColor = textCol
-        updateStatusBadge.font = .systemFont(ofSize: 10.5, weight: .semibold)
-        updateStatusBadge.textColor = accentGreen
-        let rect = NSRect(x: 0, y: 0, width: 468, height: 660)
+        let rect = NSRect(x: 0, y: 0, width: 492, height: 676)
         window = NSWindow(contentRect: rect,
-                          styleMask: [.titled, .closable],
+                          styleMask: [.titled, .closable, .fullSizeContentView],
                           backing: .buffered, defer: false)
-        window.title = "Pulse Settings"
+        window.title = ""
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = panelBg
         window.isReleasedWhenClosed = false
         window.center()
 
-        closeBehaviorSeg = NSSegmentedControl(labels: ["Keep in Menu Bar", "Quit Pulse"],
-                                              trackingMode: .selectOne,
-                                              target: nil,
-                                              action: nil)
         super.init()
 
+        startAtLoginSwitch.controlSize = .small
         startAtLoginSwitch.target = self
         startAtLoginSwitch.action = #selector(onStartAtLoginChanged)
-        closeBehaviorSeg.target = self
-        closeBehaviorSeg.action = #selector(onCloseBehaviorChanged)
+
+        keepMemSwitch.controlSize = .small
         keepMemSwitch.target = self
         keepMemSwitch.action = #selector(onKeepMemChanged)
+
+        bgCloseBtn.target = self
+        bgCloseBtn.action = #selector(onSelectBgClose)
+        quitCloseBtn.target = self
+        quitCloseBtn.action = #selector(onSelectQuitClose)
+
+        updateCheckButton.target = shell
+        updateCheckButton.action = #selector(Shell.checkForUpdates)
 
         buildLayout()
         syncFromState()
     }
 
+    private func makeSectionLabel(_ text: String) -> NSTextField {
+        let lbl = NSTextField(labelWithString: text.uppercased())
+        lbl.font = .systemFont(ofSize: 10, weight: .bold)
+        lbl.textColor = faintCol
+        return lbl
+    }
+
     private func makeTitle(_ text: String) -> NSTextField {
         let lbl = NSTextField(labelWithString: text)
-        lbl.font = .systemFont(ofSize: 13, weight: .semibold)
+        lbl.font = .systemFont(ofSize: 12.5, weight: .semibold)
         lbl.textColor = textCol
         return lbl
     }
 
     private func makeNote(_ text: String) -> NSTextField {
         let lbl = NSTextField(wrappingLabelWithString: text)
-        lbl.font = .systemFont(ofSize: 11.5)
+        lbl.font = .systemFont(ofSize: 11)
         lbl.textColor = dimCol
-        lbl.maximumNumberOfLines = 3
+        lbl.maximumNumberOfLines = 2
         return lbl
     }
 
-    private func makeCard(_ inner: NSView) -> NSView {
+    private func makeCard(_ inner: NSView, padV: CGFloat = 12, padH: CGFloat = 14) -> NSView {
         let box = NSView()
         box.wantsLayer = true
         box.layer?.backgroundColor = cardBg.cgColor
         box.layer?.borderColor = borderCol.cgColor
         box.layer?.borderWidth = 1
-        box.layer?.cornerRadius = 10
+        box.layer?.cornerRadius = 12
         box.translatesAutoresizingMaskIntoConstraints = false
         inner.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(inner)
         NSLayoutConstraint.activate([
-            inner.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 14),
-            inner.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -14),
-            inner.topAnchor.constraint(equalTo: box.topAnchor, constant: 11),
-            inner.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -11),
+            inner.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: padH),
+            inner.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -padH),
+            inner.topAnchor.constraint(equalTo: box.topAnchor, constant: padV),
+            inner.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -padV),
         ])
         return box
+    }
+
+    private func makeHairline() -> NSView {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = borderCol.withAlphaComponent(0.8).cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return line
+    }
+
+    private func styleActionBtn(_ btn: NSButton, accent: Bool) {
+        btn.isBordered = false
+        btn.wantsLayer = true
+        btn.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        btn.contentTintColor = accent ? bgDark : textCol
+        btn.layer?.backgroundColor = (accent ? accentOrange : panelBg).cgColor
+        btn.layer?.cornerRadius = 7
+        btn.layer?.borderColor = (accent ? accentOrange : borderCol).cgColor
+        btn.layer?.borderWidth = 1
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        btn.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 124).isActive = true
+    }
+
+    private func styleSegButtons() {
+        for (btn, selected) in [(bgCloseBtn, !closeQuitSelected), (quitCloseBtn, closeQuitSelected)] {
+            btn.isBordered = false
+            btn.wantsLayer = true
+            btn.font = .systemFont(ofSize: 11.5, weight: .semibold)
+            btn.contentTintColor = selected ? textCol : dimCol
+            btn.layer?.backgroundColor = (selected ? raisedBg : NSColor.clear).cgColor
+            btn.layer?.borderColor = (selected ? NSColor(red: 0.20, green: 0.24, blue: 0.32, alpha: 1) : NSColor.clear).cgColor
+            btn.layer?.borderWidth = 1
+            btn.layer?.cornerRadius = 6
+        }
+    }
+
+    private func metricColor(for id: String) -> NSColor {
+        switch id {
+        case "cpu": return accentOrange
+        case "gpu": return accentGpu
+        case "memory": return accentBlue
+        case "network": return accentGreen
+        default: return dimCol
+        }
     }
 
     private func buildLayout() {
@@ -1781,6 +1867,32 @@ final class SettingsWindowController: NSObject {
         content.layer?.backgroundColor = panelBg.cgColor
         window.contentView = content
 
+        // Header bar with icon + title
+        let header = NSView()
+        header.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(header)
+
+        let icon = NSImageView()
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(icon)
+
+        let hTitle = NSTextField(labelWithString: "Settings")
+        hTitle.font = .systemFont(ofSize: 15, weight: .bold)
+        hTitle.textColor = textCol
+        hTitle.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(hTitle)
+
+        let hSub = NSTextField(labelWithString: "Daemon lifecycle, menu bar capsules & updates")
+        hSub.font = .systemFont(ofSize: 11.5)
+        hSub.textColor = dimCol
+        hSub.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(hSub)
+
+        let headerLine = makeHairline()
+        content.addSubview(headerLine)
+
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -1788,200 +1900,363 @@ final class SettingsWindowController: NSObject {
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
 
-        // 1. Start at login card
+        // ── GENERAL GROUP ──
+        let genLabel = makeSectionLabel("General")
+        stack.addArrangedSubview(genLabel)
+
+        let genInner = NSStackView()
+        genInner.orientation = .vertical
+        genInner.alignment = .leading
+        genInner.spacing = 10
+
+        // Row 1: Start at login
         let s1Left = NSStackView()
         s1Left.orientation = .vertical
         s1Left.alignment = .leading
-        s1Left.spacing = 3
+        s1Left.spacing = 2
         let s1Header = NSStackView()
         s1Header.orientation = .horizontal
         s1Header.alignment = .centerY
-        s1Header.spacing = 8
+        s1Header.spacing = 7
         loginStatusLabel.font = .systemFont(ofSize: 10.5, weight: .semibold)
         s1Header.addArrangedSubview(makeTitle("Start at login"))
         s1Header.addArrangedSubview(loginStatusLabel)
         s1Left.addArrangedSubview(s1Header)
-        s1Left.addArrangedSubview(makeNote("Runs the sampler via a macOS LaunchAgent so metrics are already warm when you open Pulse."))
-
+        s1Left.addArrangedSubview(makeNote("Keep metrics warm in the background via a macOS LaunchAgent."))
         let s1Row = NSStackView(views: [s1Left, startAtLoginSwitch])
         s1Row.orientation = .horizontal
-        s1Row.alignment = .top
-        s1Row.distribution = .fill
-        s1Row.spacing = 14
+        s1Row.alignment = .centerY
+        s1Row.spacing = 12
         startAtLoginSwitch.setContentHuggingPriority(.required, for: .horizontal)
-        let card1 = makeCard(s1Row)
 
-        // 2. When window closes card
+        // Row 2: Close behavior (custom dark segmented pill)
         let s2Col = NSStackView()
         s2Col.orientation = .vertical
         s2Col.alignment = .leading
-        s2Col.spacing = 6
-        s2Col.addArrangedSubview(makeTitle("When the window is closed"))
-        s2Col.addArrangedSubview(makeNote("Keep Pulse in your menu bar with live CPU & memory bars, or quit completely on ⌘W."))
-        closeBehaviorSeg.segmentDistribution = .fillEqually
-        closeBehaviorSeg.translatesAutoresizingMaskIntoConstraints = false
-        s2Col.addArrangedSubview(closeBehaviorSeg)
+        s2Col.spacing = 7
+        s2Col.addArrangedSubview(makeTitle("When closing the window"))
+        let segWrap = NSView()
+        segWrap.wantsLayer = true
+        segWrap.layer?.backgroundColor = bgDark.cgColor
+        segWrap.layer?.borderColor = borderCol.cgColor
+        segWrap.layer?.borderWidth = 1
+        segWrap.layer?.cornerRadius = 8
+        segWrap.translatesAutoresizingMaskIntoConstraints = false
+        let segRow = NSStackView(views: [bgCloseBtn, quitCloseBtn])
+        segRow.orientation = .horizontal
+        segRow.distribution = .fillEqually
+        segRow.spacing = 4
+        segRow.translatesAutoresizingMaskIntoConstraints = false
+        segWrap.addSubview(segRow)
+        for b in [bgCloseBtn, quitCloseBtn] {
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        }
         NSLayoutConstraint.activate([
-            closeBehaviorSeg.widthAnchor.constraint(equalTo: s2Col.widthAnchor),
+            segRow.leadingAnchor.constraint(equalTo: segWrap.leadingAnchor, constant: 3),
+            segRow.trailingAnchor.constraint(equalTo: segWrap.trailingAnchor, constant: -3),
+            segRow.topAnchor.constraint(equalTo: segWrap.topAnchor, constant: 3),
+            segRow.bottomAnchor.constraint(equalTo: segWrap.bottomAnchor, constant: -3),
         ])
-        let card2 = makeCard(s2Col)
+        s2Col.addArrangedSubview(segWrap)
+        segWrap.widthAnchor.constraint(equalTo: s2Col.widthAnchor).isActive = true
 
-        // 3. Keep dashboard in memory card
+        // Row 3: Keep dashboard in memory
         let s3Left = NSStackView()
         s3Left.orientation = .vertical
         s3Left.alignment = .leading
-        s3Left.spacing = 3
-        s3Left.addArrangedSubview(makeTitle("Keep dashboard in memory when closed"))
-        s3Left.addArrangedSubview(makeNote("When off, closing the window releases WebKit rendering processes (~120 MB) and reloads (<0.5s) on reopen."))
-
+        s3Left.spacing = 2
+        let s3TitleRow = NSStackView()
+        s3TitleRow.orientation = .horizontal
+        s3TitleRow.alignment = .centerY
+        s3TitleRow.spacing = 7
+        let memBadge = NSTextField(labelWithString: "Off saves ~120 MB")
+        memBadge.font = .systemFont(ofSize: 10, weight: .semibold)
+        memBadge.textColor = accentBlue
+        s3TitleRow.addArrangedSubview(makeTitle("Keep dashboard in memory"))
+        s3TitleRow.addArrangedSubview(memBadge)
+        s3Left.addArrangedSubview(s3TitleRow)
+        s3Left.addArrangedSubview(makeNote("Release WebKit helpers on close and reload in <0.5s when reopened."))
         let s3Row = NSStackView(views: [s3Left, keepMemSwitch])
         s3Row.orientation = .horizontal
-        s3Row.alignment = .top
-        s3Row.distribution = .fill
-        s3Row.spacing = 14
+        s3Row.alignment = .centerY
+        s3Row.spacing = 12
         keepMemSwitch.setContentHuggingPriority(.required, for: .horizontal)
-        let card3 = makeCard(s3Row)
 
-        // 4. Status menu rows card — [switch] name … [↑][↓]
+        let sep1 = makeHairline()
+        let sep2 = makeHairline()
+        genInner.addArrangedSubview(s1Row)
+        genInner.addArrangedSubview(sep1)
+        genInner.addArrangedSubview(s2Col)
+        genInner.addArrangedSubview(sep2)
+        genInner.addArrangedSubview(s3Row)
+        for v in [s1Row, sep1, s2Col, sep2, s3Row] {
+            v.widthAnchor.constraint(equalTo: genInner.widthAnchor).isActive = true
+        }
+        let genCard = makeCard(genInner)
+        stack.addArrangedSubview(genCard)
+        genCard.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        // ── MENU BAR & DROPDOWN ──
+        stack.setCustomSpacing(14, after: genCard)
+        stack.addArrangedSubview(makeSectionLabel("Menu Bar & Dropdown"))
+
         let s4Col = NSStackView()
         s4Col.orientation = .vertical
         s4Col.alignment = .leading
-        s4Col.spacing = 6
-        s4Col.addArrangedSubview(makeTitle("Status bar & menu"))
-        s4Col.addArrangedSubview(makeNote("Which stats appear in the dropdown and in the button capsule. Thermal always shows with CPU; capsules follow the menu's row order, uptime is menu-only."))
-        let rowsBox = NSStackView()
+        s4Col.spacing = 8
+
+        // Live Menu Bar Capsule Preview rendered by StatusController.render(...)
+        let previewWrap = NSView()
+        previewWrap.wantsLayer = true
+        previewWrap.layer?.backgroundColor = bgDark.cgColor
+        previewWrap.layer?.borderColor = borderCol.cgColor
+        previewWrap.layer?.borderWidth = 1
+        previewWrap.layer?.cornerRadius = 9
+        previewWrap.translatesAutoresizingMaskIntoConstraints = false
+        let prevLbl = NSTextField(labelWithString: "BAR PREVIEW")
+        prevLbl.font = .systemFont(ofSize: 9.5, weight: .bold)
+        prevLbl.textColor = faintCol
+        prevLbl.translatesAutoresizingMaskIntoConstraints = false
+        barPreviewImage.imageScaling = .scaleNone
+        barPreviewImage.translatesAutoresizingMaskIntoConstraints = false
+        let pillFrame = NSView()
+        pillFrame.wantsLayer = true
+        pillFrame.layer?.backgroundColor = NSColor(white: 1, alpha: 0.04).cgColor
+        pillFrame.layer?.borderColor = NSColor(white: 1, alpha: 0.08).cgColor
+        pillFrame.layer?.borderWidth = 1
+        pillFrame.layer?.cornerRadius = 6
+        pillFrame.translatesAutoresizingMaskIntoConstraints = false
+        pillFrame.addSubview(barPreviewImage)
+        previewWrap.addSubview(prevLbl)
+        previewWrap.addSubview(pillFrame)
+        NSLayoutConstraint.activate([
+            previewWrap.heightAnchor.constraint(equalToConstant: 36),
+            prevLbl.leadingAnchor.constraint(equalTo: previewWrap.leadingAnchor, constant: 10),
+            prevLbl.centerYAnchor.constraint(equalTo: previewWrap.centerYAnchor),
+            pillFrame.trailingAnchor.constraint(equalTo: previewWrap.trailingAnchor, constant: -8),
+            pillFrame.centerYAnchor.constraint(equalTo: previewWrap.centerYAnchor),
+            pillFrame.heightAnchor.constraint(equalToConstant: 24),
+            barPreviewImage.leadingAnchor.constraint(equalTo: pillFrame.leadingAnchor, constant: 8),
+            barPreviewImage.trailingAnchor.constraint(equalTo: pillFrame.trailingAnchor, constant: -8),
+            barPreviewImage.centerYAnchor.constraint(equalTo: pillFrame.centerYAnchor),
+        ])
+        s4Col.addArrangedSubview(previewWrap)
+        previewWrap.widthAnchor.constraint(equalTo: s4Col.widthAnchor).isActive = true
+
+        // Column header row
+        let colHead = NSStackView()
+        colHead.orientation = .horizontal
+        colHead.alignment = .centerY
+        colHead.spacing = 8
+        let mkColHdr = { (t: String, w: CGFloat) -> NSTextField in
+            let l = NSTextField(labelWithString: t)
+            l.font = .systemFont(ofSize: 9.5, weight: .bold)
+            l.textColor = self.faintCol
+            l.alignment = .center
+            l.translatesAutoresizingMaskIntoConstraints = false
+            l.widthAnchor.constraint(equalToConstant: w).isActive = true
+            return l
+        }
+        let mNameHdr = NSTextField(labelWithString: "METRIC")
+        mNameHdr.font = .systemFont(ofSize: 9.5, weight: .bold)
+        mNameHdr.textColor = faintCol
+        mNameHdr.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        colHead.addArrangedSubview(mNameHdr)
+        colHead.addArrangedSubview(mkColHdr("MENU", 44))
+        colHead.addArrangedSubview(mkColHdr("BAR", 44))
+        colHead.addArrangedSubview(mkColHdr("ORDER", 46))
+        s4Col.addArrangedSubview(colHead)
+        colHead.widthAnchor.constraint(equalTo: s4Col.widthAnchor).isActive = true
+
         rowsBox.orientation = .vertical
         rowsBox.alignment = .leading
-        rowsBox.spacing = 5
+        rowsBox.spacing = 4
         let rowLabels: [String: String] = ["cpu": "CPU", "gpu": "GPU", "memory": "Memory", "network": "Network", "uptime": "Uptime"]
-        for (si, id) in PulseSettings.allMenuRows.enumerated() {
+        let rowTags: [String: String] = ["cpu": "+ thermal", "uptime": "menu only"]
+
+        for id in PulseSettings.allMenuRows {
             let barCapable = PulseSettings.allBarRows.contains(id)
+            let rowWrap = NSView()
+            rowWrap.wantsLayer = true
+            rowWrap.layer?.backgroundColor = bgDark.withAlphaComponent(0.55).cgColor
+            rowWrap.layer?.cornerRadius = 7
+            rowWrap.translatesAutoresizingMaskIntoConstraints = false
+
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.backgroundColor = metricColor(for: id).cgColor
+            dot.layer?.cornerRadius = 3.5
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 7).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 7).isActive = true
+
+            let lbl = NSTextField(labelWithString: rowLabels[id] ?? id)
+            lbl.font = .systemFont(ofSize: 12, weight: .medium)
+            lbl.textColor = textCol
+
+            let nameStack = NSStackView(views: [dot, lbl])
+            nameStack.orientation = .horizontal
+            nameStack.alignment = .centerY
+            nameStack.spacing = 7
+            if let tagText = rowTags[id] {
+                let tag = NSTextField(labelWithString: tagText)
+                tag.font = .systemFont(ofSize: 10)
+                tag.textColor = faintCol
+                nameStack.addArrangedSubview(tag)
+            }
+            nameStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            nameStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
             let sw = NSSwitch()
+            sw.controlSize = .small
             sw.target = self
             sw.action = #selector(onMenuRowSwitch)
-            let bsw = NSSwitch()
-            bsw.target = self
-            bsw.action = #selector(onMenuRowBarSwitch)
-            bsw.isEnabled = barCapable
-            for s in [sw, bsw] {
-                s.translatesAutoresizingMaskIntoConstraints = false
-                s.widthAnchor.constraint(equalToConstant: 38).isActive = true
-                s.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            sw.translatesAutoresizingMaskIntoConstraints = false
+            let swBox = NSView()
+            swBox.translatesAutoresizingMaskIntoConstraints = false
+            swBox.addSubview(sw)
+            NSLayoutConstraint.activate([
+                swBox.widthAnchor.constraint(equalToConstant: 44),
+                swBox.heightAnchor.constraint(equalToConstant: 22),
+                sw.centerXAnchor.constraint(equalTo: swBox.centerXAnchor),
+                sw.centerYAnchor.constraint(equalTo: swBox.centerYAnchor),
+            ])
+
+            let barBox = NSView()
+            barBox.translatesAutoresizingMaskIntoConstraints = false
+            barBox.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            barBox.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            if barCapable {
+                let bsw = NSSwitch()
+                bsw.controlSize = .small
+                bsw.target = self
+                bsw.action = #selector(onMenuRowBarSwitch)
+                bsw.translatesAutoresizingMaskIntoConstraints = false
+                barBox.addSubview(bsw)
+                NSLayoutConstraint.activate([
+                    bsw.centerXAnchor.constraint(equalTo: barBox.centerXAnchor),
+                    bsw.centerYAnchor.constraint(equalTo: barBox.centerYAnchor),
+                ])
+                menuRowBarSwitches[id] = bsw
+            } else {
+                let dash = NSTextField(labelWithString: "—")
+                dash.font = .systemFont(ofSize: 11)
+                dash.textColor = faintCol
+                dash.translatesAutoresizingMaskIntoConstraints = false
+                barBox.addSubview(dash)
+                NSLayoutConstraint.activate([
+                    dash.centerXAnchor.constraint(equalTo: barBox.centerXAnchor),
+                    dash.centerYAnchor.constraint(equalTo: barBox.centerYAnchor),
+                ])
             }
-            // Each switch carries its own word — no unlabeled adjacent toggles.
-            let mkWord = { (t: String) -> NSTextField in
-                let w = NSTextField(labelWithString: t)
-                w.font = .systemFont(ofSize: 11)
-                w.textColor = self.dimCol
-                w.translatesAutoresizingMaskIntoConstraints = false
-                w.widthAnchor.constraint(equalToConstant: 28).isActive = true
-                return w
-            }
-            let lbl = NSTextField(labelWithString: rowLabels[id] ?? id)
-            lbl.font = .systemFont(ofSize: 12)
-            lbl.textColor = textCol
+
             let up = NSButton(title: "", target: self, action: #selector(onMenuRowUp))
             let dn = NSButton(title: "", target: self, action: #selector(onMenuRowDown))
-            up.tag = si
-            dn.tag = si
+            up.identifier = NSUserInterfaceItemIdentifier(id)
+            dn.identifier = NSUserInterfaceItemIdentifier(id)
             up.image = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Move up")
             dn.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Move down")
             for b in [up, dn] {
                 b.imagePosition = .imageOnly
                 b.isBordered = false
-                b.bezelStyle = .regularSquare
+                b.wantsLayer = true
+                b.layer?.backgroundColor = panelBg.cgColor
+                b.layer?.borderColor = borderCol.cgColor
+                b.layer?.borderWidth = 1
+                b.layer?.cornerRadius = 5
                 b.contentTintColor = dimCol
                 b.translatesAutoresizingMaskIntoConstraints = false
-                b.widthAnchor.constraint(equalToConstant: 22).isActive = true
+                b.widthAnchor.constraint(equalToConstant: 21).isActive = true
                 b.heightAnchor.constraint(equalToConstant: 20).isActive = true
             }
-            let wordM = mkWord("Menu")
-            let wordB = mkWord("Bar")
-            let row = NSStackView(views: [lbl, sw, wordM, bsw, wordB, up, dn])
+            let ordStack = NSStackView(views: [up, dn])
+            ordStack.orientation = .horizontal
+            ordStack.spacing = 4
+            ordStack.translatesAutoresizingMaskIntoConstraints = false
+            ordStack.widthAnchor.constraint(equalToConstant: 46).isActive = true
+
+            let row = NSStackView(views: [nameStack, swBox, barBox, ordStack])
             row.orientation = .horizontal
             row.alignment = .centerY
-            row.distribution = .fill
             row.spacing = 8
-            for v in [sw, bsw, up, dn] {
-                v.setContentHuggingPriority(.required, for: .horizontal)
-                v.setContentCompressionResistancePriority(.required, for: .horizontal)
-            }
-            // The name takes the slack so the labeled controls stay right-aligned.
-            lbl.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            lbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            row.translatesAutoresizingMaskIntoConstraints = false
+            rowWrap.addSubview(row)
+            NSLayoutConstraint.activate([
+                rowWrap.heightAnchor.constraint(equalToConstant: 31),
+                row.leadingAnchor.constraint(equalTo: rowWrap.leadingAnchor, constant: 10),
+                row.trailingAnchor.constraint(equalTo: rowWrap.trailingAnchor, constant: -8),
+                row.centerYAnchor.constraint(equalTo: rowWrap.centerYAnchor),
+            ])
+
             menuRowSwitches[id] = sw
-            menuRowBarSwitches[id] = bsw
-            menuRowBarWords[id] = wordB
+            menuRowUpButtons[id] = up
+            menuRowDownButtons[id] = dn
+            menuRowDots[id] = dot
             menuRowLabels[id] = lbl
-            rowsBox.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: rowsBox.widthAnchor).isActive = true
+            menuRowViews[id] = rowWrap
+            rowsBox.addArrangedSubview(rowWrap)
+            rowWrap.widthAnchor.constraint(equalTo: rowsBox.widthAnchor).isActive = true
         }
         s4Col.addArrangedSubview(rowsBox)
-        let card4 = makeCard(s4Col)
+        rowsBox.widthAnchor.constraint(equalTo: s4Col.widthAnchor).isActive = true
+        let card4 = makeCard(s4Col, padV: 12, padH: 12)
+        stack.addArrangedSubview(card4)
+        card4.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        // 5. Updates card — version info + action button.
-        let s5Col = NSStackView()
-        s5Col.orientation = .vertical
-        s5Col.alignment = .leading
-        s5Col.spacing = 4
-        s5Col.addArrangedSubview(makeTitle("Updates"))
-        let s5VerBox = NSStackView()
-        s5VerBox.orientation = .vertical
-        s5VerBox.alignment = .leading
-        s5VerBox.spacing = 2
-        let row1 = NSStackView()
-        row1.orientation = .horizontal
-        row1.alignment = .centerY
-        row1.spacing = 10
-        let lbl1 = NSTextField(labelWithString: "Current:")
-        lbl1.font = .systemFont(ofSize: 11)
-        lbl1.textColor = dimCol
-        lbl1.translatesAutoresizingMaskIntoConstraints = false
-        lbl1.widthAnchor.constraint(equalToConstant: 65).isActive = true
-        updateCurrentVerLabel.translatesAutoresizingMaskIntoConstraints = false
-        row1.addArrangedSubview(lbl1)
-        row1.addArrangedSubview(updateCurrentVerLabel)
-        let row2 = NSStackView()
-        row2.orientation = .horizontal
-        row2.alignment = .centerY
-        row2.spacing = 10
-        let lbl2 = NSTextField(labelWithString: "Latest:")
-        lbl2.font = .systemFont(ofSize: 11)
-        lbl2.textColor = dimCol
-        lbl2.translatesAutoresizingMaskIntoConstraints = false
-        lbl2.widthAnchor.constraint(equalToConstant: 65).isActive = true
-        updateLatestVerLabel.translatesAutoresizingMaskIntoConstraints = false
-        row2.addArrangedSubview(lbl2)
-        row2.addArrangedSubview(updateLatestVerLabel)
-        s5VerBox.addArrangedSubview(row1)
-        s5VerBox.addArrangedSubview(row2)
-        s5Col.addArrangedSubview(s5VerBox)
-        let s5StatusRow = NSStackView()
-        s5StatusRow.alignment = .leading
-        s5StatusRow.spacing = 6
+        // ── UPDATES ──
+        stack.setCustomSpacing(14, after: card4)
+        stack.addArrangedSubview(makeSectionLabel("Updates"))
+
+        let s5Left = NSStackView()
+        s5Left.orientation = .vertical
+        s5Left.alignment = .leading
+        s5Left.spacing = 3
+        let s5TitleRow = NSStackView()
+        s5TitleRow.orientation = .horizontal
+        s5TitleRow.alignment = .centerY
+        s5TitleRow.spacing = 7
+        updateVerLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        updateVerLabel.textColor = dimCol
         updateStatusBadge.font = .systemFont(ofSize: 10.5, weight: .semibold)
-        updateStatusBadge.textColor = accentGreen
-        s5StatusRow.addArrangedSubview(updateStatusBadge)
-        s5StatusRow.isHidden = true
-        s5Col.addArrangedSubview(s5StatusRow)
-        s5Col.addArrangedSubview(makeNote("Pulse checks for updates at launch. You can also trigger a manual check here."))
-        let s5Row = NSStackView(views: [s5Col, updateCheckButton])
+        s5TitleRow.addArrangedSubview(makeTitle("Pulse Updates"))
+        s5TitleRow.addArrangedSubview(updateVerLabel)
+        s5TitleRow.addArrangedSubview(updateStatusBadge)
+        s5Left.addArrangedSubview(s5TitleRow)
+        s5Left.addArrangedSubview(makeNote("Checks automatically on launch, or check manually anytime."))
+        styleActionBtn(updateCheckButton, accent: false)
+        let s5Row = NSStackView(views: [s5Left, updateCheckButton])
         s5Row.orientation = .horizontal
-        s5Row.alignment = .top
-        s5Row.distribution = .fill
-        s5Row.spacing = 14
+        s5Row.alignment = .centerY
+        s5Row.spacing = 12
         updateCheckButton.setContentHuggingPriority(.required, for: .horizontal)
         let card5 = makeCard(s5Row)
-
-        for card in [card1, card2, card3, card4, card5] {
-            stack.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
+        stack.addArrangedSubview(card5)
+        card5.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            header.heightAnchor.constraint(equalToConstant: 44),
+
+            icon.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 18),
+            icon.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 30),
+            icon.heightAnchor.constraint(equalToConstant: 30),
+
+            hTitle.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
+            hTitle.topAnchor.constraint(equalTo: icon.topAnchor, constant: -1),
+            hSub.leadingAnchor.constraint(equalTo: hTitle.leadingAnchor),
+            hSub.topAnchor.constraint(equalTo: hTitle.bottomAnchor, constant: 1),
+
+            headerLine.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            headerLine.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            headerLine.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            stack.topAnchor.constraint(equalTo: headerLine.bottomAnchor, constant: 14),
         ])
     }
 
@@ -1992,7 +2267,7 @@ final class SettingsWindowController: NSObject {
         let configured = mgr.isTransitioning ? shell.settings.startAtLogin : (loaded || mgr.plistExists)
         startAtLoginSwitch.state = configured ? .on : .off
         if let err = mgr.lastError, !err.isEmpty {
-            loginStatusLabel.stringValue = "● Error: \(err.prefix(34))"
+            loginStatusLabel.stringValue = "● Error: \(err.prefix(28))"
             loginStatusLabel.textColor = .systemRed
         } else if mgr.isTransitioning {
             loginStatusLabel.stringValue = "● Applying…"
@@ -2004,56 +2279,43 @@ final class SettingsWindowController: NSObject {
             loginStatusLabel.stringValue = "● Off"
             loginStatusLabel.textColor = dimCol
         }
-        closeBehaviorSeg.selectedSegment = shell.settings.shouldQuitOnClose ? 1 : 0
+        closeQuitSelected = shell.settings.shouldQuitOnClose
+        styleSegButtons()
         keepMemSwitch.state = shell.settings.keepDashboardInMemory ? .on : .off
+
         let vis = shell.settings.menuRows
         let known = PulseSettings.allMenuRows
         let prevHidden = menuRowFull.filter { menuRowHidden.contains($0) && !vis.contains($0) }
         let hidden = prevHidden + known.filter { !vis.contains($0) && !prevHidden.contains($0) }
         menuRowHidden = Set(hidden)
-        // Keep each row's slot stable: only adopt the incoming order when the
-        // visible projection actually differs (external change / first open).
         let projected = menuRowFull.filter { !menuRowHidden.contains($0) }
         if projected != vis {
             menuRowFull = vis + hidden
         }
         let bar = shell.settings.barRows
         if Set(bar) != menuRowBarOn { menuRowBarOn = Set(bar) }
-        let currentVer = (Bundle.main.object(forInfoDictionaryKey:
-            "CFBundleShortVersionString") as? String) ?? "?"
-        updateCurrentVerLabel.stringValue = "v\(currentVer)"
+
+        let currentVer = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
+        updateVerLabel.stringValue = "v\(currentVer)"
         if let ver = shell.pendingUpdateVersion {
-            updateLatestVerLabel.stringValue = "v\(ver)"
-            updateLatestVerLabel.textColor = accentGreen
-            updateStatusBadge.stringValue = "Available"
-            updateStatusBadge.textColor = accentGreen
-            updateStatusBadge.isHidden = false
+            updateStatusBadge.stringValue = "v\(ver) available"
+            updateStatusBadge.textColor = accentOrange
             updateCheckButton.title = "Update to v\(ver)…"
+            styleActionBtn(updateCheckButton, accent: true)
             updateCheckButton.isEnabled = true
         } else if shell.updateChecking {
-            updateLatestVerLabel.stringValue = "v\(currentVer)"
-            updateLatestVerLabel.textColor = textCol
             updateStatusBadge.stringValue = "Checking…"
             updateStatusBadge.textColor = accentOrange
-            updateStatusBadge.isHidden = false
             updateCheckButton.title = "Checking…"
+            styleActionBtn(updateCheckButton, accent: false)
             updateCheckButton.isEnabled = false
         } else if shell.lastCheckFailed {
-            // A failed check is not "up to date" — the web card says "Couldn't
-            // check" in this state; the badge must agree (the last successful
-            // check's time would be a false claim).
-            updateLatestVerLabel.stringValue = "v\(currentVer)"
-            updateLatestVerLabel.textColor = textCol
             updateStatusBadge.stringValue = "Couldn't check"
             updateStatusBadge.textColor = accentOrange
-            updateStatusBadge.isHidden = false
             updateCheckButton.title = "Try again"
+            styleActionBtn(updateCheckButton, accent: false)
             updateCheckButton.isEnabled = true
         } else {
-            updateLatestVerLabel.stringValue = "v\(currentVer)"
-            updateLatestVerLabel.textColor = textCol
-            // Badge shown (not hidden) in the up-to-date state: with the last
-            // check's clock time it is a persistent "verified at 14:32" signal.
             if let ms = shell.lastCheckAtMs {
                 let when = Self.checkTimeFmt.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
                 updateStatusBadge.stringValue = "Up to date · \(when)"
@@ -2061,8 +2323,8 @@ final class SettingsWindowController: NSObject {
                 updateStatusBadge.stringValue = "Up to date"
             }
             updateStatusBadge.textColor = accentGreen
-            updateStatusBadge.isHidden = false
             updateCheckButton.title = "Check for Updates…"
+            styleActionBtn(updateCheckButton, accent: false)
             updateCheckButton.isEnabled = true
         }
         rebuildMenuRowsUI()
@@ -2078,9 +2340,16 @@ final class SettingsWindowController: NSObject {
         shell?.setStartAtLogin(startAtLoginSwitch.state == .on)
     }
 
-    @objc func onCloseBehaviorChanged() {
-        let mode = (closeBehaviorSeg.selectedSegment == 1) ? "quit" : "background"
-        shell?.setCloseBehavior(mode)
+    @objc private func onSelectBgClose() {
+        closeQuitSelected = false
+        styleSegButtons()
+        shell?.setCloseBehavior("background")
+    }
+
+    @objc private func onSelectQuitClose() {
+        closeQuitSelected = true
+        styleSegButtons()
+        shell?.setCloseBehavior("quit")
     }
 
     @objc func onKeepMemChanged() {
@@ -2103,14 +2372,16 @@ final class SettingsWindowController: NSObject {
         pushMenuRows()
     }
 
-    @objc private func onMenuRowUp(_ sender: NSControl) { moveMenuRow((sender as? NSButton)?.tag, -1) }
+    @objc private func onMenuRowUp(_ sender: NSButton) {
+        moveMenuRow(sender.identifier?.rawValue, -1)
+    }
 
-    @objc private func onMenuRowDown(_ sender: NSControl) { moveMenuRow((sender as? NSButton)?.tag, 1) }
+    @objc private func onMenuRowDown(_ sender: NSButton) {
+        moveMenuRow(sender.identifier?.rawValue, 1)
+    }
 
-    private func moveMenuRow(_ si: Int?, _ dir: Int) {
-        guard let si, PulseSettings.allMenuRows.indices.contains(si) else { return }
-        let id = PulseSettings.allMenuRows[si]
-        guard let i = menuRowFull.firstIndex(of: id) else { return }
+    private func moveMenuRow(_ id: String?, _ dir: Int) {
+        guard let id, let i = menuRowFull.firstIndex(of: id) else { return }
         let j = i + dir
         guard menuRowFull.indices.contains(j) else { return }
         menuRowFull.swapAt(i, j)
@@ -2119,15 +2390,45 @@ final class SettingsWindowController: NSObject {
     }
 
     private func rebuildMenuRowsUI() {
+        // Reorder row views visually inside rowsBox to match menuRowFull
+        for v in rowsBox.arrangedSubviews {
+            rowsBox.removeArrangedSubview(v)
+            v.removeFromSuperview()
+        }
+        for (idx, id) in menuRowFull.enumerated() {
+            if let v = menuRowViews[id] {
+                rowsBox.addArrangedSubview(v)
+                v.widthAnchor.constraint(equalTo: rowsBox.widthAnchor).isActive = true
+            }
+            let up = menuRowUpButtons[id]
+            let dn = menuRowDownButtons[id]
+            up?.isEnabled = idx > 0
+            dn?.isEnabled = idx < menuRowFull.count - 1
+            up?.alphaValue = idx > 0 ? 1.0 : 0.3
+            dn?.alphaValue = idx < menuRowFull.count - 1 ? 1.0 : 0.3
+        }
         for (id, sw) in menuRowSwitches {
-            sw.state = menuRowHidden.contains(id) ? .off : .on
-            menuRowLabels[id]?.textColor = menuRowHidden.contains(id) ? dimCol : textCol
+            let hidden = menuRowHidden.contains(id)
+            sw.state = hidden ? .off : .on
+            menuRowLabels[id]?.textColor = hidden ? dimCol : textCol
+            menuRowDots[id]?.layer?.opacity = hidden ? 0.35 : 1.0
         }
         for (id, sw) in menuRowBarSwitches {
             sw.state = menuRowBarOn.contains(id) ? .on : .off
-            sw.isEnabled = PulseSettings.allBarRows.contains(id)
-            menuRowBarWords[id]?.alphaValue = PulseSettings.allBarRows.contains(id) ? 1 : 0.4
         }
+        // Live status bar preview using the exact StatusController.render(...) engine
+        let vis = menuRowFull.filter { !menuRowHidden.contains($0) }
+        let bar = PulseSettings.allBarRows.filter { menuRowBarOn.contains($0) }
+        let orderedBar = menuRowFull.filter { bar.contains($0) }
+        barPreviewImage.image = StatusController.render(
+            cpu: [28, 42, 35, 58, 46],
+            mem: [41, 41, 41],
+            gpu: [14, 22, 18],
+            net: [12, 24, 18],
+            netText: StatusController.netText(down: 1_240_000, up: 86_000),
+            menu: vis,
+            bar: orderedBar
+        )
     }
 
     private func pushMenuRows() {
@@ -2198,113 +2499,956 @@ final class UpdateStripView: NSView {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
-/// Sparkle's standard user driver, minus one modal: the “you're up to date”
-/// alert. Manually checking for updates while already current used to end in a
-/// dialog that required an OK click for nothing — instead the dashboard's
-/// Updates card confirms the check inline (“· checked just now”). Every other
-/// interaction (progress window, the update dialog, permission prompt, real
-/// errors) forwards to the stock standard driver unchanged.
+/// Custom Pulse-styled About window (#12151d / #171b25 / #232a38 / #ff9f43).
 @MainActor
-final class QuietUserDriver: NSObject, SPUUserDriver {
-    private unowned let shell: Shell
-    private let inner: SPUStandardUserDriver
+final class PulseAboutWindowController: NSObject {
+    weak var shell: Shell?
+    let window: NSWindow
+
+    private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
+    private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
+    private let borderCol = NSColor(red: 0.137, green: 0.165, blue: 0.220, alpha: 1) // #232a38
+    private let textCol = NSColor(red: 0.910, green: 0.925, blue: 0.957, alpha: 1)   // #e8ecf4
+    private let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
+    private let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1) // #ff9f43
 
     init(shell: Shell) {
         self.shell = shell
-        self.inner = SPUStandardUserDriver(hostBundle: .main, delegate: nil)
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 278),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = ""
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = panelBg
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init()
+        buildUI()
     }
 
-    /// The one interaction replaced. “No newer version” is a non-event: record
-    /// it for the dashboard and acknowledge without a modal. Checks that failed
-    /// for a real reason (network, OS/hardware mismatch) still get the stock
-    /// error alert — and the dashboard is told the check failed.
+    private func buildUI() {
+        let root = NSView(frame: window.contentView?.bounds ?? .zero)
+        root.wantsLayer = true
+        root.layer?.backgroundColor = panelBg.cgColor
+        window.contentView = root
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(stack)
+
+        let icon = NSImageView()
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 76),
+            icon.heightAnchor.constraint(equalToConstant: 76),
+        ])
+
+        let title = NSTextField(labelWithString: "Pulse")
+        title.font = .systemFont(ofSize: 20, weight: .bold)
+        title.textColor = textCol
+
+        let verStr = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+        let pill = NSView()
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = cardBg.cgColor
+        pill.layer?.borderColor = borderCol.cgColor
+        pill.layer?.borderWidth = 1
+        pill.layer?.cornerRadius = 9
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        let verLabel = NSTextField(labelWithString: "v\(verStr)")
+        verLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        verLabel.textColor = accentOrange
+        verLabel.translatesAutoresizingMaskIntoConstraints = false
+        pill.addSubview(verLabel)
+        NSLayoutConstraint.activate([
+            verLabel.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 10),
+            verLabel.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -10),
+            verLabel.topAnchor.constraint(equalTo: pill.topAnchor, constant: 3),
+            verLabel.bottomAnchor.constraint(equalTo: pill.bottomAnchor, constant: -3),
+        ])
+
+        let subtitle = NSTextField(labelWithString: "Real-time macOS resource monitor")
+        subtitle.font = .systemFont(ofSize: 12, weight: .medium)
+        subtitle.textColor = dimCol
+
+        let btnRow = NSStackView()
+        btnRow.orientation = .horizontal
+        btnRow.spacing = 10
+
+        let ghBtn = makePillButton(title: "GitHub", primary: false, action: #selector(openGitHub))
+        let updBtn = makePillButton(title: "Check for Updates…", primary: true, action: #selector(checkUpdates))
+        btnRow.addArrangedSubview(ghBtn)
+        btnRow.addArrangedSubview(updBtn)
+
+        stack.addArrangedSubview(icon)
+        stack.addArrangedSubview(title)
+        stack.setCustomSpacing(4, after: title)
+        stack.addArrangedSubview(pill)
+        stack.setCustomSpacing(8, after: pill)
+        stack.addArrangedSubview(subtitle)
+        stack.setCustomSpacing(18, after: subtitle)
+        stack.addArrangedSubview(btnRow)
+
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 4),
+        ])
+    }
+
+    private func makePillButton(title: String, primary: Bool, action: Selector) -> NSButton {
+        let btn = NSButton(title: title, target: self, action: action)
+        btn.isBordered = false
+        btn.wantsLayer = true
+        btn.font = .systemFont(ofSize: 12, weight: .semibold)
+        btn.contentTintColor = primary ? NSColor(red: 0.04, green: 0.05, blue: 0.07, alpha: 1) : textCol
+        btn.layer?.backgroundColor = (primary ? accentOrange : cardBg).cgColor
+        btn.layer?.cornerRadius = 8
+        if !primary {
+            btn.layer?.borderColor = borderCol.cgColor
+            btn.layer?.borderWidth = 1
+        }
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            btn.heightAnchor.constraint(equalToConstant: 30),
+            btn.widthAnchor.constraint(greaterThanOrEqualToConstant: primary ? 144 : 88),
+        ])
+        return btn
+    }
+
+    @objc private func openGitHub() {
+        if let url = URL(string: "https://github.com/ssa17/pulse") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func checkUpdates() {
+        window.close()
+        shell?.checkForUpdates()
+    }
+
+    func show() {
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Custom Pulse-styled Sparkle update window (#12151d / #171b25 / #232a38 / #ff9f43).
+/// Replaces Sparkle's dated stock modals ("Remind Me Later", "Skip This Version",
+/// "Automatically download...") with a clean dark UI matching the dashboard.
+@MainActor
+final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
+    let window: NSWindow
+
+    private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
+    private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
+    private let borderCol = NSColor(red: 0.137, green: 0.165, blue: 0.220, alpha: 1) // #232a38
+    private let textCol = NSColor(red: 0.910, green: 0.925, blue: 0.957, alpha: 1)   // #e8ecf4
+    private let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
+    private let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1) // #ff9f43
+
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let notesCard = NSView()
+    private let notesScroll = NSScrollView()
+    private let notesTextView = NSTextView()
+    private let progressWrap = NSView()
+    private let progressTrack = NSView()
+    private let progressFill = NSView()
+    private var progressFillWidth: NSLayoutConstraint!
+    private let progressLabel = NSTextField(labelWithString: "")
+    private let secondaryBtn = NSButton(title: "Later", target: nil, action: nil)
+    private let primaryBtn = NSButton(title: "Update", target: nil, action: nil)
+
+    private var checkCancel: (() -> Void)?
+    private var downloadCancel: (() -> Void)?
+    private var updateReply: ((SPUUserUpdateChoice) -> Void)?
+    private var readyReply: ((SPUUserUpdateChoice) -> Void)?
+    private var errorAck: (() -> Void)?
+    private var permReply: ((SUUpdatePermissionResponse) -> Void)?
+
+    private var expectedBytes: UInt64 = 0
+    private var receivedBytes: UInt64 = 0
+    private var isProgrammaticClose = false
+
+    override init() {
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 452, height: 182),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = ""
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = panelBg
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init()
+        window.delegate = self
+        buildUI()
+    }
+
+    private func buildUI() {
+        let root = NSView(frame: window.contentView?.bounds ?? .zero)
+        root.wantsLayer = true
+        root.layer?.backgroundColor = panelBg.cgColor
+        window.contentView = root
+
+        let icon = NSImageView()
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(icon)
+
+        titleLabel.font = .systemFont(ofSize: 15, weight: .bold)
+        titleLabel.textColor = textCol
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(titleLabel)
+
+        subtitleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        subtitleLabel.textColor = dimCol
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(subtitleLabel)
+
+        // Release notes / message card
+        notesCard.wantsLayer = true
+        notesCard.layer?.backgroundColor = cardBg.cgColor
+        notesCard.layer?.borderColor = borderCol.cgColor
+        notesCard.layer?.borderWidth = 1
+        notesCard.layer?.cornerRadius = 10
+        notesCard.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(notesCard)
+
+        notesScroll.hasVerticalScroller = true
+        notesScroll.drawsBackground = false
+        notesScroll.borderType = .noBorder
+        notesScroll.translatesAutoresizingMaskIntoConstraints = false
+        notesCard.addSubview(notesScroll)
+
+        notesTextView.isEditable = false
+        notesTextView.isSelectable = true
+        notesTextView.drawsBackground = false
+        notesTextView.textContainerInset = NSSize(width: 8, height: 8)
+        notesTextView.font = .systemFont(ofSize: 12)
+        notesTextView.textColor = textCol
+        notesTextView.isVerticallyResizable = true
+        notesTextView.isHorizontallyResizable = false
+        notesTextView.autoresizingMask = [.width]
+        notesTextView.textContainer?.widthTracksTextView = true
+        notesScroll.documentView = notesTextView
+
+        // Progress bar area
+        progressWrap.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(progressWrap)
+
+        progressTrack.wantsLayer = true
+        progressTrack.layer?.backgroundColor = cardBg.cgColor
+        progressTrack.layer?.borderColor = borderCol.cgColor
+        progressTrack.layer?.borderWidth = 1
+        progressTrack.layer?.cornerRadius = 4
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        progressWrap.addSubview(progressTrack)
+
+        progressFill.wantsLayer = true
+        progressFill.layer?.backgroundColor = accentOrange.cgColor
+        progressFill.layer?.cornerRadius = 3
+        progressFill.translatesAutoresizingMaskIntoConstraints = false
+        progressTrack.addSubview(progressFill)
+        progressFillWidth = progressFill.widthAnchor.constraint(equalToConstant: 0)
+
+        progressLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        progressLabel.textColor = dimCol
+        progressLabel.translatesAutoresizingMaskIntoConstraints = false
+        progressWrap.addSubview(progressLabel)
+
+        // Footer buttons
+        styleButton(secondaryBtn, primary: false)
+        secondaryBtn.target = self
+        secondaryBtn.action = #selector(onSecondary)
+        root.addSubview(secondaryBtn)
+
+        styleButton(primaryBtn, primary: true)
+        primaryBtn.target = self
+        primaryBtn.action = #selector(onPrimary)
+        root.addSubview(primaryBtn)
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
+            icon.topAnchor.constraint(equalTo: root.topAnchor, constant: 26),
+            icon.widthAnchor.constraint(equalToConstant: 48),
+            icon.heightAnchor.constraint(equalToConstant: 48),
+
+            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 14),
+            titleLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
+            titleLabel.topAnchor.constraint(equalTo: icon.topAnchor, constant: 3),
+
+            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
+
+            notesCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
+            notesCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
+            notesCard.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 16),
+            notesCard.bottomAnchor.constraint(equalTo: secondaryBtn.topAnchor, constant: -16),
+
+            notesScroll.leadingAnchor.constraint(equalTo: notesCard.leadingAnchor, constant: 4),
+            notesScroll.trailingAnchor.constraint(equalTo: notesCard.trailingAnchor, constant: -4),
+            notesScroll.topAnchor.constraint(equalTo: notesCard.topAnchor, constant: 4),
+            notesScroll.bottomAnchor.constraint(equalTo: notesCard.bottomAnchor, constant: -4),
+
+            progressWrap.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
+            progressWrap.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
+            progressWrap.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 18),
+            progressWrap.heightAnchor.constraint(equalToConstant: 36),
+
+            progressTrack.leadingAnchor.constraint(equalTo: progressWrap.leadingAnchor),
+            progressTrack.trailingAnchor.constraint(equalTo: progressWrap.trailingAnchor),
+            progressTrack.topAnchor.constraint(equalTo: progressWrap.topAnchor),
+            progressTrack.heightAnchor.constraint(equalToConstant: 8),
+
+            progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            progressFillWidth,
+
+            progressLabel.leadingAnchor.constraint(equalTo: progressWrap.leadingAnchor),
+            progressLabel.trailingAnchor.constraint(equalTo: progressWrap.trailingAnchor),
+            progressLabel.topAnchor.constraint(equalTo: progressTrack.bottomAnchor, constant: 8),
+
+            primaryBtn.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
+            primaryBtn.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18),
+            primaryBtn.heightAnchor.constraint(equalToConstant: 30),
+            primaryBtn.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+
+            secondaryBtn.trailingAnchor.constraint(equalTo: primaryBtn.leadingAnchor, constant: -10),
+            secondaryBtn.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18),
+            secondaryBtn.heightAnchor.constraint(equalToConstant: 30),
+            secondaryBtn.widthAnchor.constraint(greaterThanOrEqualToConstant: 84),
+        ])
+    }
+
+    private func styleButton(_ btn: NSButton, primary: Bool) {
+        btn.isBordered = false
+        btn.wantsLayer = true
+        btn.font = .systemFont(ofSize: 12, weight: .semibold)
+        btn.contentTintColor = primary ? NSColor(red: 0.04, green: 0.05, blue: 0.07, alpha: 1) : textCol
+        btn.layer?.backgroundColor = (primary ? accentOrange : cardBg).cgColor
+        btn.layer?.cornerRadius = 8
+        if !primary {
+            btn.layer?.borderColor = borderCol.cgColor
+            btn.layer?.borderWidth = 1
+        }
+        btn.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    private func resize(width: CGFloat = 452, height: CGFloat) {
+        var f = window.frame
+        let dy = height - f.height
+        f.origin.y -= dy
+        f.size.width = width
+        f.size.height = height
+        window.setFrame(f, display: true, animate: false)
+    }
+
+    private func present() {
+        if !window.isVisible { window.center() }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func clearCallbacks() {
+        checkCancel = nil
+        downloadCancel = nil
+        updateReply = nil
+        readyReply = nil
+        errorAck = nil
+        permReply = nil
+    }
+
+    private func setNotesPlain(_ text: String) {
+        notesTextView.textStorage?.setAttributedString(NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: textCol,
+            ]
+        ))
+    }
+
+    private func setNotesHTML(_ data: Data) {
+        if let attr = try? NSMutableAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.html,
+                      .characterEncoding: String.Encoding.utf8.rawValue],
+            documentAttributes: nil
+        ) {
+            let full = NSRange(location: 0, length: attr.length)
+            attr.addAttribute(.foregroundColor, value: textCol, range: full)
+            attr.enumerateAttribute(.font, in: full) { val, r, _ in
+                if let f = val as? NSFont {
+                    let isBold = f.fontDescriptor.symbolicTraits.contains(.bold)
+                    let sz = max(11.5, min(14, f.pointSize))
+                    attr.addAttribute(.font, value: NSFont.systemFont(ofSize: sz, weight: isBold ? .semibold : .regular), range: r)
+                }
+            }
+            notesTextView.textStorage?.setAttributedString(attr)
+        }
+    }
+
+    // MARK: Sparkle driver states
+
+    func showChecking(cancellation: @escaping () -> Void) {
+        clearCallbacks()
+        checkCancel = cancellation
+        titleLabel.stringValue = "Checking for Updates…"
+        subtitleLabel.stringValue = "Contacting update feed"
+        notesCard.isHidden = true
+        progressWrap.isHidden = false
+        progressFillWidth.constant = 160
+        progressLabel.stringValue = "Fetching latest release info…"
+        primaryBtn.isHidden = true
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Cancel"
+        resize(height: 176)
+        present()
+    }
+
+    func showPermission(_ request: SPUUpdatePermissionRequest, reply: @escaping (SUUpdatePermissionResponse) -> Void) {
+        clearCallbacks()
+        permReply = reply
+        titleLabel.stringValue = "Automatic Updates"
+        subtitleLabel.stringValue = "Keep Pulse up to date automatically"
+        notesCard.isHidden = false
+        progressWrap.isHidden = true
+        setNotesPlain("Pulse can check for new releases in the background and notify you when an update is ready.")
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Not Now"
+        primaryBtn.isHidden = false
+        primaryBtn.title = "Enable Checks"
+        resize(height: 230)
+        present()
+    }
+
+    func showUpdateFound(item: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        clearCallbacks()
+        updateReply = reply
+        let curVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
+        let newVer = item.displayVersionString
+        let sizeStr = item.contentLength > 0
+            ? " · " + ByteCountFormatter.string(fromByteCount: Int64(item.contentLength), countStyle: .file)
+            : ""
+        titleLabel.stringValue = "Pulse v\(newVer) Available"
+        subtitleLabel.stringValue = "You have v\(curVer)\(sizeStr)"
+        notesCard.isHidden = false
+        progressWrap.isHidden = true
+
+        if let desc = item.itemDescription, !desc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let data = desc.data(using: .utf8), desc.contains("<") {
+                setNotesHTML(data)
+            } else {
+                setNotesPlain(desc)
+            }
+        } else {
+            setNotesPlain("A new version of Pulse is ready to download and install.")
+        }
+
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Later"
+        primaryBtn.isHidden = false
+        primaryBtn.title = state.stage == .downloaded ? "Install & Relaunch" : "Update & Relaunch"
+        resize(height: 320)
+        present()
+    }
+
+    func showReleaseNotes(_ data: SPUDownloadData) {
+        setNotesHTML(data.data)
+    }
+
+    // MARK: Dev-only screen preview helpers (PULSE_PREVIEW=1)
+
+    func showPreviewAvailable(version: String, sizeBytes: UInt64, htmlNotes: String) {
+        clearCallbacks()
+        let curVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.5"
+        let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
+        titleLabel.stringValue = "Pulse v\(version) Available"
+        subtitleLabel.stringValue = "You have v\(curVer) · \(sizeStr)"
+        notesCard.isHidden = false
+        progressWrap.isHidden = true
+        if let data = htmlNotes.data(using: .utf8) { setNotesHTML(data) }
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Later"
+        primaryBtn.isHidden = false
+        primaryBtn.title = "Update & Relaunch"
+        updateReply = { [weak self] _ in self?.dismiss() }
+        resize(height: 320)
+        present()
+    }
+
+    func showPreviewPermission() {
+        clearCallbacks()
+        titleLabel.stringValue = "Automatic Updates"
+        subtitleLabel.stringValue = "Keep Pulse up to date automatically"
+        notesCard.isHidden = false
+        progressWrap.isHidden = true
+        setNotesPlain("Pulse can check for new releases in the background and notify you when an update is ready.")
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Not Now"
+        primaryBtn.isHidden = false
+        primaryBtn.title = "Enable Checks"
+        permReply = { [weak self] _ in self?.dismiss() }
+        resize(height: 230)
+        present()
+    }
+
+    func showDownloadStarted(cancellation: @escaping () -> Void) {
+        clearCallbacks()
+        downloadCancel = cancellation
+        expectedBytes = 0
+        receivedBytes = 0
+        titleLabel.stringValue = "Downloading Update…"
+        subtitleLabel.stringValue = "Pulse will verify the signature before installing"
+        notesCard.isHidden = true
+        progressWrap.isHidden = false
+        progressFillWidth.constant = 16
+        progressLabel.stringValue = "Starting download…"
+        primaryBtn.isHidden = true
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Cancel"
+        resize(height: 176)
+        present()
+    }
+
+    func setExpectedLength(_ len: UInt64) {
+        expectedBytes = len
+        updateDownloadProgress()
+    }
+
+    func addReceivedBytes(_ len: UInt64) {
+        receivedBytes += len
+        updateDownloadProgress()
+    }
+
+    private func updateDownloadProgress() {
+        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 408)
+        if expectedBytes > 0 {
+            let frac = min(1.0, Double(receivedBytes) / Double(expectedBytes))
+            progressFillWidth.constant = max(8, trackW * frac)
+            let got = ByteCountFormatter.string(fromByteCount: Int64(receivedBytes), countStyle: .file)
+            let tot = ByteCountFormatter.string(fromByteCount: Int64(expectedBytes), countStyle: .file)
+            progressLabel.stringValue = "\(got) of \(tot) (\(Int(frac * 100))%)"
+        } else {
+            let got = ByteCountFormatter.string(fromByteCount: Int64(receivedBytes), countStyle: .file)
+            progressLabel.stringValue = "Downloaded \(got)…"
+        }
+    }
+
+    func showExtracting() {
+        downloadCancel = nil
+        titleLabel.stringValue = "Preparing Update…"
+        subtitleLabel.stringValue = "Extracting and verifying signature"
+        progressFillWidth.constant = 0
+        progressLabel.stringValue = "Extracting…"
+        secondaryBtn.isHidden = true
+        primaryBtn.isHidden = true
+    }
+
+    func setExtractionProgress(_ progress: Double) {
+        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 408)
+        progressFillWidth.constant = max(8, trackW * min(1.0, max(0.0, progress)))
+        progressLabel.stringValue = "Extracting… \(Int(progress * 100))%"
+    }
+
+    func showReady(reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        clearCallbacks()
+        readyReply = reply
+        titleLabel.stringValue = "Ready to Install"
+        subtitleLabel.stringValue = "Pulse will relaunch to finish updating"
+        notesCard.isHidden = true
+        progressWrap.isHidden = false
+        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 408)
+        progressFillWidth.constant = trackW
+        progressLabel.stringValue = "Download verified ✓"
+        secondaryBtn.isHidden = false
+        secondaryBtn.title = "Later"
+        primaryBtn.isHidden = false
+        primaryBtn.title = "Restart & Update"
+        resize(height: 176)
+        present()
+    }
+
+    func showInstalling() {
+        clearCallbacks()
+        titleLabel.stringValue = "Installing Update…"
+        subtitleLabel.stringValue = "Pulse will reopen in a moment"
+        secondaryBtn.isHidden = true
+        primaryBtn.isHidden = true
+        progressLabel.stringValue = "Applying update…"
+    }
+
+    func showError(_ message: String, acknowledgement: @escaping () -> Void) {
+        clearCallbacks()
+        errorAck = acknowledgement
+        titleLabel.stringValue = "Update Couldn't Complete"
+        subtitleLabel.stringValue = "Your current version is unchanged"
+        notesCard.isHidden = false
+        progressWrap.isHidden = true
+        setNotesPlain(message)
+        secondaryBtn.isHidden = true
+        primaryBtn.isHidden = false
+        primaryBtn.title = "OK"
+        resize(height: 230)
+        present()
+    }
+
+    func dismiss() {
+        clearCallbacks()
+        isProgrammaticClose = true
+        window.orderOut(nil)
+        isProgrammaticClose = false
+    }
+
+    @objc private func onPrimary() {
+        if let cb = updateReply {
+            clearCallbacks()
+            cb(.install)
+        } else if let cb = readyReply {
+            clearCallbacks()
+            cb(.install)
+        } else if let cb = permReply {
+            clearCallbacks()
+            cb(SUUpdatePermissionResponse(automaticUpdateChecks: true, sendSystemProfile: false))
+            dismiss()
+        } else if let cb = errorAck {
+            clearCallbacks()
+            cb()
+            dismiss()
+        }
+    }
+
+    @objc private func onSecondary() {
+        if let cb = checkCancel {
+            clearCallbacks()
+            cb()
+            dismiss()
+        } else if let cb = downloadCancel {
+            clearCallbacks()
+            cb()
+            dismiss()
+        } else if let cb = updateReply {
+            clearCallbacks()
+            cb(.dismiss)
+            dismiss()
+        } else if let cb = readyReply {
+            clearCallbacks()
+            cb(.dismiss)
+            dismiss()
+        } else if let cb = permReply {
+            clearCallbacks()
+            cb(SUUpdatePermissionResponse(automaticUpdateChecks: false, sendSystemProfile: false))
+            dismiss()
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if isProgrammaticClose { return }
+        if let cb = checkCancel { clearCallbacks(); cb() }
+        else if let cb = downloadCancel { clearCallbacks(); cb() }
+        else if let cb = updateReply { clearCallbacks(); cb(.dismiss) }
+        else if let cb = readyReply { clearCallbacks(); cb(.dismiss) }
+        else if let cb = permReply { clearCallbacks(); cb(SUUpdatePermissionResponse(automaticUpdateChecks: false, sendSystemProfile: false)) }
+        else if let cb = errorAck { clearCallbacks(); cb() }
+    }
+}
+
+/// Custom Sparkle user driver backed by `PulseUpdateWindowController` so every
+/// update prompt, progress bar, and error matches Pulse's dark card UI — and
+/// "no newer version" stays silent in favor of the dashboard's Updates card.
+@MainActor
+final class QuietUserDriver: NSObject, SPUUserDriver {
+    private unowned let shell: Shell
+    private lazy var ui = PulseUpdateWindowController()
+
+    init(shell: Shell) {
+        self.shell = shell
+    }
+
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
         let raw = (error as NSError).userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber
         let reason = raw.map { SPUNoUpdateFoundReason(rawValue: OSStatus($0.intValue)) }
         if reason == .onLatestVersion || reason == .onNewerThanLatestVersion {
             shell.updateCheckFoundNothing()
+            ui.dismiss()
             acknowledgement()
         } else {
             shell.updateCheckFailed()
-            inner.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement)
+            ui.showError(error.localizedDescription, acknowledgement: acknowledgement)
         }
     }
 
-    // MARK: Forwarded, unchanged
-
     func show(_ request: SPUUpdatePermissionRequest,
               reply: @escaping (SUUpdatePermissionResponse) -> Void) {
-        inner.show(request, reply: reply)
+        ui.showPermission(request, reply: reply)
     }
 
-    /// The stock driver shows an indeterminate progress window for user-initiated
-    /// checks. When the check came from the dashboard's Updates card we skip it:
-    /// the card animates its own progress bar over the same interval, and on a
-    /// fast appcast fetch the stock window just flashes open and closed before
-    /// the check can be read. Checks started elsewhere (menu, strip, Settings —
-    /// typically with the dashboard closed) keep the stock window.
+    /// Skip the checking window when started from the dashboard's Updates card
+    /// (the card animates its own inline progress bar).
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
         if shell.checkFromWeb { return }
-        inner.showUserInitiatedUpdateCheck(cancellation: cancellation)
+        ui.showChecking(cancellation: cancellation)
     }
 
     func showUpdateFound(with item: SUAppcastItem, state: SPUUserUpdateState,
                          reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        inner.showUpdateFound(with: item, state: state, reply: reply)
+        ui.showUpdateFound(item: item, state: state, reply: reply)
     }
 
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
-        inner.showUpdateReleaseNotes(with: downloadData)
+        ui.showReleaseNotes(downloadData)
     }
 
     func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {
-        inner.showUpdateReleaseNotesFailedToDownloadWithError(error)
+        // Keep the inline appcast description or fallback message already shown.
     }
 
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        inner.showUpdaterError(error, acknowledgement: acknowledgement)
+        ui.showError(error.localizedDescription, acknowledgement: acknowledgement)
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
-        inner.showDownloadInitiated(cancellation: cancellation)
+        ui.showDownloadStarted(cancellation: cancellation)
     }
 
     func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) {
-        inner.showDownloadDidReceiveExpectedContentLength(expectedContentLength)
+        ui.setExpectedLength(expectedContentLength)
     }
 
     func showDownloadDidReceiveData(ofLength length: UInt64) {
-        inner.showDownloadDidReceiveData(ofLength: length)
+        ui.addReceivedBytes(length)
     }
 
     func showDownloadDidStartExtractingUpdate() {
-        inner.showDownloadDidStartExtractingUpdate()
+        ui.showExtracting()
     }
 
     func showExtractionReceivedProgress(_ progress: Double) {
-        inner.showExtractionReceivedProgress(progress)
+        ui.setExtractionProgress(progress)
     }
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        inner.showReady(toInstallAndRelaunch: reply)
+        ui.showReady(reply: reply)
     }
 
     func showInstallingUpdate(withApplicationTerminated terminated: Bool,
                               retryTerminatingApplication: @escaping () -> Void) {
-        inner.showInstallingUpdate(withApplicationTerminated: terminated,
-                                   retryTerminatingApplication: retryTerminatingApplication)
+        ui.showInstalling()
     }
 
     func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) {
-        inner.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: acknowledgement)
+        ui.dismiss()
+        acknowledgement()
     }
 
     func dismissUpdateInstallation() {
-        inner.dismissUpdateInstallation()
+        ui.dismiss()
     }
 
     func showUpdateInFocus() {
-        inner.showUpdateInFocus()
+        ui.window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Dev-only screen gallery (enabled only when `PULSE_PREVIEW=1` is set).
+/// Lets you inspect every native window, splash, alert, and update state on demand.
+@MainActor
+final class PulsePreviewController: NSObject {
+    private unowned let shell: Shell
+    private let window: NSWindow
+    private lazy var updateUI = PulseUpdateWindowController()
+    private var splashVisible = false
+    private var simulatedUpdateOn = false
+
+    private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
+    private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
+    private let borderCol = NSColor(red: 0.137, green: 0.165, blue: 0.220, alpha: 1) // #232a38
+    private let textCol = NSColor(red: 0.910, green: 0.925, blue: 0.957, alpha: 1)   // #e8ecf4
+    private let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
+    private let faintCol = NSColor(red: 0.353, green: 0.388, blue: 0.459, alpha: 1)  // #5a6375
+    private let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1) // #ff9f43
+
+    init(shell: Shell) {
+        self.shell = shell
+        window = NSWindow(
+            contentRect: NSRect(x: 40, y: 180, width: 256, height: 500),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = ""
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.level = .floating
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = panelBg
+        window.isReleasedWhenClosed = false
+        super.init()
+        buildUI()
+    }
+
+    private func buildUI() {
+        let root = NSView(frame: window.contentView?.bounds ?? .zero)
+        root.wantsLayer = true
+        root.layer?.backgroundColor = panelBg.cgColor
+        window.contentView = root
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(stack)
+
+        let title = NSTextField(labelWithString: "Screen Gallery")
+        title.font = .systemFont(ofSize: 14, weight: .bold)
+        title.textColor = textCol
+        let sub = NSTextField(labelWithString: "Dev preview (PULSE_PREVIEW=1)")
+        sub.font = .systemFont(ofSize: 11)
+        sub.textColor = accentOrange
+        stack.addArrangedSubview(title)
+        stack.setCustomSpacing(2, after: title)
+        stack.addArrangedSubview(sub)
+        stack.setCustomSpacing(10, after: sub)
+
+        let addSec = { (label: String) in
+            let l = NSTextField(labelWithString: label.uppercased())
+            l.font = .systemFont(ofSize: 9.5, weight: .bold)
+            l.textColor = self.faintCol
+            stack.addArrangedSubview(l)
+        }
+        let addBtn = { (label: String, action: Selector) in
+            let b = NSButton(title: label, target: self, action: action)
+            b.isBordered = false
+            b.wantsLayer = true
+            b.font = .systemFont(ofSize: 11.5, weight: .medium)
+            b.alignment = .left
+            b.contentTintColor = self.textCol
+            b.layer?.backgroundColor = self.cardBg.cgColor
+            b.layer?.borderColor = self.borderCol.cgColor
+            b.layer?.borderWidth = 1
+            b.layer?.cornerRadius = 7
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.heightAnchor.constraint(equalToConstant: 26).isActive = true
+            stack.addArrangedSubview(b)
+            b.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+
+        addSec("App & Settings")
+        addBtn("  Toggle Launch Splash", #selector(pSplash))
+        addBtn("  About Pulse", #selector(pAbout))
+        addBtn("  Web Settings Modal", #selector(pWebSettings))
+        addBtn("  Native Settings Window", #selector(pNativeSettings))
+
+        stack.setCustomSpacing(10, after: stack.arrangedSubviews.last!)
+        addSec("Update Dialogs")
+        addBtn("  Update: Checking…", #selector(pUpdCheck))
+        addBtn("  Update: Available (v1.6)", #selector(pUpdAvail))
+        addBtn("  Update: Downloading (64%)", #selector(pUpdDown))
+        addBtn("  Update: Extracting (45%)", #selector(pUpdExt))
+        addBtn("  Update: Ready to Install", #selector(pUpdReady))
+        addBtn("  Update: Error", #selector(pUpdErr))
+        addBtn("  Update: Permission", #selector(pUpdPerm))
+
+        stack.setCustomSpacing(10, after: stack.arrangedSubviews.last!)
+        addSec("Chrome & Alerts")
+        addBtn("  Toggle Pending Update Strip", #selector(pPendingStrip))
+        addBtn("  Dark Confirm Alert", #selector(pConfirmAlert))
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 28),
+        ])
+    }
+
+    func show() {
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func pSplash() {
+        splashVisible.toggle()
+        shell.launchSplash?.isHidden = !splashVisible
+        shell.web?.isHidden = splashVisible
+        shell.window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func pAbout() { shell.openAbout() }
+    @objc private func pWebSettings() {
+        splashVisible = false
+        shell.launchSplash?.isHidden = true
+        shell.web?.isHidden = false
+        shell.openSettings()
+    }
+    @objc private func pNativeSettings() { shell.openNativeSettings() }
+
+    @objc private func pUpdCheck() {
+        updateUI.showChecking { [weak self] in self?.updateUI.dismiss() }
+    }
+    @objc private func pUpdAvail() {
+        let html = """
+        <p><b>What's New in Pulse 1.6</b></p>
+        <ul>
+          <li>Redesigned macOS squircle icon, DMG installer window, and native launch splash.</li>
+          <li>Pulse-styled dark update dialogs and About window.</li>
+          <li>Live menu-bar capsule preview inside Settings.</li>
+        </ul>
+        """
+        updateUI.showPreviewAvailable(version: "1.6", sizeBytes: 2_480_000, htmlNotes: html)
+    }
+    @objc private func pUpdDown() {
+        updateUI.showDownloadStarted { [weak self] in self?.updateUI.dismiss() }
+        updateUI.setExpectedLength(2_480_000)
+        updateUI.addReceivedBytes(1_587_200)
+    }
+    @objc private func pUpdExt() {
+        updateUI.showDownloadStarted {}
+        updateUI.showExtracting()
+        updateUI.setExtractionProgress(0.45)
+    }
+    @objc private func pUpdReady() {
+        updateUI.showReady { [weak self] _ in self?.updateUI.dismiss() }
+    }
+    @objc private func pUpdErr() {
+        updateUI.showError("Could not reach GitHub Releases (request timed out after 15s).") {}
+    }
+    @objc private func pUpdPerm() {
+        updateUI.showPreviewPermission()
+    }
+    @objc private func pPendingStrip() {
+        simulatedUpdateOn.toggle()
+        shell.pendingUpdateVersion = simulatedUpdateOn ? "1.6" : nil
+        shell.setUpdateIndicators()
+    }
+    @objc private func pConfirmAlert() {
+        let a = NSAlert()
+        a.window.appearance = NSAppearance(named: .darkAqua)
+        a.messageText = "Pulse"
+        a.informativeText = "Force quit Google Chrome (PID 4182)?"
+        a.addButton(withTitle: "OK")
+        a.addButton(withTitle: "Cancel")
+        a.runModal()
     }
 }
 
@@ -2473,6 +3617,16 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if wasHidden { BootTracer.shared.mark("first_render", once: true) }
             }
         }
+    }
+
+    private var aboutController: PulseAboutWindowController?
+    private var previewController: PulsePreviewController?
+
+    @objc func openAbout() {
+        if aboutController == nil {
+            aboutController = PulseAboutWindowController(shell: self)
+        }
+        aboutController?.show()
     }
 
     @objc func openSettings() {
@@ -2965,6 +4119,18 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             case "checkForUpdates":
                 startUpdateCheck(fromWeb: true)
                 if isSelfTest { armSelfTestCheckFlow() }
+            case "revealInFinder":
+                guard let p = body["path"] as? String, p.hasPrefix("/"), !p.contains("\0"),
+                      FileManager.default.fileExists(atPath: p) else { break }
+                DispatchQueue.main.async {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
+                }
+            case "copyText":
+                guard let text = body["text"] as? String, !text.isEmpty else { break }
+                DispatchQueue.main.async {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
             default:
                 break
             }
@@ -3013,24 +4179,32 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
         // Immediate AppKit splash shown inside rootView until WebKit paints `skeleton_paint`.
         let splash = NSStackView()
-        splash.orientation = .horizontal
-        splash.alignment = .centerY
+        splash.orientation = .vertical
+        splash.alignment = .centerX
         splash.spacing = 10
         splash.translatesAutoresizingMaskIntoConstraints = false
-        let dot = NSView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = NSColor(srgbRed: 1, green: 0x9f / 255.0, blue: 0x43 / 255.0, alpha: 1).cgColor
-        dot.layer?.cornerRadius = 6
-        dot.translatesAutoresizingMaskIntoConstraints = false
+
+        let iconView = NSImageView()
+        iconView.image = NSApp.applicationIconImage
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: 12),
-            dot.heightAnchor.constraint(equalToConstant: 12),
+            iconView.widthAnchor.constraint(equalToConstant: 72),
+            iconView.heightAnchor.constraint(equalToConstant: 72),
         ])
+
         let wordmark = NSTextField(labelWithString: "Pulse")
-        wordmark.font = .systemFont(ofSize: 18, weight: .bold)
-        wordmark.textColor = NSColor(srgbRed: 0xe8 / 255.0, green: 0xec / 255.0, blue: 0xf4 / 255.0, alpha: 0.9)
-        splash.addArrangedSubview(dot)
+        wordmark.font = .systemFont(ofSize: 22, weight: .bold)
+        wordmark.textColor = NSColor(srgbRed: 0xe8 / 255.0, green: 0xec / 255.0, blue: 0xf4 / 255.0, alpha: 0.94)
+
+        let subtitle = NSTextField(labelWithString: "Mac Resource Monitor")
+        subtitle.font = .systemFont(ofSize: 12, weight: .medium)
+        subtitle.textColor = NSColor(srgbRed: 0x8b / 255.0, green: 0x94 / 255.0, blue: 0xa7 / 255.0, alpha: 0.85)
+
+        splash.addArrangedSubview(iconView)
         splash.addArrangedSubview(wordmark)
+        splash.setCustomSpacing(4, after: wordmark)
+        splash.addArrangedSubview(subtitle)
         rootView.addSubview(splash)
         NSLayoutConstraint.activate([
             splash.centerXAnchor.constraint(equalTo: rootView.centerXAnchor),
@@ -3058,8 +4232,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         let mainMenu = NSMenu()
         let appItem = NSMenuItem(); mainMenu.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Pulse",
-                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: "About Pulse", action: #selector(openAbout), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
         appMenu.addItem(.separator())
         let prefsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         prefsItem.target = self
@@ -3124,6 +4299,11 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         ) { [weak self] _ in
             self?.status?.poll()
             self?.web?.evaluateJavaScript("window.__pulseWake && window.__pulseWake()", completionHandler: nil)
+        }
+
+        if ProcessInfo.processInfo.environment["PULSE_PREVIEW"] == "1" {
+            previewController = PulsePreviewController(shell: self)
+            previewController?.show()
         }
     }
 
@@ -3452,7 +4632,23 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
           const row = [...document.querySelectorAll('#rows-cpu .row')].find(r => r.style.display !== 'none');
           if (row) row.click();
           const drawerRows = document.querySelectorAll('#dtable .prow').length;
+          const memPressure = document.querySelector('#mem-pressure')?.textContent || null;
+          const hasDrawerActions = !!document.querySelector('#dcopy') && !!document.querySelector('#d-net-box') && !!document.querySelector('#dblist');
           document.querySelector('#dclose')?.click();
+          const energyBtn = document.querySelector('#cpu-mode-energy');
+          energyBtn?.click();
+          const energyToggleOk = !!energyBtn && document.querySelectorAll('#rows-cpu .row').length > 0;
+          document.querySelector('#cpu-mode-cpu')?.click();
+          document.querySelector('#bg-items-btn')?.click();
+          const bgItemsOpen = document.querySelector('#bg-scrim')?.classList.contains('on') || false;
+          document.querySelector('#bg-close')?.click();
+          const bgItemsClosed = !document.querySelector('#bg-scrim')?.classList.contains('on');
+          const bgItemsModalOk = bgItemsOpen && bgItemsClosed;
+          document.querySelector('#bl-btn')?.click();
+          const blOpenState = document.querySelector('#bl-scrim')?.classList.contains('on') || false;
+          document.querySelector('#bl-close')?.click();
+          const blClosedState = !document.querySelector('#bl-scrim')?.classList.contains('on');
+          const blacklistModalOk = blOpenState && blClosedState;
           document.querySelector('#mem-info')?.click();
           const memInfo = {
             open: !document.querySelector('#mempop')?.hidden,
@@ -3493,7 +4689,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             mem: document.querySelector('#mem-big')?.textContent,
             rows: document.querySelectorAll('#rows-cpu .row').length,
             live: document.querySelector('#live-text')?.textContent,
-            confirmWired, drawerRows, memInfo,
+            confirmWired, drawerRows, memPressure, drawerExtrasOk: hasDrawerActions, memInfo,
+            energyToggleOk, bgItemsModalOk, blacklistModalOk,
             dashboardSettingsOk: dashboardSettingsOpen && dashboardSettingsClosed,
             updatesCardOk: updateCardSwaps && checkCardRestored,
             purgeBtn: !!document.querySelector('#mem-purge')
@@ -3908,6 +5105,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     func showFatal(_ msg: String) {
         let a = NSAlert()
+        a.window.appearance = NSAppearance(named: .darkAqua)
         a.messageText = "Pulse"
         a.informativeText = msg
         a.alertStyle = .warning
@@ -3979,6 +5177,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         let a = NSAlert()
+        a.window.appearance = NSAppearance(named: .darkAqua)
         a.messageText = "Pulse"
         a.informativeText = message
         a.addButton(withTitle: "OK")
@@ -3993,6 +5192,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             return
         }
         let a = NSAlert()
+        a.window.appearance = NSAppearance(named: .darkAqua)
         a.messageText = "Pulse"
         a.informativeText = message
         a.addButton(withTitle: "OK")
@@ -4004,6 +5204,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping (String?) -> Void) {
         let a = NSAlert()
+        a.window.appearance = NSAppearance(named: .darkAqua)
         a.messageText = prompt
         a.addButton(withTitle: "OK")
         a.addButton(withTitle: "Cancel")

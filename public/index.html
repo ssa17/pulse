@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pulse — Mac Resource Monitor</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%231a1f2d'/%3E%3Cstop offset='100%25' stop-color='%230c0f16'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='2' y='2' width='60' height='60' rx='15' fill='url(%23bg)' stroke='%232c3446' stroke-width='1.5'/%3E%3Cpath d='M11 32h11l5-15 5 28 5-20 4 9h12' fill='none' stroke='%23ff9f43' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root {
     color-scheme: dark;
@@ -42,15 +43,19 @@
 
   /* ---------- header ---------- */
   header {
-    display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
     padding: 10px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   }
-  .logo { font-size: 15px; font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
-  .logo .ver { color: var(--dim); font-size: 11px; font-weight: 600; }
-  .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cpu); box-shadow: 0 0 8px var(--cpu); }
-  .machine { color: var(--dim); font-size: 12.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .logo { font-size: 15px; font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+  .logo .logo-mark { width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; }
+  .logo .ver {
+    color: var(--dim); font-size: 10.5px; font-weight: 600;
+    background: var(--panel2); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 6px; font-variant-numeric: tabular-nums;
+  }
+  .machine { color: var(--dim); font-size: 12.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .machine b { color: var(--text); font-weight: 600; }
-  .hmeta { margin-left: auto; display: flex; align-items: center; gap: 16px; color: var(--dim); font-size: 12px; }
+  .hmeta { margin-left: auto; display: flex; align-items: center; gap: 16px; color: var(--dim); font-size: 12px; flex-shrink: 0; white-space: nowrap; }
   .hmeta b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .hmeta .batt-charging { color: var(--net); }
   .hdr-btn {
@@ -63,12 +68,35 @@
   .hdr-btn svg { flex-shrink: 0; opacity: .85; }
 
   /* ---------- stat cards ---------- */
-  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .cards { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .88fr) minmax(0, .92fr); gap: 12px; }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-height: 112px;
+    padding: 12px 13px; display: flex; flex-direction: column; gap: 6px; min-height: 112px; min-width: 0;
+    position: relative; overflow: hidden; transition: border-color .18s ease, box-shadow .18s ease;
   }
+  .card::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 1px; opacity: .55; pointer-events: none;
+  }
+  .card.cpu::before { background: linear-gradient(90deg, transparent, var(--cpu), transparent); }
+  .card.mem::before { background: linear-gradient(90deg, transparent, var(--mem), transparent); }
+  .card.net::before { background: linear-gradient(90deg, transparent, var(--net), transparent); }
+  .card.disk::before { background: linear-gradient(90deg, transparent, var(--disk), transparent); }
+  .card.gpu::before { background: linear-gradient(90deg, transparent, var(--gpu), transparent); }
+  .card:hover { border-color: #2d364a; }
   .card .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 16px; }
+  .card.mem .top { align-items: center; }
+  .card .big-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+  .mp-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 9.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+    padding: 1.5px 6px; border-radius: 99px; line-height: 1.25; white-space: nowrap; flex-shrink: 0;
+    background: rgba(139,148,167,.12); color: var(--dim);
+  }
+  .mp-badge[hidden] { display: none; }
+  .mp-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .mp-badge.ok { background: rgba(45,212,167,.13); color: var(--net); }
+  .mp-badge.warn { background: rgba(255,159,67,.16); color: var(--cpu); }
+  .mp-badge.crit { background: rgba(255,107,107,.18); color: var(--wired); }
   .card .label {
     color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
     height: 16px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0; line-height: 1;
@@ -78,7 +106,7 @@
     color: var(--dim); font-size: 11.5px; line-height: 16px; display: flex; align-items: baseline; justify-content: flex-end;
     gap: 2px 9px; flex-wrap: wrap; text-align: right; font-variant-numeric: tabular-nums; min-width: 0;
   }
-  .card .sub > span { white-space: nowrap; }
+  .card .sub > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .card .sub b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .card canvas.spark { width: 100%; height: 36px; margin-top: auto; }
   .card.cpu .big, .card.cpu .label { color: var(--cpu); }
@@ -93,11 +121,11 @@
   .seg.apps { background: var(--mem); } .seg.wired { background: var(--wired); }
   .seg.comp { background: var(--comp); } .seg.cache { background: var(--cache); }
   .memlegend {
-    display: grid; grid-template-columns: max-content max-content; justify-content: space-between;
-    gap: 3px 8px; font-size: 11px; line-height: 1.35; color: var(--dim);
+    display: grid; grid-template-columns: minmax(0, max-content) minmax(0, max-content); justify-content: space-between;
+    gap: 3px 6px; font-size: 10.5px; line-height: 1.35; color: var(--dim);
     font-variant-numeric: tabular-nums; margin-top: 2px;
   }
-  .memlegend .ml { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .memlegend .ml { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; min-width: 0; overflow: hidden; }
   .memlegend .ml.clickable { cursor: pointer; transition: color .15s; }
   .memlegend .ml.clickable:hover { color: var(--text); }
   .memlegend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
@@ -107,15 +135,36 @@
   .toolbar { display: flex; align-items: center; gap: 12px; }
   .toolbar input {
     flex: 0 1 320px; background: var(--panel); border: 1px solid var(--border); color: var(--text);
-    border-radius: 9px; padding: 8px 12px; font-size: 13px; outline: none;
+    border-radius: 9px; padding: 7px 12px; font-size: 13px; outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
-  .toolbar input:focus { border-color: #3a4560; }
+  .toolbar input:focus { border-color: #3a4560; box-shadow: 0 0 0 2px rgba(77,159,255,.15); }
   .toolbar .hint { color: var(--faint); font-size: 12px; }
-  .toolbar .live { margin-left: auto; color: var(--faint); font-size: 11.5px; display: flex; align-items: center; gap: 6px; }
-  .toolbar .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--net); }
-  .toolbar .live.starting .dot { background: var(--cpu); animation: dot-pulse 1.2s ease-in-out infinite; }
-  .toolbar .live.connecting .dot { background: var(--cpu); }
-  .toolbar .live.off .dot { background: var(--danger); }
+  .tb-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--panel); color: var(--dim); border: 1px solid var(--border);
+    border-radius: 9px; padding: 6px 11px; font-size: 12px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .tb-btn:hover, .tb-btn.on { color: var(--text); border-color: #3a4560; background: var(--panel2); }
+  .tb-cnt {
+    font-size: 10.5px; font-weight: 700; color: var(--text);
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 99px; padding: 0 6px; line-height: 1.5; font-variant-numeric: tabular-nums;
+  }
+  .tb-btn:hover .tb-cnt, .tb-btn.on .tb-cnt { background: #12151d; }
+  .tb-btn.bl-on { border-color: rgba(255, 95, 87, .42); color: var(--text); }
+  .tb-btn.bl-on .tb-cnt { background: rgba(255, 95, 87, .18); border-color: rgba(255, 95, 87, .35); color: var(--danger); }
+  .toolbar .live {
+    margin-left: auto; color: var(--dim); font-size: 11px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: 3px 10px;
+  }
+  .toolbar .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--net); box-shadow: 0 0 6px var(--net); }
+  .toolbar .live.starting .dot { background: var(--cpu); box-shadow: 0 0 6px var(--cpu); animation: dot-pulse 1.2s ease-in-out infinite; }
+  .toolbar .live.connecting .dot { background: var(--cpu); box-shadow: none; }
+  .toolbar .live.off .dot { background: var(--danger); box-shadow: none; }
 
   /* ---------- connecting skeleton ---------- */
   @keyframes dot-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
@@ -151,6 +200,7 @@
   @media (prefers-reduced-motion: reduce) {
     .skel-shimmer, .skel-row .skel-box, .skel-row .skel-icon, .membar.is-skel,
     .toolbar .live.starting .dot, .row .icon.skel-icon-ph, canvas.spark.is-skel { animation: none !important; }
+    #drawer, #scrim, #settings-scrim, .s-modal, #bg-scrim, .bg-modal, #bl-scrim, .bar .fill { transition: none !important; }
   }
 
   /* ---------- panels ---------- */
@@ -161,10 +211,22 @@
   }
   .panel h2 {
     font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim);
-    padding: 11px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px; min-height: 40px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;
   }
-  .panel h2 .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .panel h2 .swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
   .panel h2 .note { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--faint); font-size: 11px; }
+  .pseg {
+    display: inline-flex; align-items: center; gap: 2px;
+    background: #0e1118; border: 1px solid var(--border); border-radius: 7px; padding: 2px;
+    margin-left: 2px; text-transform: none; letter-spacing: 0;
+  }
+  .pseg button {
+    background: none; border: 1px solid transparent; color: var(--dim);
+    border-radius: 5px; padding: 2px 8px; font-size: 10.5px; font-weight: 600;
+    cursor: pointer; line-height: 1.25; transition: color .14s, background .14s, border-color .14s;
+  }
+  .pseg button:hover { color: var(--text); }
+  .pseg button.on { background: #1d2332; color: var(--text); border-color: #323c52; }
   .rows { flex: 1; overflow-y: auto; min-height: 0; }
   .rows::-webkit-scrollbar { width: 9px; }
   .rows::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
@@ -172,10 +234,10 @@
   .row {
     display: grid; grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 68px 74px;
     gap: 10px; align-items: center; padding: 7px 14px; cursor: pointer;
-    border-bottom: 1px solid #1a1f2b;
+    border-bottom: 1px solid #1a1f2b; transition: background .12s ease;
   }
   .row:hover { background: var(--panel2); }
-  .row.active { background: var(--panel2); box-shadow: inset 2px 0 0 var(--cpu); }
+  .row.active { background: rgba(255,159,67,.06); box-shadow: inset 3px 0 0 var(--cpu); }
   .row.closing { opacity: .6; }
   .row .icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: #1d2330; transition: opacity .15s ease; }
   .row .icon.loading { opacity: .25; }
@@ -187,9 +249,10 @@
   .badge.app { background: rgba(77,159,255,.15); color: var(--mem); }
   .badge.system { background: rgba(139,148,167,.15); color: var(--dim); }
   .badge.other { background: rgba(176,124,255,.15); color: var(--disk); }
+  .badge.awake { background: rgba(255,159,67,.16); color: var(--cpu); border: 1px solid rgba(255,159,67,.28); }
   .badge.closing { background: rgba(255,159,67,.15); color: var(--cpu); }
   .bar { height: 8px; background: #1c2230; border-radius: 4px; overflow: hidden; }
-  .bar .fill { height: 100%; border-radius: 4px; min-width: 1px; }
+  .bar .fill { height: 100%; border-radius: 4px; min-width: 1px; transition: width .32s cubic-bezier(.25,.8,.25,1); }
   .row .val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12.5px; }
   .row canvas.spark { width: 74px; height: 24px; }
   .showall {
@@ -234,64 +297,75 @@
   .mempop .mp-status.good { color: var(--cache); }
   .mempop .mp-status.bad { color: var(--danger); }
   .mempop .mp-tip { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1f2b; font-size: 11px; color: var(--faint); }
+  .mempop .mp-summary { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; margin-bottom: 6px; border-top: 1px solid var(--border) !important; }
+  .mempop .mp-sum-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 5px; }
+  .mempop .mp-sum-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+  .mempop .mp-sum-lbl { color: var(--dim); font-weight: 600; }
+  .mempop .mp-sum-item b { color: var(--text); font-variant-numeric: tabular-nums; }
 
   /* ---------- settings modal ---------- */
-  #menu-rows { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
-  #menu-rows .mr-row { display: flex; align-items: center; gap: 10px; cursor: grab; border-radius: 7px; }
-  #menu-rows .mr-row:active { cursor: grabbing; }
-  #menu-rows .mr-row.dragging { opacity: 0.45; }
-  #menu-rows .mr-grip { width: 10px; height: 14px; fill: var(--dim); flex: none; }
-  #menu-rows .mr-ctl { display: inline-flex; align-items: center; gap: 6px; flex: none; }
-  #menu-rows .mr-ctl.dis { opacity: 0.4; }
-  #menu-rows .mr-ctl-word { font-size: 11px; color: var(--dim); width: 28px; flex: none; }
-  button.sw:disabled { cursor: not-allowed; opacity: 0.35; }
-  #menu-rows .mr-name { flex: 1; font-size: 12.5px; color: var(--fg); }
-  #menu-rows .mr-name.dim { color: var(--dim); }
-  #menu-rows .mr-btn {
-    border: 1px solid var(--line); background: transparent; color: var(--dim);
-    width: 22px; height: 20px; border-radius: 5px; cursor: pointer;
-    font-size: 11px; line-height: 1; padding: 0;
-  }
-  #menu-rows .mr-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--dim); }
-  #menu-rows .mr-btn:disabled { opacity: 0.3; cursor: default; }
   #settings-scrim {
-    position: fixed; inset: 0; background: rgba(6, 8, 12, .72);
-    display: none; align-items: center; justify-content: center; padding: 20px; z-index: 160;
+    position: fixed; inset: 0; background: rgba(6, 8, 12, .74);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 160;
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity .2s ease, visibility 0s linear .2s;
   }
-  #settings-scrim.on { display: flex; }
+  #settings-scrim.on {
+    opacity: 1; visibility: visible; pointer-events: auto;
+    transition: opacity .2s ease, visibility 0s;
+  }
   .s-modal {
-    width: 100%; max-width: 472px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; box-shadow: 0 20px 54px rgba(0,0,0,.6); overflow: hidden;
-    /* short windows: scroll instead of clipping — the status-rows card must stay
-       reachable (a fixed, centered, overflow:hidden modal gets cut off-screen) */
-    max-height: calc(100vh - 40px); overflow-y: auto;
+    width: 100%; max-width: 520px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,.68); overflow: hidden;
+    max-height: calc(100vh - 36px); display: flex; flex-direction: column;
+    opacity: 0; transform: scale(.96) translateY(8px);
+    transition: transform .24s cubic-bezier(.16,1,.3,1), opacity .18s ease;
+  }
+  #settings-scrim.on .s-modal {
+    opacity: 1; transform: scale(1) translateY(0);
   }
   .s-head {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    padding: 15px 18px 13px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,.02) 0%, rgba(255,255,255,0) 100%);
   }
+  .s-head-left { display: flex; align-items: center; gap: 11px; }
+  .s-head-icon { width: 30px; height: 30px; flex-shrink: 0; border-radius: 7px; }
   .s-head h2 { font-size: 14.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
   .s-head .s-kbd {
     font-size: 10px; font-weight: 600; color: var(--faint); background: var(--panel2);
     border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }
-  .s-head .s-sub { color: var(--dim); font-size: 11.5px; margin-top: 2px; }
-  .s-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .s-head .s-sub { color: var(--dim); font-size: 11.5px; margin-top: 1px; }
+  .s-body {
+    padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 12px;
+    overflow-y: auto; flex: 1;
+  }
+  .s-sec-lbl {
+    font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+    color: var(--faint); padding: 0 2px; margin-bottom: -6px;
+  }
   .s-card {
-    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
     padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
   }
-  /* author `display:flex` above would override the UA [hidden] rule — hide for real */
   .s-card[hidden] { display: none; }
-  .s-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .s-group {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden;
+  }
+  .s-item { padding: 11px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .s-item + .s-item { border-top: 1px solid rgba(35, 42, 56, .8); }
+  .s-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
   .s-row[hidden] { display: none; }
   .s-info { flex: 1; min-width: 0; }
   .s-title {
-    font-size: 13px; font-weight: 600; color: var(--text);
+    font-size: 12.5px; font-weight: 600; color: var(--text);
     display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
   }
-  .s-desc { color: var(--dim); font-size: 11.5px; line-height: 1.45; margin-top: 3px; }
+  .s-desc { color: var(--dim); font-size: 11px; line-height: 1.4; margin-top: 2px; }
   .s-pill {
     display: inline-flex; align-items: center; gap: 5px;
     font-size: 10px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px;
@@ -306,12 +380,12 @@
   .s-err[hidden] { display: none; }
   /* pill toggle switch */
   button.sw {
-    position: relative; width: 38px; height: 22px; border-radius: 99px; flex-shrink: 0;
-    background: #262e3f; border: 1px solid #333d52; cursor: pointer; padding: 0;
-    transition: background .16s ease, border-color .16s ease; margin-top: 1px;
+    position: relative; width: 36px; height: 20px; border-radius: 99px; flex-shrink: 0;
+    background: #232a3a; border: 1px solid #323c52; cursor: pointer; padding: 0;
+    transition: background .16s ease, border-color .16s ease;
   }
   button.sw .knob {
-    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
     background: #c5cddb; box-shadow: 0 1px 3px rgba(0,0,0,.45);
     transition: transform .16s cubic-bezier(.2,.85,.32,1.1), background .16s ease;
   }
@@ -319,13 +393,90 @@
   button.sw[aria-checked="true"] .knob { transform: translateX(16px); background: var(--net); }
   button.sw:hover { border-color: #495673; }
   button.sw[aria-checked="true"]:hover { border-color: #4ce3b8; }
-  /* Updates-card check progress: a 3px track under the row. The slot collapses
-     to zero when the bar is unused (`.off`) so the card carries no dead space —
-     it expands and lights when a check runs, and folds back in with the fade.
-     The fill ramps to ~92% and holds until the real result lands, then completes
-     and fades. In the error state it stays lit (orange) as the hint. */
+  button.sw:disabled { cursor: not-allowed; opacity: 0.35; }
+
+  /* Live menu bar preview inside Settings (mirrors StatusController.renderBars) */
+  .mb-preview-wrap {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: #0b0d12; border: 1px solid var(--border); border-radius: 9px;
+    padding: 7px 11px; margin-top: 2px;
+  }
+  .mb-preview-lbl { font-size: 10px; font-weight: 600; color: var(--faint); letter-spacing: .4px; text-transform: uppercase; flex-shrink: 0; }
+  .mb-preview-bar {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px; padding: 2px 6px; height: 26px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums;
+  }
+  .mb-empty-p {
+    width: 18px; text-align: center; font-size: 11px; font-weight: 700; color: rgba(255,255,255,.9);
+  }
+  .mb-mod {
+    display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 2px;
+  }
+  .mb-letters {
+    display: flex; flex-direction: column; justify-content: space-between; align-items: center;
+    width: 7px; height: 18px; font-size: 6px; line-height: 6px; font-weight: 600;
+    color: rgba(255,255,255,.9); user-select: none;
+  }
+  .mb-vbar {
+    position: relative; width: 9px; height: 18px; border-radius: 2px;
+    border: 1px solid rgba(255,255,255,.3); overflow: hidden;
+  }
+  .mb-vbar-fill {
+    position: absolute; left: 0; right: 0; bottom: 0; border-radius: 1.5px;
+  }
+  .mb-net {
+    display: flex; flex-direction: column; justify-content: space-between;
+    height: 18px; min-width: 44px; padding-left: 2px;
+  }
+  .mb-net-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 3px;
+    font-size: 8.5px; line-height: 9px; font-weight: 600; color: rgba(255,255,255,.95);
+  }
+  .mb-net-arr { color: #bf59f2; font-size: 8px; line-height: 8px; }
+
+  /* Status bar & menu rows table */
+  .mr-head {
+    display: grid; grid-template-columns: 1fr 48px 48px 46px; align-items: center; gap: 8px;
+    padding: 4px 8px 2px; font-size: 9.5px; font-weight: 700; letter-spacing: .6px;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .mr-head span:not(:first-child) { text-align: center; }
+  #menu-rows { display: flex; flex-direction: column; gap: 3px; }
+  #menu-rows .mr-row {
+    display: grid; grid-template-columns: 1fr 48px 48px 46px; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 8px; cursor: grab;
+    background: rgba(11, 13, 18, .42); border: 1px solid transparent;
+    transition: background .12s, border-color .12s;
+  }
+  #menu-rows .mr-row:hover { background: rgba(11, 13, 18, .78); border-color: var(--border); }
+  #menu-rows .mr-row:active { cursor: grabbing; }
+  #menu-rows .mr-row.dragging { opacity: 0.4; }
+  .mr-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  #menu-rows .mr-grip { width: 10px; height: 14px; fill: var(--faint); flex: none; transition: fill .12s; }
+  #menu-rows .mr-row:hover .mr-grip { fill: var(--dim); }
+  .mr-color { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  #menu-rows .mr-name { font-size: 12.5px; font-weight: 500; color: var(--text); }
+  #menu-rows .mr-name.dim { color: var(--dim); }
+  .mr-tag {
+    font-size: 9.5px; color: var(--faint); background: rgba(139,148,167,.1);
+    padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  }
+  .mr-cell { display: flex; align-items: center; justify-content: center; }
+  .mr-dash { font-size: 11px; color: var(--faint); user-select: none; }
+  .mr-ord { display: flex; align-items: center; justify-content: center; gap: 3px; }
+  #menu-rows .mr-btn {
+    border: 1px solid var(--border); background: var(--panel); color: var(--dim);
+    width: 21px; height: 20px; border-radius: 5px; cursor: pointer;
+    font-size: 10.5px; line-height: 1; padding: 0; transition: color .12s, border-color .12s;
+  }
+  #menu-rows .mr-btn:hover:not(:disabled) { color: var(--text); border-color: #3a4560; }
+  #menu-rows .mr-btn:disabled { opacity: 0.25; cursor: default; }
+
+  /* Updates-card check progress: a 3px track under the row. */
   .s-bar { height: 3px; border-radius: 2px; background: var(--free); overflow: hidden; opacity: 0; transition: opacity .45s, height .3s ease, margin .3s ease; }
-  .s-bar.off { height: 0; margin-bottom: -8px; }   /* -8px cancels the card's row gap, so an idle card is exactly row + padding */
+  .s-bar.off { height: 0; margin-bottom: -8px; }
   .s-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--net); transition: width 1.1s cubic-bezier(.25,.7,.35,1); }
   .s-bar.err .s-bar-fill { background: var(--cpu); }
   .s-bar.slide .s-bar-fill { width: 45%; animation: sbar-slide 1.3s ease-in-out infinite alternate; }
@@ -333,15 +484,13 @@
   .up-ok { color: var(--net); font-weight: 600; }
   .up-err { color: var(--cpu); font-weight: 600; }
   .s-act {
-    background: none; border: 1px solid var(--border); color: var(--dim);
-    border-radius: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
-    cursor: pointer; transition: color .14s, background .14s, border-color .14s;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 6px 11px; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: color .14s, background .14s, border-color .14s; white-space: nowrap;
   }
-  .s-act:hover { color: var(--text); border-color: #2f384c; }
-  .s-act.accent { color: var(--net); border-color: rgba(45,212,167,.4); }
-  .s-act.accent:hover { background: rgba(45,212,167,.1); }
-  /* Disabled (a check is in flight): muted + desaturated. Declared last and with
-     extra specificity so the hover/accent rules above can't re-lit it. */
+  .s-act:hover { border-color: #3a4560; background: #1c2230; }
+  .s-act.accent { background: var(--cpu); color: #0b0d12; border-color: var(--cpu); }
+  .s-act.accent:hover { background: #ffae5c; border-color: #ffae5c; }
   button.s-act:disabled,
   button.s-act:disabled:hover,
   button.s-act.accent:disabled:hover {
@@ -350,13 +499,13 @@
   }
   /* update notification card */
   .s-update-card {
-    background: linear-gradient(135deg, rgba(45,212,167,.18) 0%, rgba(45,212,167,.1) 100%);
-    border: 1px solid rgba(45,212,167,.4);
+    background: linear-gradient(135deg, rgba(255,159,67,.14) 0%, rgba(45,212,167,.08) 100%);
+    border: 1px solid rgba(255,159,67,.38);
   }
   /* segmented control */
   .s-seg {
     display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
-    background: #10131b; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
+    background: #0e1118; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
   }
   .s-seg button {
     background: none; border: 1px solid transparent; color: var(--dim);
@@ -365,62 +514,166 @@
   }
   .s-seg button:hover { color: var(--text); }
   .s-seg button.on {
-    background: var(--panel2); color: var(--text); border-color: #2f384c;
+    background: #1d2332; color: var(--text); border-color: #323c52;
     box-shadow: 0 1px 3px rgba(0,0,0,.35);
   }
   .s-foot {
-    padding: 10px 18px 12px; border-top: 1px solid var(--border);
+    padding: 9px 18px 11px; border-top: 1px solid var(--border); flex-shrink: 0;
     display: flex; align-items: center; justify-content: space-between;
-    color: var(--faint); font-size: 11px;
+    color: var(--faint); font-size: 11px; background: rgba(11,13,18,.35);
   }
   .s-foot code { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--dim); font-size: 10.5px; }
 
   /* ---------- drawer ---------- */
-  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; z-index: 40; }
-  #scrim.on { display: block; }
+  #scrim {
+    position: fixed; inset: 0; background: rgba(6, 8, 12, .56);
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    z-index: 40; opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity .24s ease, visibility 0s linear .24s;
+  }
+  #scrim.on {
+    opacity: 1; visibility: visible; pointer-events: auto;
+    transition: opacity .24s ease, visibility 0s;
+  }
   #drawer {
     position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 50;
     background: var(--panel); border-left: 1px solid var(--border);
-    display: none; flex-direction: column;
+    box-shadow: -18px 0 54px rgba(0,0,0,.58);
+    display: flex; flex-direction: column;
+    transform: translateX(100%); visibility: hidden;
+    transition: transform .28s cubic-bezier(.16,1,.3,1), visibility 0s linear .28s;
   }
-  #drawer.on { display: flex; }
-  .dhead { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
-  .dhead .t1 { display: flex; align-items: center; gap: 10px; }
-  .dhead .icon { width: 34px; height: 34px; border-radius: 8px; object-fit: contain; background: #1d2330; }
+  #drawer.on {
+    transform: translateX(0); visibility: visible;
+    transition: transform .28s cubic-bezier(.16,1,.3,1), visibility 0s;
+  }
+  .dhead {
+    padding: 16px 18px 14px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255,255,255,.025) 0%, rgba(255,255,255,0) 100%);
+  }
+  .dhead .t1 { display: flex; align-items: center; gap: 11px; }
+  .dhead .icon {
+    width: 38px; height: 38px; border-radius: 9px; object-fit: contain;
+    background: #1d2330; border: 1px solid var(--border);
+  }
   .dhead .icon.placeholder { display: flex; align-items: center; justify-content: center; font-size: 17px; color: var(--faint); }
-  .dhead h1 { font-size: 16px; font-weight: 700; }
+  .dhead h1 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .dhead .path { color: var(--faint); font-size: 11px; margin-top: 3px; word-break: break-all; }
-  .dhead .stats { display: flex; gap: 18px; margin-top: 12px; }
-  .dhead .stats div { color: var(--dim); font-size: 11.5px; }
-  .dhead .stats b { display: block; color: var(--text); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .dactions { display: flex; gap: 8px; margin-top: 12px; }
+  .dhead .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 13px; }
+  .dhead .stat-tile {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 7px 10px; min-width: 0;
+  }
+  .dhead .stat-tile .sl { color: var(--dim); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  .dhead .stat-tile b {
+    display: block; color: var(--text); font-size: 14.5px; font-weight: 700;
+    font-variant-numeric: tabular-nums; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .d-energy-line {
+    margin-top: 8px; padding: 5px 9px; border-radius: 7px;
+    background: rgba(52,199,89,.07); border: 1px solid rgba(52,199,89,.2);
+    color: var(--dim); font-size: 11px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .d-energy-line b { color: var(--text); font-weight: 600; }
+  .dactions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   button.act {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+    border-radius: 8px; padding: 6px 12px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+    transition: border-color .14s ease, background .14s ease, color .14s ease;
   }
-  button.act:hover { border-color: #3a4560; }
-  button.act.danger { color: var(--danger); }
-  button.act.danger:hover { border-color: var(--danger); }
-  .dclose { margin-left: auto; background: none; border: none; color: var(--dim); font-size: 18px; cursor: pointer; line-height: 1; }
-  .dclose:hover { color: var(--text); }
+  button.act:hover { border-color: #3a4560; background: #1d2332; }
+  button.act.danger { color: var(--danger); border-color: rgba(255,95,87,.28); background: rgba(255,95,87,.07); }
+  button.act.danger:hover { border-color: var(--danger); background: rgba(255,95,87,.15); }
+  .dclose {
+    margin-left: auto; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--dim); font-size: 14px; width: 28px; height: 28px; border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; line-height: 1; flex-shrink: 0;
+    transition: color .14s ease, border-color .14s ease, background .14s ease;
+  }
+  .dclose:hover { color: var(--text); border-color: #3a4560; background: #1d2332; }
+  .dsec-bar {
+    padding: 7px 18px; font-size: 10px; font-weight: 700; letter-spacing: .7px;
+    text-transform: uppercase; color: var(--faint);
+    background: rgba(11,13,18,.42); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
 
-  .dtable { flex: 1; overflow-y: auto; min-height: 0; }
-  .dtable::-webkit-scrollbar { width: 9px; }
-  .dtable::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
-  .prow { padding: 9px 18px; border-bottom: 1px solid #1a1f2b; }
+  .dscroll { flex: 1; overflow-y: auto; min-height: 0; }
+  .dscroll::-webkit-scrollbar { width: 9px; }
+  .dscroll::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
+  .dextras { display: flex; flex-direction: column; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--border); background: rgba(11,13,18,.22); }
+  .dextras:empty { display: none; }
+  .dcard {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 9px 11px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .dcard[hidden] { display: none; }
+  .dcard-h {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--dim);
+  }
+  .dcard-cnt { font-size: 10.5px; font-weight: 600; color: var(--faint); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  .dcard-list { display: flex; flex-direction: column; gap: 5px; max-height: 180px; overflow-y: auto; }
+  .dcard-list::-webkit-scrollbar { width: 6px; }
+  .dcard-list::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 4px; }
+  .dcard-empty { color: var(--faint); font-size: 11.5px; }
+  .d-assert-row { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; padding: 4px 0; border-top: 1px solid rgba(35,42,56,.6); }
+  .d-assert-row:first-child { border-top: none; padding-top: 0; }
+  .d-assert-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .d-assert-type {
+    font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px;
+    background: rgba(255,159,67,.15); color: var(--cpu);
+  }
+  .d-assert-meta { color: var(--faint); font-size: 10.5px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .d-assert-reason { color: var(--dim); font-size: 11px; word-break: break-word; }
+  .d-bg-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 3px 0; border-top: 1px solid rgba(35,42,56,.6); }
+  .d-bg-row:first-child { border-top: none; padding-top: 0; }
+  .d-bg-info { min-width: 0; flex: 1; }
+  .d-bg-lbl { font-size: 12px; font-weight: 600; color: var(--text); word-break: break-all; }
+  .d-bg-flags { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 3px; }
+  .d-net-row {
+    display: flex; align-items: center; gap: 7px; font-size: 11px; padding: 3px 0;
+    border-top: 1px solid rgba(35,42,56,.5); font-variant-numeric: tabular-nums;
+  }
+  .d-net-row:first-child { border-top: none; padding-top: 0; }
+  .d-net-st {
+    font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; flex-shrink: 0;
+    background: rgba(139,148,167,.14); color: var(--dim); text-transform: uppercase;
+  }
+  .d-net-st.listen { background: rgba(45,212,167,.15); color: var(--net); }
+  .d-net-st.est { background: rgba(77,159,255,.15); color: var(--mem); }
+  .d-net-proto { color: var(--faint); font-size: 10px; font-weight: 700; flex-shrink: 0; }
+  .d-net-addr {
+    color: var(--text); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px;
+    flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .d-net-pid { color: var(--faint); font-size: 10px; flex-shrink: 0; }
+  .dtable { min-height: 0; }
+  .prow {
+    padding: 10px 18px; border-bottom: 1px solid #1a1f2b;
+    transition: background .12s ease;
+  }
+  .prow:hover { background: rgba(255,255,255,.025); }
   .prow .l1 { display: flex; align-items: center; gap: 8px; }
   .prow .pname { font-weight: 600; font-size: 12.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .prow .role { color: var(--faint); font-size: 10.5px; background: #1d2330; padding: 1px 6px; border-radius: 4px; }
-  .prow .pvals { display: flex; gap: 14px; margin-top: 4px; color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .prow .role {
+    color: var(--dim); font-size: 10px; font-weight: 600;
+    background: #1d2330; border: 1px solid var(--border); padding: 1px 6px; border-radius: 5px;
+  }
+  .prow .pvals { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 5px; color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
   .prow .pvals b { color: var(--text); font-weight: 600; }
   .prow .pvals .cpu { color: var(--cpu); } .prow .pvals .mem { color: var(--mem); }
   .prow .cmd { color: var(--faint); font-size: 10.5px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .prow .desc { color: var(--dim); font-size: 11px; margin-top: 4px; font-style: italic; }
   .prow .kill {
-    background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
-    font-size: 10.5px; padding: 2px 8px; cursor: pointer; flex: none;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
+    font-size: 10.5px; font-weight: 600; padding: 2px 8px; cursor: pointer; flex: none;
+    transition: color .14s ease, border-color .14s ease, background .14s ease;
   }
-  .prow .kill:hover { color: var(--danger); border-color: var(--danger); }
+  .prow .kill:hover { color: var(--danger); border-color: var(--danger); background: rgba(255,95,87,.1); }
   .prow .kill.killed { color: var(--faint); border-color: var(--border); opacity: .5; }
 
   /* context menu (right-click dropdown) */
@@ -455,22 +708,150 @@
   }
   .ctx-menu .ci-label { flex: 1; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  @media (max-width: 1100px) {
-    .cards { grid-template-columns: repeat(2, 1fr); }
+  /* ---------- background / login items modal ---------- */
+  #bg-scrim, #bl-scrim {
+    position: fixed; inset: 0; background: rgba(6, 8, 12, .74);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 160;
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity .2s ease, visibility 0s linear .2s;
+  }
+  #bg-scrim.on, #bl-scrim.on {
+    opacity: 1; visibility: visible; pointer-events: auto;
+    transition: opacity .2s ease, visibility 0s;
+  }
+  .bg-modal {
+    width: 100%; max-width: 740px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,.68); overflow: hidden;
+    max-height: calc(100vh - 44px); display: flex; flex-direction: column;
+    opacity: 0; transform: scale(.96) translateY(8px);
+    transition: transform .24s cubic-bezier(.16,1,.3,1), opacity .18s ease;
+  }
+  #bg-scrim.on .bg-modal, #bl-scrim.on .bg-modal { opacity: 1; transform: scale(1) translateY(0); }
+  #bl-form { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; }
+  #bl-input {
+    flex: 1 1 260px; min-width: 180px; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12px; outline: none;
+  }
+  #bl-input:focus { border-color: #3a4560; box-shadow: 0 0 0 2px rgba(77,159,255,.15); }
+  #bl-sig {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 6px 8px; font-size: 11.5px; font-weight: 600; outline: none; cursor: pointer;
+  }
+  .bl-err {
+    padding: 7px 18px; font-size: 11.5px; color: var(--danger);
+    background: rgba(255, 95, 87, .08); border-bottom: 1px solid rgba(255, 95, 87, .25); flex-shrink: 0;
+  }
+  .bl-err[hidden] { display: none; }
+  #bl-list {
+    padding: 12px 18px; overflow-y: auto; flex: 1; min-height: 180px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #bl-list::-webkit-scrollbar { width: 9px; }
+  #bl-list::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
+  .bg-btn.danger { color: var(--danger); border-color: rgba(255, 95, 87, .3); }
+  .bg-btn.danger:hover { border-color: var(--danger); background: rgba(255, 95, 87, .12); }
+  .bg-controls {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    padding: 10px 18px; border-bottom: 1px solid var(--border); background: rgba(11,13,18,.35); flex-shrink: 0;
+  }
+  .bg-filters { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .bg-flt {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--dim);
+    border-radius: 99px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: color .14s, border-color .14s, background .14s;
+  }
+  .bg-flt:hover { color: var(--text); border-color: #3a4560; }
+  .bg-flt.on { background: #1d2332; color: var(--text); border-color: var(--mem); }
+  #bg-search {
+    flex: 1 1 190px; max-width: 260px; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 5px 10px; font-size: 12px; outline: none;
+  }
+  #bg-search:focus { border-color: #3a4560; box-shadow: 0 0 0 2px rgba(77,159,255,.15); }
+  #bg-list {
+    padding: 12px 18px; overflow-y: auto; flex: 1; min-height: 220px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #bg-list::-webkit-scrollbar { width: 9px; }
+  #bg-list::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
+  .bg-item {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .bg-item-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .bg-item-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; flex: 1; }
+  .bg-label { font-size: 12.5px; font-weight: 700; color: var(--text); word-break: break-all; }
+  .bg-pill {
+    font-size: 10px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px;
+    background: rgba(139,148,167,.12); color: var(--dim); white-space: nowrap;
+  }
+  .bg-pill.run { background: rgba(45,212,167,.14); color: var(--net); }
+  .bg-pill.load { background: rgba(77,159,255,.14); color: var(--mem); }
+  .bg-pill.dis { background: rgba(255,107,107,.14); color: var(--wired); }
+  .bg-pill.scope { background: rgba(176,124,255,.12); color: var(--disk); }
+  .bg-pill.flag { background: rgba(255,159,67,.13); color: var(--cpu); }
+  .bg-pill.tp { background: rgba(52,199,89,.13); color: var(--gpu); }
+  .bg-paths {
+    display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; color: var(--faint);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all;
+  }
+  .bg-paths span b { color: var(--dim); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; font-weight: 600; }
+  .bg-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .bg-btn {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: border-color .14s, background .14s;
+  }
+  .bg-btn:hover { border-color: #3a4560; background: #1d2332; }
+  .bg-btn.accent { color: var(--mem); border-color: rgba(77,159,255,.35); }
+  .bg-btn.accent:hover { border-color: var(--mem); background: rgba(77,159,255,.12); }
+
+  @media (max-width: 1180px) {
+    .toolbar { gap: 8px; }
+    .toolbar input { flex: 0 1 255px; min-width: 140px; }
+    .cards { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .card.cpu, .card.mem, .card.net { grid-column: span 2; }
+    .card.disk, .card.gpu { grid-column: span 3; }
+    .card { min-height: 102px; padding: 10px 12px; }
+    .row, .skel-row {
+      grid-template-columns: 26px minmax(96px, 1.15fr) minmax(44px, 1.1fr) 62px 58px;
+      gap: 8px; padding: 7px 11px;
+    }
+    .row .icon, .skel-icon { width: 24px; height: 24px; }
+    .row canvas.spark { width: 58px; }
+  }
+  @media (max-width: 900px) {
+    header { grid-template-columns: auto auto; gap: 8px 12px; }
+    .machine { grid-column: 1 / -1; grid-row: 2; text-align: left; }
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card.cpu, .card.mem, .card.net, .card.disk { grid-column: span 1; }
+    .card.gpu { grid-column: 1 / -1; }
+    .toolbar { flex-wrap: wrap; }
+    .toolbar input { flex: 1 1 200px; }
     .panels { grid-template-columns: 1fr; overflow-y: auto; }
+    .row, .skel-row { grid-template-columns: 30px minmax(120px, 1.15fr) 1.6fr 68px 74px; gap: 10px; padding: 7px 14px; }
+    .row .icon, .skel-icon { width: 26px; height: 26px; }
+    .row canvas.spark { width: 74px; }
     body { overflow: auto; }
-    #app { height: auto; }
+    #app { height: auto; min-height: 100vh; }
   }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="logo"><span class="dot"></span>Pulse <span class="ver" id="ver"></span></div>
+    <div class="logo">
+      <svg class="logo-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <defs><linearGradient id="lbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a1f2d"/><stop offset="100%" stop-color="#0c0f16"/></linearGradient></defs>
+        <rect x="1" y="1" width="62" height="62" rx="15" fill="url(#lbg)" stroke="#2c3446" stroke-width="1.5"/>
+        <path d="M12 32h10l5-14 5 26 5-18 4 8h11" fill="none" stroke="#ff9f43" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Pulse <span class="ver" id="ver"></span>
+    </div>
     <div class="machine" id="machine"><span class="skel-inline skel-shimmer" style="width:124px"></span> · <span class="skel-inline skel-shimmer" style="width:92px"></span> · <span class="skel-inline skel-shimmer" style="width:86px"></span></div>
     <div class="hmeta">
       <span>uptime <b id="h-uptime">—</b></span>
-      <span id="h-batt-wrap">battery <b id="h-batt">—</b></span>
+      <span id="h-batt-wrap"><span id="h-batt-lbl">battery</span> <b id="h-batt">—</b></span>
       <button class="hdr-btn" id="settings-btn" title="Settings (⌘,)" aria-label="Settings">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.3"/><path d="M8 1.6v1.5M8 12.9v1.5M3.48 3.48l1.06 1.06M11.46 11.46l1.06 1.06M1.6 8h1.5M12.9 8h1.5M3.48 12.52l1.06-1.06M11.46 4.54l1.06-1.06"/></svg>
         <span>Settings</span>
@@ -486,7 +867,7 @@
     </div>
     <div class="card mem">
       <div class="top"><span class="label">Memory<button class="infobtn" id="mem-info" title="What are wired / compressed / cache, and how do I free them?">i</button></span><span class="sub" id="mem-sub"><span class="skel-sub skel-shimmer"></span></span></div>
-      <div class="big" id="mem-big"><span class="skel-big skel-shimmer"></span></div>
+      <div class="big-row"><div class="big" id="mem-big"><span class="skel-big skel-shimmer"></span></div><span class="mp-badge" id="mem-pressure" title="macOS VM memory pressure" hidden></span></div>
       <div class="membar is-skel" id="membar"></div>
       <div class="memlegend" id="memlegend">
         <span class="ml is-skel"><i></i><span class="skel-chip skel-shimmer"></span></span>
@@ -514,13 +895,15 @@
 
   <section class="toolbar">
     <input id="search" type="search" placeholder="Search apps or processes… (⌘F)" autocomplete="off" spellcheck="false">
+    <button type="button" class="tb-btn" id="bg-items-btn" title="Audit macOS LaunchAgents &amp; third-party background items">Background Items <span class="tb-cnt" id="bg-cnt">—</span></button>
+    <button type="button" class="tb-btn" id="bl-btn" title="Auto-kill blacklist: automatically terminate matching processes when they appear">Blacklist <span class="tb-cnt" id="bl-cnt">0</span></button>
     <span class="hint" id="hint">connecting to local sampler…</span>
     <span class="live connecting" id="live"><span class="dot"></span><span id="live-text">connecting…</span></span>
   </section>
 
   <section class="panels">
     <div class="panel">
-      <h2><span class="swatch" style="background:var(--cpu)"></span>Top CPU <span class="note" id="note-cpu">share of all cores</span></h2>
+      <h2><span class="swatch" id="left-swatch" style="background:var(--cpu)"></span><span id="left-title">Top CPU</span><div class="pseg" role="group" aria-label="Left panel metric"><button type="button" class="on" id="cpu-mode-cpu">CPU</button><button type="button" id="cpu-mode-energy">Energy</button></div><span class="note" id="note-cpu">share of all cores</span></h2>
       <div class="rows" id="rows-cpu">
         <div class="skel-list" id="skel-cpu">
           <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:68%;margin-bottom:5px"></div><div class="skel-box" style="width:45%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
@@ -553,10 +936,31 @@
 <div id="scrim"></div>
 <aside id="drawer">
   <div class="dhead" id="dhead"></div>
-  <div class="dtable" id="dtable"></div>
+  <div class="dscroll" id="dscroll">
+    <div class="dextras" id="dextras">
+      <div class="dcard" id="d-assertions-box" hidden></div>
+      <div class="dcard" id="d-bg-box" hidden></div>
+      <div class="dcard" id="d-net-box"></div>
+    </div>
+    <div class="dsec-bar" id="dsec-bar"></div>
+    <div class="dtable" id="dtable"></div>
+  </div>
 </aside>
 <div class="mempop" id="mempop" hidden>
   <div class="mp-t">Your RAM, in plain terms</div>
+  <div class="mp-sec mp-summary" id="pop-pressure-sec">
+    <div class="mp-sum-row">
+      <div class="mp-sum-item">
+        <span class="mp-sum-lbl">Pressure</span>
+        <span class="mp-badge" id="pop-pressure">—</span>
+      </div>
+      <div class="mp-sum-item">
+        <span class="mp-sum-lbl">Swap</span>
+        <b id="pop-swap">—</b>
+      </div>
+    </div>
+    <p id="pop-pressure-desc">macOS balances active RAM, compression, and SSD swap automatically.</p>
+  </div>
   <div class="mp-sec">
     <div class="mp-h"><i style="background:var(--wired)"></i>Wired<b id="pop-wired"></b></div>
     <canvas id="pop-wired-spark"></canvas>
@@ -582,9 +986,16 @@
 <div id="settings-scrim" aria-hidden="true">
   <div class="s-modal" id="settings-modal" role="dialog" aria-labelledby="s-title">
     <div class="s-head">
-      <div>
-        <h2 id="s-title">Pulse Settings <span class="s-kbd">⌘,</span></h2>
-        <div class="s-sub">Background daemon, menu bar &amp; memory lifecycle</div>
+      <div class="s-head-left">
+        <svg class="s-head-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <defs><linearGradient id="shg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a1f2d"/><stop offset="100%" stop-color="#0c0f16"/></linearGradient></defs>
+          <rect x="1" y="1" width="62" height="62" rx="15" fill="url(#shg)" stroke="#2c3446" stroke-width="1.5"/>
+          <path d="M12 32h10l5-14 5 26 5-18 4 8h11" fill="none" stroke="#ff9f43" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <h2 id="s-title">Settings <span class="s-kbd">⌘,</span></h2>
+          <div class="s-sub">Daemon lifecycle, menu bar capsules &amp; updates</div>
+        </div>
       </div>
       <button class="dclose" id="settings-close" title="Close (Esc)">✕</button>
     </div>
@@ -593,68 +1004,137 @@
         <div class="s-row">
           <div class="s-info">
             <div class="s-title">
-              New update available <span class="s-pill active" id="st-update-badge">v…</span>
+              Update available <span class="s-pill busy" id="st-update-badge">v…</span>
             </div>
-            <div class="s-desc">You have <b id="st-current-ver">v</b>. A new version <b id="st-update-ver" class="up-ok">v…</b> is ready — install it any time.</div>
+            <div class="s-desc">You have <b id="st-current-ver">v</b> · <b id="st-update-ver" class="up-ok">v…</b> is ready to install.</div>
           </div>
-          <button class="s-act accent" id="st-update-btn" style="margin-top:2px">Update…</button>
+          <button class="s-act accent" id="st-update-btn">Update…</button>
         </div>
       </div>
+
+      <div class="s-sec-lbl">General</div>
+      <div class="s-group">
+        <div class="s-item">
+          <div class="s-row">
+            <div class="s-info">
+              <div class="s-title">
+                Start at login
+                <span class="s-pill" id="st-daemon-badge"><span class="pdot"></span><span id="st-daemon-text">Off</span></span>
+              </div>
+              <div class="s-desc">Keep metrics warm in the background via a macOS LaunchAgent.</div>
+              <div class="s-err" id="st-daemon-err" hidden></div>
+            </div>
+            <button class="sw" id="sw-login" role="switch" aria-checked="false" aria-label="Start at login"><span class="knob"></span></button>
+          </div>
+        </div>
+        <div class="s-item">
+          <div class="s-info">
+            <div class="s-title">When closing the window</div>
+          </div>
+          <div class="s-seg" id="seg-close" role="radiogroup" aria-label="When the window is closed">
+            <button type="button" data-val="background" class="on">Keep in Menu Bar</button>
+            <button type="button" data-val="quit">Quit Pulse</button>
+          </div>
+        </div>
+        <div class="s-item">
+          <div class="s-row">
+            <div class="s-info">
+              <div class="s-title">
+                Keep dashboard in memory
+                <span class="s-pill mem">Off saves ~120 MB</span>
+              </div>
+              <div class="s-desc">Release WebKit helpers on close and reload in &lt;0.5s when reopened.</div>
+            </div>
+            <button class="sw" id="sw-keepmem" role="switch" aria-checked="false" aria-label="Keep dashboard in memory when closed"><span class="knob"></span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="s-sec-lbl">Menu Bar &amp; Dropdown</div>
+      <div class="s-card">
+        <div class="mb-preview-wrap">
+          <span class="mb-preview-lbl">Bar Preview</span>
+          <div class="mb-preview-bar" id="mb-preview-bar" aria-live="polite"></div>
+        </div>
+        <div class="mr-head">
+          <span>Metric</span>
+          <span>Menu</span>
+          <span>Bar</span>
+          <span>Order</span>
+        </div>
+        <div id="menu-rows"></div>
+      </div>
+
+      <div class="s-sec-lbl">Updates</div>
       <div class="s-card" id="st-check-card">
         <div class="s-row">
           <div class="s-info">
-            <div class="s-title">Updates</div>
-            <div class="s-desc" id="st-check-desc" style="margin-top:6px"></div>
+            <div class="s-title">Pulse Updates</div>
+            <div class="s-desc" id="st-check-desc" style="margin-top:3px"></div>
           </div>
           <button class="s-act" id="st-check-btn">Check for Updates…</button>
         </div>
         <div class="s-bar off" id="st-check-bar"><div class="s-bar-fill" id="st-check-bar-fill"></div></div>
       </div>
-      <div class="s-card">
-        <div class="s-row">
-          <div class="s-info">
-            <div class="s-title">
-              Start at login
-              <span class="s-pill" id="st-daemon-badge"><span class="pdot"></span><span id="st-daemon-text">Off</span></span>
-            </div>
-            <div class="s-desc">Runs the sampler via a macOS LaunchAgent so history and metrics are already warm the instant you open Pulse.</div>
-            <div class="s-err" id="st-daemon-err" hidden></div>
-          </div>
-          <button class="sw" id="sw-login" role="switch" aria-checked="false" aria-label="Start at login"><span class="knob"></span></button>
-        </div>
-      </div>
-      <div class="s-card">
-        <div class="s-info">
-          <div class="s-title">When the window is closed</div>
-          <div class="s-desc">Keep Pulse active in the macOS menu bar with live CPU &amp; memory bars, or quit completely when closing the window.</div>
-        </div>
-        <div class="s-seg" id="seg-close" role="radiogroup" aria-label="When the window is closed">
-          <button type="button" data-val="background" class="on">Keep in Menu Bar</button>
-          <button type="button" data-val="quit">Quit Pulse</button>
-        </div>
-      </div>
-      <div class="s-card">
-        <div class="s-row">
-          <div class="s-info">
-            <div class="s-title">
-              Keep dashboard in memory
-              <span class="s-pill mem">Off saves ~120 MB</span>
-            </div>
-            <div class="s-desc">When off, closing the window releases WebKit rendering processes and reloads (&lt;0.5s) on reopen. Turn on to keep the page resident.</div>
-          </div>
-          <button class="sw" id="sw-keepmem" role="switch" aria-checked="false" aria-label="Keep dashboard in memory when closed"><span class="knob"></span></button>
-        </div>
-      </div>
-      <div class="s-card">
-        <div class="s-info">
-          <div class="s-title">Status bar &amp; menu</div>
-          <div class="s-desc">Which stats appear in the menu-bar dropdown and in the button itself — drag a row to reorder the menu. Capsules follow menu order; uptime is menu-only, and thermal always shows with CPU.</div>
-        </div>
-        <div id="menu-rows"></div>
-      </div>
     </div>
     <div class="s-foot">
       <span>Saved in <code>~/.pulse/settings.json</code></span>
+      <span>Esc to close</span>
+    </div>
+  </div>
+</div>
+<div id="bg-scrim" aria-hidden="true">
+  <div class="bg-modal" id="bg-modal" role="dialog" aria-labelledby="bg-title">
+    <div class="s-head">
+      <div class="s-head-left">
+        <div>
+          <h2 id="bg-title">Background &amp; Login Items</h2>
+          <div class="s-sub">LaunchAgents &amp; LaunchDaemons registered on this Mac</div>
+        </div>
+      </div>
+      <button class="dclose" id="bg-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="bg-controls">
+      <div class="bg-filters" id="bg-filters" role="group" aria-label="Filter background items">
+        <button type="button" class="bg-flt on" data-flt="all">All</button>
+        <button type="button" class="bg-flt" data-flt="running">Running</button>
+        <button type="button" class="bg-flt" data-flt="enabled">Enabled</button>
+        <button type="button" class="bg-flt" data-flt="third-party">Third-party</button>
+      </div>
+      <input type="search" id="bg-search" placeholder="Filter by label or path…" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="bg-list"><div class="empty">Loading background items…</div></div>
+    <div class="s-foot">
+      <span id="bg-foot-summary">—</span>
+      <span>Esc to close</span>
+    </div>
+  </div>
+</div>
+<div id="bl-scrim" aria-hidden="true">
+  <div class="bg-modal" id="bl-modal" role="dialog" aria-labelledby="bl-title">
+    <div class="s-head">
+      <div class="s-head-left">
+        <div>
+          <h2 id="bl-title">Process Blacklist <span class="s-kbd">Auto-Kill</span></h2>
+          <div class="s-sub">Processes matching these rules are automatically killed whenever they appear</div>
+        </div>
+      </div>
+      <button class="dclose" id="bl-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="bg-controls">
+      <form id="bl-form">
+        <input type="text" id="bl-input" placeholder="Process name, /path/to/bin, or .app bundle (e.g. Siri AI, assistantd)" autocomplete="off" spellcheck="false">
+        <select id="bl-sig" title="Signal sent when process appears">
+          <option value="KILL">SIGKILL (Force)</option>
+          <option value="TERM">SIGTERM (Quit)</option>
+        </select>
+        <button type="submit" class="bg-btn accent" id="bl-add-btn">Add Rule</button>
+      </form>
+    </div>
+    <div class="bl-err" id="bl-err" hidden></div>
+    <div id="bl-list"><div class="empty">No blacklisted processes yet.</div></div>
+    <div class="s-foot">
+      <span id="bl-foot-summary">Saved in <code>~/.pulse/blacklist.json</code> · enforced every tick</span>
       <span>Esc to close</span>
     </div>
   </div>
@@ -685,18 +1165,37 @@
 /* ================= state ================= */
 const S = {
   sys: null,
-  apps: new Map(),          // key → { data, cpuHist: [], memHist: [] }
+  apps: new Map(),          // key → { data, cpuHist: [], memHist: [], energyHist: [] }
   sysHist: { cpu: [], net: [], disk: [], gpu: [], wired: [], comp: [], cache: [] },
   search: '',
   version: null,         // snapshot's app version — the header and the Updates card both show it
   lastCheckAt: null,     // epoch ms of the last completed check (pushed by the app)
   lastFailedAt: null,    // epoch ms of the last failed check — the err state's “· tried <age>”
   showAll: { cpu: false, mem: false },
+  leftMode: 'cpu',       // 'cpu' | 'energy'
   drawerKey: null,
+  drawerNet: { key: null, pidKey: '', loading: false, error: null, connections: [], fetchedAt: 0 },
   closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
   closingTimers: new Map(), // key → timeout that clears the mark if the app ignores SIGTERM
   killedPids: new Map(),    // pid → { sig, t } so drawer ticks keep kill feedback & offer force-kill
 };
+let bgItemsCache = [];
+let bgItemsLoaded = false;
+let bgItemsLoading = false;
+let bgItemsError = null;
+let bgItemsInitFetched = false;
+let bgOpen = false;
+let bgFilter = 'all';
+let bgSearch = '';
+let blacklistCache = [];
+let blacklistLoaded = false;
+let blacklistInitFetched = false;
+let blOpen = false;
+let blRefreshTimer = null;
+let blError = '';
+let drawerNetTimer = null;
+let drawerNetRenderSig = '';
+let copyFeedbackUntil = 0;
 const HIST = 90;
 const TOP_N = 20;
 const $ = (s) => document.querySelector(s);
@@ -736,6 +1235,45 @@ function fmtDur(sec) {
 }
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function energyScore(a) {
+  if (!a) return 0;
+  const base = a.power != null ? a.power : a.cpu;
+  return (base || 0) + (a.wakeups || 0) * 0.05;
+}
+function parseMemPressure(mp) {
+  if (!mp) return null;
+  const raw = typeof mp === 'string' ? mp : (mp.level || mp.state || mp.status || '');
+  const l = String(raw).toLowerCase();
+  if (!l) return null;
+  if (l.startsWith('crit') || l === 'red' || l === '3' || l === '4') return { cls: 'crit', label: 'Critical', detail: typeof mp === 'object' ? mp : null };
+  if (l.startsWith('warn') || l === 'yellow' || l === '2') return { cls: 'warn', label: 'Warn', detail: typeof mp === 'object' ? mp : null };
+  if (l === 'normal' || l === 'ok' || l === 'green' || l === 'nominal' || l === '1') return { cls: 'ok', label: 'Normal', detail: typeof mp === 'object' ? mp : null };
+  return null;
+}
+async function revealPath(targetPath) {
+  if (!targetPath) return;
+  if (postNativeSetting({ action: 'revealInFinder', path: targetPath })) return;
+  if (!hasBackend()) return;
+  try {
+    await fetch(apiUrl('/api/reveal'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: targetPath }),
+    });
+  } catch { /* noop */ }
+}
+function copyText(text) {
+  let sentNative = false;
+  try {
+    sentNative = postNativeSetting({ action: 'copyText', text });
+  } catch { /* noop */ }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  } catch { /* noop */ }
+  return sentNative;
 }
 
 /* ================= sparklines ================= */
@@ -837,7 +1375,7 @@ function makeRow(panel, key) {
 function updateRow(panel, key, data, metric, total) {
   let r = rowEls.get(panel + ':' + key);
   if (!r) r = makeRow(panel, key);
-  const v = metric === 'cpu' ? data.cpu : data.mem;
+  const v = metric === 'energy' ? energyScore(data) : (metric === 'cpu' ? data.cpu : data.mem);
   // icon
   const iconUrl = data.icon ? apiUrl(data.icon) : '';
   if (iconUrl) {
@@ -880,17 +1418,40 @@ function updateRow(panel, key, data, metric, total) {
     if (r.icon.className !== cls) r.icon.className = cls;
     if (r.icon.textContent !== txt) r.icon.textContent = txt;
   }
-  // name + badge + sub
+  // name + badge + awake + sub
   const badge = { app: '<span class="badge app">app</span>', system: '<span class="badge system">system</span>', other: '<span class="badge other">user</span>' }[data.kind] || '';
+  const sleepAsserts = Array.isArray(data.assertions) ? data.assertions.filter((x) => x && x.preventsSleep) : [];
+  let awakeBadge = '';
+  if (sleepAsserts.length) {
+    const tip = sleepAsserts.map((x) => [x.type, x.reason || x.name].filter(Boolean).join(': ')).filter(Boolean).join(' · ') || 'Preventing Mac sleep';
+    awakeBadge = `<span class="badge awake" title="${esc(tip)}">awake</span>`;
+  }
   const closing = S.closing.has(key);
-  r.name.innerHTML = esc(data.name) + badge + (closing ? '<span class="badge closing">closing…</span>' : '');
+  r.name.innerHTML = esc(data.name) + badge + awakeBadge + (closing ? '<span class="badge closing">closing…</span>' : '');
   r.el.classList.toggle('closing', closing);
   r.sub.textContent = data.procs + (data.procs === 1 ? ' process' : ' processes') + (data.users.length ? ' · ' + data.users.join(', ') : '');
   // bar + value
   const share = total > 0 ? Math.min(100, (v / total) * 100) : 0;
   r.fill.style.width = Math.max(share, v > 0 ? 0.8 : 0) + '%';
-  r.fill.style.background = metric === 'cpu' ? 'var(--cpu)' : 'var(--mem)';
-  r.val.textContent = metric === 'cpu' ? fmtPct(v) : fmtBytes(v);
+  if (metric === 'energy') {
+    r.fill.style.background = 'linear-gradient(90deg, var(--cpu), var(--gpu))';
+    const pwr = data.power != null ? data.power : null;
+    const wk = data.wakeups || 0;
+    if (pwr != null && pwr > 0) {
+      r.val.textContent = (pwr >= 100 ? pwr.toFixed(0) : pwr.toFixed(1)) + ' pwr';
+    } else if (wk > 0) {
+      r.val.textContent = Math.round(wk) + '/s';
+    } else if (pwr === 0) {
+      r.val.textContent = '0.0 pwr';
+    } else {
+      r.val.textContent = (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' pwr';
+    }
+    r.val.title = wk > 0 ? `Energy score: ${v.toFixed(1)} · ${Math.round(wk)} idle wakeups/s` : '';
+  } else {
+    r.fill.style.background = metric === 'cpu' ? 'var(--cpu)' : 'var(--mem)';
+    r.val.textContent = metric === 'cpu' ? fmtPct(v) : fmtBytes(v);
+    r.val.title = '';
+  }
   return r;
 }
 
@@ -904,12 +1465,22 @@ function matchesSearch(data) {
 }
 
 function renderPanel(which) {
-  const metric = which; // 'cpu' | 'mem'
-  const total = which === 'cpu' ? 100 : (S.sys ? S.sys.memTotal : 1);
+  const metric = which === 'cpu' ? S.leftMode : 'mem'; // 'cpu' | 'energy' | 'mem'
   const container = $(which === 'cpu' ? '#rows-cpu' : '#rows-mem');
   const list = [...S.apps.values()].map((a) => a.data)
     .filter(matchesSearch)
-    .sort((a, b) => (b[metric] - a[metric]) || (b.mem - a.mem));
+    .sort((a, b) => {
+      if (metric === 'energy') {
+        const diff = energyScore(b) - energyScore(a);
+        return diff || (b.cpu - a.cpu) || (b.mem - a.mem);
+      }
+      return (b[metric] - a[metric]) || (b.mem - a.mem);
+    });
+  const total = metric === 'cpu'
+    ? 100
+    : metric === 'energy'
+      ? Math.max(25, list.length ? energyScore(list[0]) : 25)
+      : (S.sys ? S.sys.memTotal : 1);
 
   const visible = S.showAll[which] || S.search ? list : list.slice(0, TOP_N);
   const seen = new Set();
@@ -919,7 +1490,9 @@ function renderPanel(which) {
     if (r.el.parentNode !== container) container.appendChild(r.el);
     else r.el.style.display = '';
     const a = S.apps.get(d.key);
-    drawSpark(r.spark, metric === 'cpu' ? a.cpuHist : a.memHist, metric === 'cpu' ? '#ff9f43' : '#4d9fff');
+    const hist = metric === 'energy' ? (a.energyHist || a.cpuHist) : (metric === 'cpu' ? a.cpuHist : a.memHist);
+    const col = metric === 'energy' ? '#34c759' : (metric === 'cpu' ? '#ff9f43' : '#4d9fff');
+    drawSpark(r.spark, hist, col);
   }
   // hide this panel's rows that fell out of the visible set (keep DOM for reuse, release GPU canvas backing store)
   for (const r of rowEls.values()) {
@@ -958,6 +1531,37 @@ function renderMemPop() {
   if (!memPop || !S.sys) return;
   const s = S.sys;
   const d = s.memDetail || {};
+  const mp = parseMemPressure(s.memPressure);
+  const popPress = $('#pop-pressure');
+  if (popPress) {
+    if (mp) {
+      popPress.className = 'mp-badge ' + mp.cls;
+      popPress.textContent = mp.label;
+    } else {
+      popPress.className = 'mp-badge';
+      popPress.textContent = '—';
+    }
+  }
+  const popSwap = $('#pop-swap');
+  if (popSwap) {
+    const swapUsed = s.swap && s.swap.used != null ? s.swap.used : null;
+    popSwap.textContent = swapUsed != null ? fmtBytes(swapUsed) : '—';
+  }
+  const popDesc = $('#pop-pressure-desc');
+  if (popDesc) {
+    const swapNote = s.swap && s.swap.used >= 1024 * 1024
+      ? ` <b>${fmtBytes(s.swap.used)}</b> is currently paged to SSD swap.`
+      : ' Swap usage is minimal.';
+    if (mp && mp.cls === 'crit') {
+      popDesc.innerHTML = '<b>Critical pressure</b> — RAM and swap are under heavy contention. Quit memory hogs to restore speed.' + swapNote;
+    } else if (mp && mp.cls === 'warn') {
+      popDesc.innerHTML = '<b>Warning pressure</b> — RAM is tight; macOS is compressing more pages and leaning on SSD swap.' + swapNote;
+    } else if (mp && mp.cls === 'ok') {
+      popDesc.innerHTML = '<b>Normal pressure</b> — ample free or reclaimable RAM; apps are not stalling for pages.' + swapNote;
+    } else {
+      popDesc.innerHTML = 'macOS balances active RAM, compression, and SSD swap automatically.' + swapNote;
+    }
+  }
   $('#pop-wired').textContent = fmtBytes(s.mem.wired);
   $('#pop-comp').textContent = fmtBytes(s.mem.compressed);
   $('#pop-cache').textContent = fmtBytes(s.mem.cache);
@@ -1041,16 +1645,179 @@ async function purgeCache() {
 }
 
 /* ================= drawer ================= */
+function findAppKeyByPid(pid) {
+  if (!pid || pid <= 0) return null;
+  for (const [key, entry] of S.apps) {
+    const d = entry && entry.data;
+    if (!d) continue;
+    if (d.mainPid === pid) return key;
+    if (Array.isArray(d.processes) && d.processes.some((p) => p.pid === pid)) return key;
+  }
+  return null;
+}
+
+function findBgItemsForApp(d) {
+  if (!d || !bgItemsCache.length) return [];
+  const pids = new Set((d.processes || []).map((p) => p.pid).filter((p) => p > 0));
+  const bundle = d.bundle ? d.bundle.toLowerCase() : '';
+  const exes = new Set((d.processes || []).map((p) => (p.exe || '').toLowerCase()).filter(Boolean));
+  return bgItemsCache.filter((it) => {
+    if (it.pid && pids.has(it.pid)) return true;
+    const prog = String(it.program || (Array.isArray(it.programArguments) ? it.programArguments[0] : '') || it.exe || '').toLowerCase();
+    if (bundle && prog && prog.startsWith(bundle + '/')) return true;
+    if (prog && exes.has(prog)) return true;
+    if (it.bundle && bundle && String(it.bundle).toLowerCase() === bundle) return true;
+    return false;
+  });
+}
+
+function buildDiagnosticsText(d) {
+  const lines = [
+    `Pulse Diagnostics — ${d.name} (${d.kind})`,
+    `Generated: ${new Date().toISOString()}`,
+  ];
+  const path = d.bundle || (d.processes[0] && (d.processes[0].exe || d.processes[0].args)) || '';
+  if (path) lines.push(`Path: ${path}`);
+  lines.push(`PIDs: ${d.procs} | CPU: ${fmtPct(d.cpu)} | Memory: ${fmtBytes(d.mem)} | Users: ${d.users.join(', ') || '—'}`);
+  if (d.power != null || d.wakeups != null) {
+    const parts = [];
+    if (d.power != null) parts.push(`Power: ${d.power.toFixed(1)}`);
+    if (d.wakeups != null) parts.push(`Wakeups: ${Math.round(d.wakeups)}/s`);
+    lines.push(parts.join(' | '));
+  }
+  if (d.assertions && d.assertions.length) {
+    lines.push('', `Sleep Assertions (${d.assertions.length}):`);
+    for (const x of d.assertions) {
+      const durText = x.dur || (x.duration != null ? fmtDur(x.duration) : '');
+      const dur = durText ? ` (${durText})` : '';
+      lines.push(`  - [${x.type || 'Assertion'}] pid ${x.pid ?? '?'}${dur}: ${x.reason || x.name || '—'}`);
+    }
+  }
+  if (S.drawerNet && S.drawerNet.key === d.key) {
+    const conns = S.drawerNet.connections || [];
+    lines.push('', `Network Connections (${conns.length}):`);
+    if (conns.length) {
+      for (const c of conns) {
+        const addr = c.remote ? `${c.local || '*'} -> ${c.remote}` : (c.local || c.name || '—');
+        lines.push(`  - ${c.proto || 'TCP'} ${c.state || ''} ${addr}${c.pid ? ` (pid ${c.pid})` : ''}`.replace(/\s+/g, ' ').trim());
+      }
+    } else {
+      lines.push('  (none)');
+    }
+  }
+  lines.push('', `Processes (${d.processes.length}):`);
+  for (const p of d.processes) {
+    const vsz = p.vsz ? ` vsz=${fmtBytes(p.vsz)}` : '';
+    const role = p.role ? ` [${p.role}]` : '';
+    lines.push(`  - pid ${p.pid} ${p.name}${role}: cpu=${fmtPct(p.cpu)} mem=${fmtBytes(p.mem)}${vsz} state=${p.stat} up=${p.etime}`);
+    if (p.args) lines.push(`    cmd: ${p.args}`);
+  }
+  return lines.join('\n');
+}
+
+function renderDrawerNetBox() {
+  const box = $('#d-net-box');
+  if (!box) return;
+  const dn = S.drawerNet;
+  if (!dn || dn.key !== S.drawerKey) {
+    if (drawerNetRenderSig !== 'empty') {
+      drawerNetRenderSig = 'empty';
+      box.innerHTML = '<div class="dcard-h"><span>Network Sockets</span></div><div class="dcard-empty">Loading sockets…</div>';
+    }
+    return;
+  }
+  const conns = Array.isArray(dn.connections) ? dn.connections : [];
+  const sig = JSON.stringify([dn.key, dn.loading, dn.error, conns]);
+  if (sig === drawerNetRenderSig) return;
+  drawerNetRenderSig = sig;
+  const head = `<div class="dcard-h"><span>Network Sockets</span><span class="dcard-cnt">${dn.loading && !conns.length ? 'loading…' : `${conns.length} active`}</span></div>`;
+  if (dn.loading && !conns.length) {
+    box.innerHTML = head + '<div class="dcard-empty">Loading sockets…</div>';
+    return;
+  }
+  if (dn.error && !conns.length) {
+    box.innerHTML = head + `<div class="dcard-empty">${esc(dn.error)}</div>`;
+    return;
+  }
+  if (!conns.length) {
+    box.innerHTML = head + '<div class="dcard-empty">No open network sockets</div>';
+    return;
+  }
+  const rowsHtml = conns.map((c) => {
+    const st = String(c.state || '').toUpperCase();
+    const stCls = st === 'LISTEN' ? 'listen' : (st.startsWith('EST') ? 'est' : '');
+    const addr = c.remote ? `${c.local || '*'} → ${c.remote}` : (c.local || c.name || '—');
+    return `<div class="d-net-row">
+      ${st ? `<span class="d-net-st ${stCls}">${esc(st)}</span>` : ''}
+      <span class="d-net-proto">${esc(c.proto || 'TCP')}</span>
+      <span class="d-net-addr" title="${esc(addr)}">${esc(addr)}</span>
+      ${c.pid ? `<span class="d-net-pid">pid ${c.pid}</span>` : ''}
+    </div>`;
+  }).join('');
+  box.innerHTML = head + `<div class="dcard-list">${rowsHtml}</div>`;
+}
+
+async function fetchDrawerDetails(key, isInitial) {
+  if (!key || S.drawerKey !== key) return;
+  const a = S.apps.get(key);
+  if (!a) return;
+  if (!hasBackend()) {
+    S.drawerNet = { key, pidKey: '', loading: false, error: 'Sampler not connected yet', connections: [], fetchedAt: 0 };
+    renderDrawerNetBox();
+    return;
+  }
+  const pids = (a.data.processes || []).map((p) => p.pid).filter((pid) => pid > 0);
+  const pidKey = pids.join(',');
+  if (!pids.length) {
+    S.drawerNet = { key, pidKey: '', loading: false, error: null, connections: [], fetchedAt: Date.now() };
+    renderDrawerNetBox();
+    return;
+  }
+  if (isInitial || S.drawerNet.key !== key) {
+    S.drawerNet = { key, pidKey, loading: true, error: null, connections: [], fetchedAt: 0 };
+    renderDrawerNetBox();
+  }
+  try {
+    const res = await fetch(apiUrl('/api/app-details?pids=' + encodeURIComponent(pidKey)), { cache: 'no-store' });
+    if (S.drawerKey !== key) return;
+    if (!res.ok) {
+      S.drawerNet = { key, pidKey, loading: false, error: 'Socket details unavailable', connections: [], fetchedAt: Date.now() };
+    } else {
+      const data = await res.json();
+      if (S.drawerKey !== key) return;
+      const list = Array.isArray(data) ? data : (Array.isArray(data && data.connections) ? data.connections : (Array.isArray(data && data.sockets) ? data.sockets : []));
+      S.drawerNet = { key, pidKey, loading: false, error: null, connections: list, fetchedAt: Date.now() };
+    }
+  } catch {
+    if (S.drawerKey !== key) return;
+    S.drawerNet = { key, pidKey, loading: false, error: 'Couldn\u2019t load network sockets', connections: [], fetchedAt: Date.now() };
+  }
+  renderDrawerNetBox();
+}
+
 function openDrawer(key) {
+  const switching = S.drawerKey !== key;
   S.drawerKey = key;
+  if (switching) {
+    drawerNetRenderSig = '';
+    S.drawerNet = { key, pidKey: '', loading: true, error: null, connections: [], fetchedAt: 0 };
+  }
+  if (drawerNetTimer) { clearInterval(drawerNetTimer); drawerNetTimer = null; }
+  drawerNetTimer = setInterval(() => {
+    if (S.drawerKey === key) fetchDrawerDetails(key, false);
+  }, 3000);
   $('#scrim').classList.add('on');
   $('#drawer').classList.add('on');
   document.querySelectorAll('.row').forEach((r) => r.classList.toggle('active', r.dataset.key === key));
   renderDrawer();
+  fetchDrawerDetails(key, true);
   closeCtxMenu();
 }
 function closeDrawer() {
   S.drawerKey = null;
+  if (drawerNetTimer) { clearInterval(drawerNetTimer); drawerNetTimer = null; }
+  S.drawerNet = { key: null, pidKey: '', loading: false, error: null, connections: [], fetchedAt: 0 };
+  drawerNetRenderSig = '';
   $('#scrim').classList.remove('on');
   $('#drawer').classList.remove('on');
   document.querySelectorAll('.row.active').forEach((r) => r.classList.remove('active'));
@@ -1060,38 +1827,131 @@ function renderDrawer() {
   const a = S.apps.get(S.drawerKey);
   if (!a) { closeDrawer(); return; }
   const d = a.data;
+  const scroller = $('#dscroll');
+  const scroll = scroller ? scroller.scrollTop : 0;
   const phGlyph = esc(placeholderGlyph(d));
   const phCls = placeholderClass(d);
   const iconHtml = d.icon
     ? `<img class="icon" src="${esc(apiUrl(d.icon))}" onerror="this.outerHTML='<div class=\\'${phCls}\\'>${phGlyph}</div>'">`
     : `<div class="${phCls}">${phGlyph}</div>`;
+  const sleepAsserts = Array.isArray(d.assertions) ? d.assertions.filter((x) => x && x.preventsSleep) : [];
+  const awakeHtml = sleepAsserts.length ? '<span class="badge awake">awake</span>' : '';
+  const pathText = d.bundle || (d.processes[0] && (d.processes[0].exe || d.processes[0].args)) || '';
+  const hasEnergy = d.power != null || d.wakeups != null;
+  const energyStrip = hasEnergy ? `<div class="d-energy-line">
+    ${d.power != null ? `<span>Power <b>${d.power >= 100 ? d.power.toFixed(0) : d.power.toFixed(1)} pwr</b></span>` : ''}
+    ${d.wakeups != null ? `<span>Idle wakeups <b>${Math.round(d.wakeups)}/s</b></span>` : ''}
+  </div>` : '';
+  const revealTarget = d.bundle || (d.processes[0] && d.processes[0].exe) || (d.processes.find((p) => p.exe)?.exe) || '';
+  const copiedNow = Date.now() < copyFeedbackUntil;
   $('#dhead').innerHTML = `
     <div class="t1">
       ${iconHtml}
       <div style="flex:1;min-width:0">
-        <h1>${esc(d.name)} <span class="badge ${d.kind}">${d.kind}</span></h1>
-        <div class="path">${esc(d.bundle || (d.processes[0] ? d.processes[0].args : ''))}</div>
+        <h1>${esc(d.name)} <span class="badge ${d.kind}">${d.kind}</span>${awakeHtml}</h1>
+        <div class="path">${esc(pathText)}</div>
       </div>
       <button class="dclose" id="dclose" title="close">✕</button>
     </div>
     <div class="stats">
-      <div>CPU<b style="color:var(--cpu)">${fmtPct(d.cpu)}</b></div>
-      <div>Memory<b style="color:var(--mem)">${fmtBytes(d.mem)}</b></div>
-      <div>Processes<b>${d.procs}</b></div>
-      <div>Users<b>${esc(d.users.join(', ') || '—')}</b></div>
+      <div class="stat-tile"><span class="sl">CPU</span><b style="color:var(--cpu)">${fmtPct(d.cpu)}</b></div>
+      <div class="stat-tile"><span class="sl">Memory</span><b style="color:var(--mem)">${fmtBytes(d.mem)}</b></div>
+      <div class="stat-tile"><span class="sl">Processes</span><b>${d.procs}</b></div>
+      <div class="stat-tile"><span class="sl">Users</span><b title="${esc(d.users.join(', ') || '—')}">${esc(d.users.join(', ') || '—')}</b></div>
     </div>
-    ${d.mainPid ? `<div class="dactions">
-      <button class="act danger" id="dquit">Quit app (pid ${d.mainPid})</button>
-      <button class="act" id="dfquit" title="Send SIGKILL immediately">Force quit</button>
-    </div>` : ''}`;
+    ${energyStrip}
+    <div class="dactions">
+      ${d.mainPid ? `<button class="act danger" id="dquit">Quit app (pid ${d.mainPid})</button>
+      <button class="act" id="dfquit" title="Send SIGKILL immediately">Force quit</button>` : ''}
+      ${d.mainPid ? `<button class="act${findBlacklistRuleForGroup(d)?.enabled ? ' danger' : ''}" id="dblist" title="${findBlacklistRuleForGroup(d) ? 'Manage auto-kill rule in Blacklist' : 'Automatically kill this app/process whenever it appears'}">${findBlacklistRuleForGroup(d) ? 'Blacklisted ✓' : 'Blacklist'}</button>` : ''}
+      ${revealTarget ? `<button class="act" id="dreveal" title="${esc(revealTarget)}">Reveal in Finder</button>` : ''}
+      <button class="act" id="dcopy">${copiedNow ? 'Copied ✓' : 'Copy Diagnostics'}</button>
+    </div>`;
+  $('#dsec-bar').innerHTML = `<span>Processes</span><span>${d.processes.length} active</span>`;
   $('#dclose').addEventListener('click', closeDrawer);
   const q = $('#dquit');
   if (q) q.addEventListener('click', () => quitApp(S.drawerKey).then((ok) => { if (ok) closeDrawer(); }));
   const fq = $('#dfquit');
   if (fq) fq.addEventListener('click', () => forceQuitApp(S.drawerKey).then((ok) => { if (ok) closeDrawer(); }));
+  const bl = $('#dblist');
+  if (bl) bl.addEventListener('click', () => {
+    const existing = findBlacklistRuleForGroup(d);
+    if (existing) { setBlModal(true); return; }
+    blacklistAppPrompt(S.drawerKey);
+  });
+  const rv = $('#dreveal');
+  if (rv) rv.addEventListener('click', () => revealPath(revealTarget));
+  const cp = $('#dcopy');
+  if (cp) cp.addEventListener('click', () => {
+    copyText(buildDiagnosticsText(d));
+    copyFeedbackUntil = Date.now() + 1600;
+    cp.textContent = 'Copied ✓';
+    setTimeout(() => {
+      const btn = $('#dcopy');
+      if (btn && Date.now() >= copyFeedbackUntil - 50) btn.textContent = 'Copy Diagnostics';
+    }, 1600);
+  });
+
+  // Sleep assertions box
+  const assertBox = $('#d-assertions-box');
+  if (assertBox) {
+    const asserts = Array.isArray(d.assertions) ? d.assertions : [];
+    if (asserts.length) {
+      assertBox.hidden = false;
+      assertBox.innerHTML = `<div class="dcard-h"><span>Sleep Assertions</span><span class="dcard-cnt">${asserts.length} active</span></div>
+        <div class="dcard-list">${asserts.map((x) => {
+          const dur = x.dur || (x.duration != null ? fmtDur(x.duration) : (x.durationText || ''));
+          const meta = [x.pid ? `pid ${x.pid}` : '', dur].filter(Boolean).join(' · ');
+          return `<div class="d-assert-row">
+            <div class="d-assert-top">
+              <span class="d-assert-type">${esc(x.type || 'Assertion')}</span>
+              ${meta ? `<span class="d-assert-meta">${esc(meta)}</span>` : ''}
+            </div>
+            <div class="d-assert-reason">${esc(x.reason || x.name || 'Preventing system sleep')}</div>
+          </div>`;
+        }).join('')}</div>`;
+    } else {
+      assertBox.hidden = true;
+      assertBox.innerHTML = '';
+    }
+  }
+
+  // Matched Background / Login Items box
+  const bgBox = $('#d-bg-box');
+  if (bgBox) {
+    const matchedBg = findBgItemsForApp(d);
+    if (matchedBg.length) {
+      bgBox.hidden = false;
+      bgBox.innerHTML = `<div class="dcard-h"><span>Background / Login Item</span><span class="dcard-cnt">${matchedBg.length}</span></div>
+        <div class="dcard-list">${matchedBg.map((it) => {
+          const flags = [];
+          if (it.runAtLoad) flags.push('<span class="bg-pill flag">RunAtLoad</span>');
+          if (it.keepAlive) flags.push('<span class="bg-pill flag">KeepAlive</span>');
+          const plist = it.plistPath || it.plist || it.path || '';
+          return `<div class="d-bg-row">
+            <div class="d-bg-info">
+              <div class="d-bg-lbl">${esc(it.label || it.name || 'Background Item')}</div>
+              ${flags.length ? `<div class="d-bg-flags">${flags.join('')}</div>` : ''}
+            </div>
+            ${plist ? `<button type="button" class="bg-btn d-bg-reveal" data-plist="${esc(plist)}">Reveal .plist</button>` : ''}
+          </div>`;
+        }).join('')}</div>`;
+      bgBox.querySelectorAll('.d-bg-reveal').forEach((b) => {
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          revealPath(b.dataset.plist);
+        });
+      });
+    } else {
+      bgBox.hidden = true;
+      bgBox.innerHTML = '';
+    }
+  }
+
+  // Network sockets box (persisted across 1s ticks, only re-rendered when data changes)
+  renderDrawerNetBox();
 
   const tb = $('#dtable');
-  const scroll = tb.scrollTop;
   const now = Date.now();
   tb.innerHTML = d.processes.map((p) => {
     let killBtn = '';
@@ -1126,7 +1986,7 @@ function renderDrawer() {
       <div class="cmd" title="${esc(p.args)}">${esc(p.args)}</div>
     </div>`;
   }).join('');
-  tb.scrollTop = scroll;
+  if (scroller) scroller.scrollTop = scroll;
   tb.querySelectorAll('.kill:not(:disabled)').forEach((b) => b.addEventListener('click', (e) => {
     e.stopPropagation();
     const pid = +b.dataset.pid;
@@ -1282,12 +2142,18 @@ function ctxForApp(e, key) {
   if (a.data.mainPid) {
     items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
     items.push({ action: 'fquit', label: `Force Quit ${a.data.name}`, shortcut: '⌥⌘⎋', danger: true });
+    const existing = findBlacklistRuleForGroup(a.data);
+    items.push({ action: 'blist', label: existing ? `Manage ${a.data.name} in Blacklist` : `Auto-Kill ${a.data.name} (Blacklist)`, danger: !existing });
   }
   ctxTarget = { key };
   showContextMenu(e, items, (it) => {
     if (it.action === 'open') openDrawer(key);
     else if (it.action === 'quit') quitApp(key);
     else if (it.action === 'fquit') forceQuitApp(key);
+    else if (it.action === 'blist') {
+      if (findBlacklistRuleForGroup(a.data)) setBlModal(true);
+      else blacklistAppPrompt(key);
+    }
   });
 }
 
@@ -1295,11 +2161,16 @@ function ctxForApp(e, key) {
 function ctxForProc(e, key, pid) {
   const a = S.apps.get(key);
   if (!a || !a.data) return;
+  const proc = (a.data.processes || []).find((p) => p.pid === pid) || null;
   const items = [];
   if (a.data.mainPid) items.push({ action: 'quit', label: `Quit ${a.data.name}`, shortcut: '⌘Q', danger: true });
   if (pid > 0) {
     items.push({ action: 'kill', label: `Terminate pid ${pid}`, danger: true });
     items.push({ action: 'fkill', label: `Force Kill pid ${pid}`, danger: true });
+    if (proc) {
+      const existing = findBlacklistRuleForProc(proc, a.data);
+      items.push({ action: 'blist-proc', label: existing ? `Manage ${proc.name} in Blacklist` : `Auto-Kill ${proc.name} (Blacklist)`, danger: !existing });
+    }
   }
   if (!items.length) { e.preventDefault(); closeCtxMenu(); return; }
   ctxTarget = { key, pid };
@@ -1313,6 +2184,9 @@ function ctxForProc(e, key, pid) {
       if (confirm(`Force kill pid ${pid}?\nSends SIGKILL immediately — unsaved work in this process will be lost.`)) {
         killProc(pid, 'KILL').then((ok) => { if (ok && S.drawerKey) renderDrawer(); });
       }
+    } else if (it.action === 'blist-proc' && proc) {
+      if (findBlacklistRuleForProc(proc, a.data)) setBlModal(true);
+      else blacklistProcPrompt(proc);
     }
   });
 }
@@ -1340,18 +2214,11 @@ document.addEventListener('click', (e) => {
 /* ================= system cards ================= */
 function pushHist(arr, v) { arr.push(v); if (arr.length > HIST) arr.shift(); }
 
-// Hue (120 = cool green → 0 = hot red) for a CPU temperature, scaled on this
-// machine's own observed range (therm.min..max, tracked by the server). The span
-// is floored at 10°C so a quiet machine's few-degree range doesn't map a 1°
-// swing onto the whole ramp, and the colour uses the ROUNDED value so it always
-// matches the number shown (and the status menu's). Returns null only when
-// there's no range to scale on yet — the caller keeps the default colour.
-function tempHue(therm, tRaw) {
-  if (!therm || typeof therm.min !== 'number' || typeof therm.max !== 'number') return null;
-  if (therm.max - therm.min < 1) return null; // no spread yet — not enough history
-  const span = Math.max(therm.max - therm.min, 10);
-  const lo = therm.min - (span - (therm.max - therm.min)) / 2; // widen around the observed range
-  return 120 * (1 - Math.min(1, Math.max(0, (Math.round(tRaw) - lo) / span)));
+// Hue (120 = cool green → 0 = hot red) for a CPU temperature on an absolute
+// Apple Silicon die-temp scale: ≤40°C green (120°), ~65°C amber (60°), ≥90°C red (0°).
+function tempHue(tRaw) {
+  const frac = Math.min(1, Math.max(0, (Math.round(tRaw) - 40) / 50));
+  return 120 * (1 - frac);
 }
 
 let firstSysWall = 0;
@@ -1369,13 +2236,45 @@ function renderSys() {
     ? ` · ${esc(s.chip)}`
     : (sysAge < 6000 ? ' · <span class="skel-inline skel-shimmer" style="width:92px"></span>' : '');
   $('#machine').innerHTML = `<b>${esc(s.model)}</b>${chipHtml} · ${totalMemText} · ${s.cores} cores`;
-  $('#h-uptime').textContent = fmtDur(s.uptime);
+  const upEl = $('#h-uptime');
+  upEl.textContent = fmtDur(s.uptime);
+  const upDays = s.uptime / 86400;
+  if (upDays >= 14) {
+    upEl.style.color = 'var(--wired)';
+    upEl.title = `Up ${Math.floor(upDays)} days — consider restarting soon`;
+  } else if (upDays >= 7) {
+    upEl.style.color = 'var(--cpu)';
+    upEl.title = `Up ${Math.floor(upDays)} days — a restart can clear stale background state`;
+  } else {
+    upEl.style.color = '';
+    upEl.title = '';
+  }
   const bw = $('#h-batt-wrap');
-  if (s.batt && s.batt.pct != null) {
+  const bl = $('#h-batt-lbl');
+  const batt = s.batt;
+  if (batt && (batt.pct != null || batt.powerW != null)) {
     bw.style.display = '';
-    $('#h-batt').innerHTML = `${s.batt.pct}%${s.batt.charging ? ' ⚡' : ''}`;
-    $('#h-batt').className = s.batt.charging ? 'batt-charging' : '';
-  } else bw.style.display = 'none';
+    if (bl) bl.textContent = batt.pct != null ? 'battery' : 'power';
+    const parts = [];
+    if (batt.pct != null) parts.push(`${batt.pct}%${batt.charging ? ' ⚡' : ''}`);
+    else if (batt.charging) parts.push('AC ⚡');
+    if (batt.powerW != null && isFinite(batt.powerW)) parts.push(`${batt.powerW.toFixed(1)} W`);
+    if (!batt.charging && batt.minsRemaining != null && batt.minsRemaining > 0) {
+      parts.push(fmtDur(batt.minsRemaining * 60));
+    }
+    $('#h-batt').textContent = parts.join(' · ') || '—';
+    $('#h-batt').className = batt.charging ? 'batt-charging' : '';
+    const tipParts = [
+      batt.charging ? 'Charging / AC power' : (batt.pct != null ? 'On battery' : 'AC power'),
+      batt.adapterW ? `${batt.adapterW}W adapter` : '',
+      batt.powerW != null && isFinite(batt.powerW) ? `${batt.powerW.toFixed(1)} W draw` : '',
+      !batt.charging && batt.minsRemaining ? `${fmtDur(batt.minsRemaining * 60)} remaining` : '',
+    ].filter(Boolean);
+    bw.title = tipParts.join(' · ');
+  } else {
+    bw.style.display = 'none';
+    bw.title = '';
+  }
 
   // cpu card — show live CPU thermal reading always under CPU; highlight when throttled
   $('#cpu-big').textContent = fmtPct(s.cpu.total);
@@ -1389,8 +2288,8 @@ function renderSys() {
     // ramp answers "how hot is my die?" — it has nothing to do with the SMC
     // state word, which answers "is the system throttling?" (nominal = the
     // system is not acting, whatever the die temp happens to be).
-    const hue = tempHue(therm, cpuTemp);
-    const col = hue == null ? '' : ` style="color:hsl(${hue.toFixed(0)},65%,58%)"`;
+    const hue = tempHue(cpuTemp);
+    const col = ` style="color:hsl(${hue.toFixed(0)},68%,58%)"`;
     const tVal = `<b${col}>${Math.round(cpuTemp)}°C</b>`;
     const stTag = hot
       ? `<b class="hot" title="${therm.state === 'slowed' ? 'CPU is being slowed to cool down' : 'CPU is being throttled to cool down'}">${therm.state}</b>`
@@ -1425,11 +2324,24 @@ function renderSys() {
   const mt = s.memTotal || 1;
   const inUse = s.mem.inUse ?? Math.max(0, s.mem.used - (s.mem.cache || 0));
   $('#mem-big').textContent = fmtPct((inUse / mt) * 100);
+  const mpEl = $('#mem-pressure');
+  if (mpEl) {
+    const mp = parseMemPressure(s.memPressure);
+    if (mp) {
+      mpEl.hidden = false;
+      mpEl.className = 'mp-badge ' + mp.cls;
+      mpEl.textContent = mp.label;
+      mpEl.title = `macOS VM memory pressure: ${mp.label}`;
+    } else {
+      mpEl.hidden = true;
+    }
+  }
   const totalLabel = s.memLabel || fmtBytes(s.memTotal).replace(/\.0 /, ' ');
   const inUseStr = fmtBytes(inUse);
-  if (s.swap && s.swap.used > 16 * 1024 * 1024) {
+  if (s.swap && s.swap.used >= 1024 * 1024) {
     const shortInUse = inUseStr.endsWith(' GB') && totalLabel.endsWith(' GB') ? inUseStr.slice(0, -3) : inUseStr;
-    $('#mem-sub').innerHTML = `<span><b>${shortInUse}</b> / ${esc(totalLabel)}</span><span>swap <b>${fmtBytes(s.swap.used)}</b></span>`;
+    const swapTitle = s.swap.total ? ` title="Swap used: ${fmtBytes(s.swap.used)} / ${fmtBytes(s.swap.total)}"` : '';
+    $('#mem-sub').innerHTML = `<span><b>${shortInUse}</b> / ${esc(totalLabel)}</span><span${swapTitle}>swap <b>${fmtBytes(s.swap.used)}</b></span>`;
   } else {
     $('#mem-sub').innerHTML = `<span><b>${inUseStr}</b> of ${esc(totalLabel)}</span>`;
   }
@@ -1496,7 +2408,7 @@ function renderSys() {
   drawSpark($('#spark-disk'), S.sysHist.disk, '#b07cff');
 
   $('#hint').textContent = `${s.procCount} processes · ${s.appCount} apps`;
-  $('#note-cpu').textContent = `share of ${s.cores} cores`;
+  $('#note-cpu').textContent = S.leftMode === 'energy' ? 'power & idle wakeups/s' : `share of ${s.cores} cores`;
 }
 
 /* ================= startup trace (stage names + timestamps only) ================= */
@@ -1567,10 +2479,12 @@ function onTick(p) {
   for (const a of p.apps) {
     seen.add(a.key);
     let e = S.apps.get(a.key);
-    if (!e) { e = { cpuHist: [], memHist: [] }; S.apps.set(a.key, e); }
+    if (!e) { e = { cpuHist: [], memHist: [], energyHist: [] }; S.apps.set(a.key, e); }
+    else if (!e.energyHist) e.energyHist = [];
     e.data = a;
     pushHist(e.cpuHist, a.cpu);
     pushHist(e.memHist, a.mem);
+    pushHist(e.energyHist, energyScore(a));
   }
   for (const key of [...S.apps.keys()]) {
     if (!seen.has(key)) {
@@ -1599,10 +2513,20 @@ function onTick(p) {
   }
 
   renderSys();
+  updateBlacklistBadge();
   renderPanel('cpu');
   renderPanel('mem');
   renderMemPop();
   if (S.drawerKey) renderDrawer();
+  if (bgOpen) renderBgList();
+  if (!bgItemsInitFetched && hasBackend()) {
+    bgItemsInitFetched = true;
+    fetchBackgroundItems(false);
+  }
+  if (!blacklistInitFetched && hasBackend()) {
+    blacklistInitFetched = true;
+    fetchBlacklist();
+  }
   setLive(true);
   if (!tracedFirstRender) {
     tracedFirstRender = true;
@@ -1811,6 +2735,66 @@ function applyLayoutFromServer(menuArr, barArr) {
   }
 }
 
+const MENU_ROW_META = {
+  cpu:     { color: 'var(--cpu)',  tag: '+ thermal' },
+  gpu:     { color: 'var(--gpu)',  tag: '' },
+  memory:  { color: 'var(--mem)',  tag: '' },
+  network: { color: 'var(--net)',  tag: '' },
+  uptime:  { color: 'var(--dim)',  tag: 'menu only' },
+};
+
+function renderMenuBarPreview() {
+  const preview = $('#mb-preview-bar');
+  if (!preview) return;
+  preview.innerHTML = '';
+  const active = settingsState.menuRowsFull.filter((id) => settingsState.barRows.includes(id));
+  if (active.length === 0) {
+    const p = document.createElement('span');
+    p.className = 'mb-empty-p';
+    p.textContent = 'P';
+    preview.append(p);
+    return;
+  }
+  const specs = {
+    cpu:     { letters: ['C', 'P', 'U'], color: '#ff9e42', pct: 46 },
+    gpu:     { letters: ['G', 'P', 'U'], color: '#33c759', pct: 22 },
+    memory:  { letters: ['M', 'E', 'M'], color: '#4d9eff', pct: 58 },
+    network: { letters: ['N', 'E', 'T'], color: '#bf59f2' },
+  };
+  for (const id of active) {
+    const sp = specs[id];
+    if (!sp) continue;
+    const mod = document.createElement('span');
+    mod.className = 'mb-mod';
+    const col = document.createElement('span');
+    col.className = 'mb-letters';
+    for (const ch of sp.letters) {
+      const s = document.createElement('span');
+      s.textContent = ch;
+      col.append(s);
+    }
+    mod.append(col);
+    if (id === 'network') {
+      const net = document.createElement('span');
+      net.className = 'mb-net';
+      net.innerHTML =
+        '<span class="mb-net-row"><span class="mb-net-arr">↓</span><span>1.2 MB</span></span>' +
+        '<span class="mb-net-row"><span class="mb-net-arr">↑</span><span>86 KB</span></span>';
+      mod.append(net);
+    } else {
+      const vbar = document.createElement('span');
+      vbar.className = 'mb-vbar';
+      const fill = document.createElement('span');
+      fill.className = 'mb-vbar-fill';
+      fill.style.height = sp.pct + '%';
+      fill.style.background = sp.color;
+      vbar.append(fill);
+      mod.append(vbar);
+    }
+    preview.append(mod);
+  }
+}
+
 function renderMenuRowsUI() {
   const box = $('#menu-rows');
   box.innerHTML = '';
@@ -1819,10 +2803,16 @@ function renderMenuRowsUI() {
     const label = spec?.[1] ?? id;
     const barCapable = spec?.[2] ?? false;
     const visible = !settingsState.menuHidden.includes(id);
+    const meta = MENU_ROW_META[id] || { color: 'var(--dim)', tag: '' };
+
     const row = document.createElement('div');
     row.className = 'mr-row';
     row.dataset.id = id;
-    row.draggable = true;  // drag to reorder — ↑/↓ below stay as the accessible fallback
+    row.draggable = true;
+
+    const left = document.createElement('div');
+    left.className = 'mr-left';
+
     const grip = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     grip.setAttribute('viewBox', '0 0 10 14');
     grip.classList.add('mr-grip');
@@ -1834,45 +2824,67 @@ function renderMenuRowsUI() {
       c.setAttribute('r', 1.4);
       grip.append(c);
     }
-    const mkSw = (on, ariaLabel, disabled, onClick) => {
+
+    const dot = document.createElement('span');
+    dot.className = 'mr-color';
+    dot.style.background = meta.color;
+    if (!visible) dot.style.opacity = '0.35';
+
+    const name = document.createElement('span');
+    name.className = 'mr-name' + (visible ? '' : ' dim');
+    name.textContent = label;
+
+    left.append(grip, dot, name);
+    if (meta.tag) {
+      const tag = document.createElement('span');
+      tag.className = 'mr-tag';
+      tag.textContent = meta.tag;
+      left.append(tag);
+    }
+
+    const mkSw = (on, ariaLabel, onClick) => {
       const sw = document.createElement('button');
       sw.className = 'sw';
       sw.setAttribute('role', 'switch');
       sw.setAttribute('aria-checked', on ? 'true' : 'false');
       sw.setAttribute('aria-label', ariaLabel);
-      if (disabled) sw.disabled = true;
       const knob = document.createElement('span');
       knob.className = 'knob';
       sw.append(knob);
       sw.addEventListener('click', onClick);
       return sw;
     };
-    const sw = mkSw(visible, `${label} row in the menu`, false, () => {
+
+    const menuCell = document.createElement('div');
+    menuCell.className = 'mr-cell';
+    const sw = mkSw(visible, `${label} row in the menu`, () => {
       if (visible) settingsState.menuHidden.push(id);
       else settingsState.menuHidden.splice(settingsState.menuHidden.indexOf(id), 1);
       renderMenuRowsUI(); pushMenuRows();
     });
-    const barOn = barCapable && settingsState.barRows.includes(id);
-    const bsw = mkSw(barOn, `${label} capsule in the status bar`, !barCapable, () => {
-      const bi = settingsState.barRows.indexOf(id);
-      if (bi >= 0) settingsState.barRows.splice(bi, 1);
-      else settingsState.barRows.push(id);
-      renderMenuRowsUI(); pushMenuRows();
-    });
-    // Each switch carries its own word, so no two unlabeled toggles sit side by side.
-    const ctl = (swx, word, dimmed) => {
-      const w = document.createElement('span');
-      w.className = 'mr-ctl' + (dimmed ? ' dis' : '');
-      const l = document.createElement('span');
-      l.className = 'mr-ctl-word';
-      l.textContent = word;
-      w.append(swx, l);
-      return w;
-    };
-    if (!barCapable) bsw.title = 'Menu only — no status-bar representation';
-    const name = document.createElement('span');
-    name.className = 'mr-name' + (visible ? '' : ' dim');
-    name.textContent = label;
+    menuCell.append(sw);
+
+    const barCell = document.createElement('div');
+    barCell.className = 'mr-cell';
+    if (barCapable) {
+      const barOn = settingsState.barRows.includes(id);
+      const bsw = mkSw(barOn, `${label} capsule in the status bar`, () => {
+        const bi = settingsState.barRows.indexOf(id);
+        if (bi >= 0) settingsState.barRows.splice(bi, 1);
+        else settingsState.barRows.push(id);
+        renderMenuRowsUI(); pushMenuRows();
+      });
+      barCell.append(bsw);
+    } else {
+      const dash = document.createElement('span');
+      dash.className = 'mr-dash';
+      dash.textContent = '—';
+      dash.title = 'Menu only — no status-bar capsule';
+      barCell.append(dash);
+    }
+
+    const ordCell = document.createElement('div');
+    ordCell.className = 'mr-ord';
     const mkBtn = (glyph, dir, enabled) => {
       const b = document.createElement('button');
       b.className = 'mr-btn'; b.textContent = glyph; b.disabled = !enabled;
@@ -1886,10 +2898,12 @@ function renderMenuRowsUI() {
       });
       return b;
     };
-    row.append(grip, name, ctl(sw, 'Menu'), ctl(bsw, 'Bar', !barCapable),
-               mkBtn('↑', -1, i > 0), mkBtn('↓', 1, i < settingsState.menuRowsFull.length - 1));
+    ordCell.append(mkBtn('↑', -1, i > 0), mkBtn('↓', 1, i < settingsState.menuRowsFull.length - 1));
+
+    row.append(left, menuCell, barCell, ordCell);
     box.append(row);
   });
+  renderMenuBarPreview();
 }
 
 // Drag-to-reorder for the menu-rows list (event delegation — rows are re-created
@@ -2018,6 +3032,7 @@ function setSettingsModal(open) {
   scrim.setAttribute('aria-hidden', settingsOpen ? 'false' : 'true');
   $('#settings-btn').classList.toggle('on', settingsOpen);
   if (settingsOpen) {
+    if (bgOpen) setBgModal(false);
     setMemPop(false);
     closeCtxMenu();
     if (!postNativeSetting({ action: 'sync' })) {
@@ -2029,6 +3044,385 @@ function setSettingsModal(open) {
     if (!checkAgeTimer) checkAgeTimer = setInterval(() => { if (settingsOpen) renderCheckCard(); }, 15000);
   } else {
     if (checkAgeTimer) { clearInterval(checkAgeTimer); checkAgeTimer = null; }
+  }
+}
+
+/* ================= background / login items modal ================= */
+function bgItemNorm(it) {
+  const label = String(it.label || it.name || it.id || 'Unknown');
+  const pid = it.pid > 0 ? Number(it.pid) : null;
+  const rawState = String(it.state || it.status || '').toLowerCase();
+  const disabled = it.disabled === true || rawState === 'disabled';
+  const loaded = it.loaded === true || rawState === 'loaded' || rawState === 'running' || pid != null;
+  const enabled = it.enabled != null ? !!it.enabled : !disabled;
+  const thirdParty = it.thirdParty != null ? !!it.thirdParty : (it.isThirdParty != null ? !!it.isThirdParty : !label.startsWith('com.apple.'));
+  const rawScope = String(it.scopeLabel || it.scope || '');
+  const scopeMap = {
+    user: 'User Agent',
+    useragent: 'User Agent',
+    'user agent': 'User Agent',
+    global: 'Global Agent',
+    globalagent: 'Global Agent',
+    'global agent': 'Global Agent',
+    system: 'System Daemon',
+    daemon: 'System Daemon',
+    systemdaemon: 'System Daemon',
+    'system daemon': 'System Daemon',
+  };
+  const scope = scopeMap[rawScope.toLowerCase()] || rawScope;
+  const program = String(it.program || (Array.isArray(it.programArguments) ? it.programArguments.join(' ') : '') || it.exe || '');
+  const plistPath = String(it.plistPath || it.plist || it.path || '');
+  return { raw: it, label, pid, disabled, loaded, enabled, thirdParty, scope, program, plistPath };
+}
+
+function updateBgBadge() {
+  const cntEl = $('#bg-cnt');
+  if (!cntEl) return;
+  if (!bgItemsLoaded) {
+    cntEl.textContent = '—';
+    return;
+  }
+  cntEl.textContent = String(bgItemsCache.length);
+  const running = bgItemsCache.filter((it) => it.pid > 0).length;
+  const tp = bgItemsCache.filter((it) => {
+    const n = bgItemNorm(it);
+    return n.thirdParty;
+  }).length;
+  const btn = $('#bg-items-btn');
+  if (btn) btn.title = `${bgItemsCache.length} background items (${running} running, ${tp} third-party)`;
+}
+
+function renderBgList() {
+  const listEl = $('#bg-list');
+  const sumEl = $('#bg-foot-summary');
+  if (!listEl) return;
+  if (bgItemsLoading && !bgItemsLoaded) {
+    listEl.innerHTML = '<div class="empty">Loading background items…</div>';
+    if (sumEl) sumEl.textContent = 'Scanning LaunchAgents & LaunchDaemons…';
+    return;
+  }
+  if (bgItemsError && !bgItemsLoaded) {
+    listEl.innerHTML = `<div class="empty">${esc(bgItemsError)}</div>`;
+    if (sumEl) sumEl.textContent = 'Unavailable';
+    return;
+  }
+  const items = bgItemsCache.map(bgItemNorm);
+  const q = bgSearch.toLowerCase();
+  const filtered = items.filter((n) => {
+    if (bgFilter === 'running' && !(n.pid > 0)) return false;
+    if (bgFilter === 'enabled' && !n.enabled) return false;
+    if (bgFilter === 'third-party' && !n.thirdParty) return false;
+    if (!q) return true;
+    return n.label.toLowerCase().includes(q)
+      || n.program.toLowerCase().includes(q)
+      || n.plistPath.toLowerCase().includes(q)
+      || n.scope.toLowerCase().includes(q);
+  });
+  if (sumEl) {
+    sumEl.textContent = `Showing ${filtered.length} of ${items.length} items`;
+  }
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="empty">${items.length ? 'No background items match this filter' : 'No background items found'}</div>`;
+    return;
+  }
+  listEl.innerHTML = filtered.map((n) => {
+    let statePill = '<span class="bg-pill">Unloaded</span>';
+    if (n.pid > 0) statePill = `<span class="bg-pill run">Running · pid ${n.pid}</span>`;
+    else if (n.disabled) statePill = '<span class="bg-pill dis">Disabled</span>';
+    else if (n.loaded) statePill = '<span class="bg-pill load">Loaded</span>';
+    const scopePill = n.scope ? `<span class="bg-pill scope">${esc(n.scope)}</span>` : '';
+    const tpPill = n.thirdParty ? '<span class="bg-pill tp">Third-party</span>' : '';
+    const flags = [
+      n.raw.runAtLoad ? '<span class="bg-pill flag">RunAtLoad</span>' : '',
+      n.raw.keepAlive ? '<span class="bg-pill flag">KeepAlive</span>' : '',
+    ].filter(Boolean).join('');
+    const appKey = n.pid ? findAppKeyByPid(n.pid) : null;
+    return `<div class="bg-item">
+      <div class="bg-item-top">
+        <div class="bg-item-title">
+          <span class="bg-label">${esc(n.label)}</span>
+          ${statePill}${scopePill}${tpPill}${flags}
+        </div>
+        <div class="bg-actions">
+          ${appKey ? `<button type="button" class="bg-btn accent bg-inspect" data-app="${esc(appKey)}">Inspect App</button>` : ''}
+          ${n.plistPath ? `<button type="button" class="bg-btn bg-reveal" data-plist="${esc(n.plistPath)}">Reveal .plist</button>` : ''}
+        </div>
+      </div>
+      <div class="bg-paths">
+        ${n.program ? `<span><b>Program:</b> ${esc(n.program)}</span>` : ''}
+        ${n.plistPath ? `<span><b>Plist:</b> ${esc(n.plistPath)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('.bg-reveal').forEach((b) => {
+    b.addEventListener('click', () => revealPath(b.dataset.plist));
+  });
+  listEl.querySelectorAll('.bg-inspect').forEach((b) => {
+    b.addEventListener('click', () => {
+      const k = b.dataset.app;
+      setBgModal(false);
+      if (k && S.apps.has(k)) openDrawer(k);
+    });
+  });
+}
+
+async function fetchBackgroundItems(fresh = false) {
+  if (!hasBackend() || bgItemsLoading) return;
+  bgItemsLoading = true;
+  if (bgOpen && !bgItemsLoaded) renderBgList();
+  try {
+    const res = await fetch(apiUrl(fresh ? '/api/background-items?fresh=1' : '/api/background-items'), { cache: 'no-store' });
+    if (!res.ok) {
+      bgItemsError = 'Background items endpoint unavailable';
+    } else {
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : []);
+      bgItemsCache = items;
+      bgItemsLoaded = true;
+      bgItemsError = null;
+    }
+  } catch {
+    bgItemsError = 'Couldn\u2019t load background items';
+  } finally {
+    bgItemsLoading = false;
+  }
+  updateBgBadge();
+  if (S.drawerKey) renderDrawer();
+  if (bgOpen) renderBgList();
+}
+
+function setBgModal(open) {
+  bgOpen = !!open;
+  const scrim = $('#bg-scrim');
+  if (!scrim) return;
+  scrim.classList.toggle('on', bgOpen);
+  scrim.setAttribute('aria-hidden', bgOpen ? 'false' : 'true');
+  const btn = $('#bg-items-btn');
+  if (btn) btn.classList.toggle('on', bgOpen);
+  if (bgOpen) {
+    if (blOpen) setBlModal(false);
+    if (settingsOpen) setSettingsModal(false);
+    setMemPop(false);
+    closeCtxMenu();
+    renderBgList();
+    fetchBackgroundItems(true);
+  }
+}
+
+/* ================= process blacklist (auto-kill) ================= */
+function ruleSpecForGroup(d) {
+  if (!d) return null;
+  if (d.bundle) return { matchType: 'bundle', pattern: d.bundle, label: d.name, sig: 'KILL' };
+  const mainP = (d.processes || []).find((p) => p.pid === d.mainPid) || (d.processes || []).find((p) => p.pid > 0);
+  if (mainP && mainP.exe && mainP.exe.startsWith('/')) {
+    return { matchType: 'exe', pattern: mainP.exe, label: d.name || mainP.name, sig: 'KILL' };
+  }
+  return { matchType: 'name', pattern: d.name, label: d.name, sig: 'KILL' };
+}
+
+function ruleSpecForProc(proc) {
+  if (!proc) return null;
+  if (proc.exe && proc.exe.startsWith('/')) {
+    return { matchType: 'exe', pattern: proc.exe, label: proc.name, sig: 'KILL' };
+  }
+  return { matchType: 'name', pattern: proc.name, label: proc.name, sig: 'KILL' };
+}
+
+function findBlacklistRuleForGroup(d) {
+  if (!d || !blacklistCache.length) return null;
+  if (d.bundle) {
+    const byBundle = blacklistCache.find((r) => r.matchType === 'bundle' && r.pattern === d.bundle);
+    if (byBundle) return byBundle;
+  }
+  const procs = d.processes || [];
+  for (const p of procs) {
+    const r = findBlacklistRuleForProc(p, d);
+    if (r) return r;
+  }
+  return blacklistCache.find((r) => r.matchType === 'name' && r.pattern.toLowerCase() === (d.name || '').toLowerCase()) || null;
+}
+
+function findBlacklistRuleForProc(proc, grp) {
+  if (!proc || !blacklistCache.length) return null;
+  return blacklistCache.find((r) => {
+    if (r.matchType === 'bundle') {
+      return (grp && grp.bundle === r.pattern)
+        || (proc.exe && (proc.exe === r.pattern || proc.exe.startsWith(r.pattern + '/')));
+    }
+    if (r.matchType === 'exe') return proc.exe === r.pattern;
+    if (r.matchType === 'name') return (proc.name || '').toLowerCase() === r.pattern.toLowerCase();
+    return false;
+  }) || null;
+}
+
+function updateBlacklistBadge() {
+  const btn = $('#bl-btn');
+  const cntEl = $('#bl-cnt');
+  if (!cntEl || !btn) return;
+  let enabled = 0;
+  let total = blacklistCache.length;
+  let kills = 0;
+  if (blacklistLoaded) {
+    for (const r of blacklistCache) {
+      if (r.enabled) enabled++;
+      kills += r.kills || 0;
+    }
+  } else if (S.sys && S.sys.blacklist) {
+    total = S.sys.blacklist.total || 0;
+    enabled = S.sys.blacklist.enabled || 0;
+    kills = S.sys.blacklist.kills || 0;
+  }
+  cntEl.textContent = String(total);
+  btn.classList.toggle('bl-on', enabled > 0);
+  btn.title = total
+    ? `${enabled} active auto-kill ${enabled === 1 ? 'rule' : 'rules'} (${total} total, ${kills} kills)`
+    : 'Auto-kill blacklist: automatically terminate matching processes when they appear';
+}
+
+function relAge(ms) {
+  if (!ms) return '';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 5) return 'just now';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  return Math.floor(s / 3600) + 'h ago';
+}
+
+function renderBlacklist() {
+  const listEl = $('#bl-list');
+  const errEl = $('#bl-err');
+  const sumEl = $('#bl-foot-summary');
+  if (errEl) {
+    if (blError) { errEl.hidden = false; errEl.textContent = blError; }
+    else { errEl.hidden = true; errEl.textContent = ''; }
+  }
+  if (!listEl) return;
+  const total = blacklistCache.length;
+  const enabled = blacklistCache.filter((r) => r.enabled).length;
+  const totalKills = blacklistCache.reduce((a, r) => a + (r.kills || 0), 0);
+  if (sumEl) {
+    sumEl.innerHTML = total
+      ? `${enabled} active · ${total} ${total === 1 ? 'rule' : 'rules'} · ${totalKills} total kills · saved in <code>~/.pulse/blacklist.json</code>`
+      : 'Saved in <code>~/.pulse/blacklist.json</code> · enforced every tick';
+  }
+  if (!total) {
+    listEl.innerHTML = '<div class="empty">No blacklisted processes yet.<br>Add one above, or right-click any app/process and choose <b>Auto-Kill (Blacklist)</b>.</div>';
+    return;
+  }
+  listEl.innerHTML = blacklistCache.map((r) => {
+    const statePill = r.lastError
+      ? `<span class="bg-pill dis" title="${esc(r.lastError)}">Error</span>`
+      : (r.enabled
+        ? (r.respawning
+          ? '<span class="bg-pill flag" title="launchd keeps relaunching this target">Respawning (launchd)</span>'
+          : '<span class="bg-pill run">Active</span>')
+        : '<span class="bg-pill">Paused</span>');
+    const typeLabel = r.matchType === 'bundle' ? 'app bundle' : r.matchType === 'exe' ? 'executable' : 'process name';
+    const typePill = `<span class="bg-pill scope">${typeLabel}</span>`;
+    const sigPill = `<span class="bg-pill ${r.sig === 'KILL' ? 'dis' : 'load'}">${r.sig === 'KILL' ? 'SIGKILL' : 'SIGTERM'}</span>`;
+    const killNote = r.kills
+      ? `Killed <b>${r.kills}</b> ${r.kills === 1 ? 'time' : 'times'}${r.lastKilledAt ? ` · last ${relAge(r.lastKilledAt)}${r.lastKilledPid ? ` (pid ${r.lastKilledPid})` : ''}` : ''}`
+      : (r.enabled ? 'Watching — 0 kills yet' : 'Paused');
+    return `<div class="bg-item" data-id="${esc(r.id)}">
+      <div class="bg-item-top">
+        <div class="bg-item-title">
+          <span class="bg-label">${esc(r.label)}</span>
+          ${statePill}${sigPill}${typePill}
+        </div>
+        <div class="bg-actions">
+          <button type="button" class="bg-btn bl-sig" data-id="${esc(r.id)}" data-sig="${r.sig === 'KILL' ? 'TERM' : 'KILL'}" title="Switch between SIGKILL and SIGTERM">${r.sig === 'KILL' ? 'Use SIGTERM' : 'Use SIGKILL'}</button>
+          <button type="button" class="sw" role="switch" aria-checked="${r.enabled ? 'true' : 'false'}" data-id="${esc(r.id)}" title="${r.enabled ? 'Pause rule' : 'Enable rule'}"><span class="knob"></span></button>
+          <button type="button" class="bg-btn danger bl-del" data-id="${esc(r.id)}" title="Remove from Blacklist">Remove</button>
+        </div>
+      </div>
+      <div class="bg-paths">
+        <span><b>Match:</b> ${esc(r.pattern)}</span>
+        <span>${killNote}${r.lastError ? ` · <span style="color:var(--danger)">${esc(r.lastError)}</span>` : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function fetchBlacklist() {
+  if (!hasBackend()) return;
+  try {
+    const r = await fetch(apiUrl('/api/blacklist'), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && Array.isArray(j.rules)) {
+      blacklistCache = j.rules;
+      blacklistLoaded = true;
+      updateBlacklistBadge();
+      if (S.drawerKey) renderDrawer();
+      if (blOpen) renderBlacklist();
+    }
+  } catch { /* retry next tick */ }
+}
+
+async function postBlacklist(body) {
+  if (!hasBackend()) return null;
+  blError = '';
+  try {
+    const r = await fetch(apiUrl('/api/blacklist'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!j || !j.ok) {
+      blError = (j && j.error) || 'Blacklist update failed';
+      if (blOpen) renderBlacklist();
+      else alert(blError);
+      return null;
+    }
+    blacklistCache = Array.isArray(j.rules) ? j.rules : [];
+    blacklistLoaded = true;
+    updateBlacklistBadge();
+    if (S.drawerKey) renderDrawer();
+    if (blOpen) renderBlacklist();
+    setTimeout(() => pollOnce(true), 150);
+    return j;
+  } catch {
+    blError = 'Blacklist request failed';
+    if (blOpen) renderBlacklist();
+    return null;
+  }
+}
+
+function blacklistAppPrompt(key) {
+  const a = S.apps.get(key);
+  if (!a || !a.data) return;
+  const spec = ruleSpecForGroup(a.data);
+  if (!spec) return;
+  if (!confirm(`Add “${spec.label}” to Auto-Kill Blacklist?\nAny process matching ${spec.pattern} will be killed automatically whenever it appears.`)) return;
+  postBlacklist({ action: 'add', ...spec });
+}
+
+function blacklistProcPrompt(proc) {
+  const spec = ruleSpecForProc(proc);
+  if (!spec) return;
+  if (!confirm(`Add “${spec.label}” to Auto-Kill Blacklist?\nAny process matching ${spec.pattern} will be killed automatically whenever it appears.`)) return;
+  postBlacklist({ action: 'add', ...spec });
+}
+
+function setBlModal(open) {
+  blOpen = !!open;
+  const scrim = $('#bl-scrim');
+  if (!scrim) return;
+  if (blOpen && settingsOpen) setSettingsModal(false);
+  if (blOpen && bgOpen) setBgModal(false);
+  if (blOpen && memPop) setMemPop(false);
+  closeCtxMenu();
+  scrim.classList.toggle('on', blOpen);
+  scrim.setAttribute('aria-hidden', blOpen ? 'false' : 'true');
+  const btn = $('#bl-btn');
+  if (btn) btn.classList.toggle('on', blOpen);
+  if (blRefreshTimer) { clearInterval(blRefreshTimer); blRefreshTimer = null; }
+  if (blOpen) {
+    blError = '';
+    renderBlacklist();
+    fetchBlacklist();
+    blRefreshTimer = setInterval(fetchBlacklist, 2000);
   }
 }
 
@@ -2049,6 +3443,75 @@ searchEl.addEventListener('input', (e) => {
 });
 $('#showall-cpu').addEventListener('click', () => { S.showAll.cpu = !S.showAll.cpu; renderPanel('cpu'); });
 $('#showall-mem').addEventListener('click', () => { S.showAll.mem = !S.showAll.mem; renderPanel('mem'); });
+function setLeftMode(mode) {
+  const next = mode === 'energy' ? 'energy' : 'cpu';
+  if (S.leftMode === next) return;
+  S.leftMode = next;
+  $('#cpu-mode-cpu').classList.toggle('on', next === 'cpu');
+  $('#cpu-mode-energy').classList.toggle('on', next === 'energy');
+  $('#left-title').textContent = next === 'energy' ? 'Top Energy' : 'Top CPU';
+  $('#left-swatch').style.background = next === 'energy' ? 'var(--gpu)' : 'var(--cpu)';
+  $('#note-cpu').textContent = next === 'energy'
+    ? 'power & idle wakeups/s'
+    : (S.sys ? `share of ${S.sys.cores} cores` : 'share of all cores');
+  renderPanel('cpu');
+}
+$('#cpu-mode-cpu').addEventListener('click', () => setLeftMode('cpu'));
+$('#cpu-mode-energy').addEventListener('click', () => setLeftMode('energy'));
+$('#bg-items-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setBgModal(!bgOpen);
+});
+$('#bg-close').addEventListener('click', () => setBgModal(false));
+$('#bg-scrim').addEventListener('click', (e) => {
+  if (e.target === $('#bg-scrim')) setBgModal(false);
+});
+$('#bl-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setBlModal(!blOpen);
+});
+$('#bl-close').addEventListener('click', () => setBlModal(false));
+$('#bl-scrim').addEventListener('click', (e) => {
+  if (e.target === $('#bl-scrim')) setBlModal(false);
+});
+$('#bl-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('#bl-input');
+  const sig = $('#bl-sig').value === 'TERM' ? 'TERM' : 'KILL';
+  const pattern = (input.value || '').trim();
+  if (!pattern) return;
+  const res = await postBlacklist({ action: 'add', pattern, sig });
+  if (res) input.value = '';
+});
+$('#bl-list').addEventListener('click', (e) => {
+  const sw = e.target.closest('button.sw');
+  if (sw) {
+    const id = sw.dataset.id;
+    const enabled = sw.getAttribute('aria-checked') !== 'true';
+    postBlacklist({ action: 'toggle', id, enabled });
+    return;
+  }
+  const sigBtn = e.target.closest('.bl-sig');
+  if (sigBtn) {
+    postBlacklist({ action: 'signal', id: sigBtn.dataset.id, sig: sigBtn.dataset.sig });
+    return;
+  }
+  const delBtn = e.target.closest('.bl-del');
+  if (delBtn) {
+    postBlacklist({ action: 'remove', id: delBtn.dataset.id });
+  }
+});
+$('#bg-filters').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-flt]');
+  if (!btn) return;
+  bgFilter = btn.dataset.flt || 'all';
+  document.querySelectorAll('#bg-filters .bg-flt').forEach((b) => b.classList.toggle('on', b === btn));
+  renderBgList();
+});
+$('#bg-search').addEventListener('input', (e) => {
+  bgSearch = e.target.value.trim();
+  renderBgList();
+});
 $('#mem-info').addEventListener('click', (e) => {
   e.stopPropagation();
   setMemPop(!memPop);
@@ -2338,6 +3801,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const cm = $('#ctx-menu');
     if (cm && cm.classList.contains('on')) { closeCtxMenu(); return; }
+    if (blOpen) { setBlModal(false); return; }
+    if (bgOpen) { setBgModal(false); return; }
     if (settingsOpen) { setSettingsModal(false); return; }
     if (memPop) { setMemPop(false); return; }
     if (S.drawerKey) { closeDrawer(); return; }

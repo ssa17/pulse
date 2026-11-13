@@ -83,7 +83,16 @@ function parseSize(v, unit) {
 }
 
 function parseSysctl(out) {
-  const r = { memTotal: 0, cores: 0, swapTotal: 0, swapUsed: 0, load: [0, 0, 0], bootTime: 0 };
+  const r = {
+    memTotal: 0,
+    cores: 0,
+    swapTotal: 0,
+    swapUsed: 0,
+    load: [0, 0, 0],
+    bootTime: 0,
+    memPressureLevel: null,
+    memPressureState: null,
+  };
   if (!out) return r;
   const g = (re) => { const m = out.match(re); return m ? m[1] : null; };
   r.memTotal = +(g(/hw\.memsize:\s*(\d+)/)) || 0;
@@ -94,6 +103,12 @@ function parseSysctl(out) {
   if (la) r.load = [+la[1], +la[2], +la[3]];
   const bt = out.match(/kern\.boottime:\s*\{\s*sec = (\d+)/);
   if (bt) r.bootTime = +bt[1];
+  const mp = g(/kern\.memorystatus_vm_pressure_level:\s*(\d+)/);
+  if (mp !== null) {
+    const level = +mp;
+    r.memPressureLevel = level;
+    r.memPressureState = level >= 4 ? 'critical' : level === 2 ? 'warn' : level === 1 ? 'normal' : null;
+  }
   return r;
 }
 
@@ -117,12 +132,14 @@ function parseTopProcs(out) {
   const map = new Map();
   if (!out) return map;
   for (const line of out.split('\n')) {
-    const m = line.match(/^\s*(\d+)\s+(?:([\d.]+)\s+)?(\d+)([KMGTP]?B?)\s*[+-]?\s*$/);
+    const m = line.match(/^\s*(\d+)\s+(?:([\d.]+)\s+)?(\d+)([KMGTP]?B?)\s*[+-]?(?:\s+([\d.]+|-)[+-]?\s+(\d+)[+-]?)?\s*$/);
     if (!m) continue;
     const mult = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5 }[(m[4] || '')[0]] || 1;
     map.set(+m[1], {
       mem: +m[3] * mult,
       cpu: m[2] !== undefined ? +m[2] : null,
+      power: m[5] !== undefined && m[5] !== '-' ? +m[5] : null,
+      idlew: m[6] !== undefined ? +m[6] : null,
     });
   }
   return map;
@@ -207,6 +224,152 @@ function parseIoregGpu(out) {
     const e = map.get(c[1]);
     if (e) e.ns += ns;
     else map.set(c[1], { name: c[2], ns });
+  }
+  return map;
+}
+
+function parseAssertions(out) {
+  const system = { display: 0, system: 0, preventSystem: 0 };
+  const byPid = new Map();
+  if (!out) return { system, byPid };
+  const gCount = (re) => { const m = out.match(re); return m ? +m[1] : 0; };
+  system.display = gCount(/^\s*PreventUserIdleDisplaySleep\s+(\d+)/m);
+  system.system = gCount(/^\s*PreventUserIdleSystemSleep\s+(\d+)/m);
+  system.preventSystem = gCount(/^\s*PreventSystemSleep\s+(\d+)/m);
+
+  const lineRe = /^\s*pid\s+(\d+)\((.+?)\):\s+\[[^\]]+\]\s+(\S+)\s+(\S+)\s+named:\s+"(.*)"\s*$/;
+  for (const line of out.split('\n')) {
+    const m = line.match(lineRe);
+    if (!m) continue;
+    const pid = +m[1];
+    const proc = m[2].trim();
+    const dur = m[3];
+    const type = m[4];
+    const name = m[5];
+    const preventsSleep = /Prevent(UserIdle)?(System|Display)?Sleep/i.test(type);
+    const entry = { pid, proc, type, name, dur, preventsSleep };
+    const list = byPid.get(pid);
+    if (list) list.push(entry);
+    else byPid.set(pid, [entry]);
+  }
+  return { system, byPid };
+}
+
+function parseBattPower(out) {
+  const r = { external: null, powerW: null, batteryW: null, adapterW: null, minsRemaining: null };
+  if (!out) return r;
+  const ptdMatch = out.match(/"PowerTelemetryData"\s*=\s*\{([^}]*)\}/);
+  const ptd = ptdMatch ? ptdMatch[1] : out;
+  const sl = ptd.match(/"SystemLoad"=(\d+)/);
+  if (sl) r.powerW = +((+sl[1]) / 1000).toFixed(1);
+  const bp = ptd.match(/"BatteryPower"=(\d+)/) || out.match(/"BatteryPower"=(\d+)/);
+  if (bp) r.batteryW = +((+bp[1]) / 1000).toFixed(1);
+  const ad = out.match(/"AdapterDetails"\s*=\s*\{(?:[^{}]|\{[^{}]*\})*"Watts"=(\d+)/);
+  if (ad) r.adapterW = +ad[1];
+  const ext = out.match(/"ExternalConnected"\s*=\s*(Yes|No)/i);
+  if (ext) r.external = ext[1].toLowerCase() === 'yes';
+  const tr = out.match(/"TimeRemaining"\s*=\s*(\d+)/);
+  if (tr) {
+    const n = +tr[1];
+    r.minsRemaining = n > 0 && n < 65535 ? n : null;
+  }
+  return r;
+}
+
+function parseLsofNet(out) {
+  if (!out) return [];
+  const results = [];
+  const seen = new Set();
+  let curPid = null;
+  let curCmd = '';
+  let curSock = null;
+
+  const flush = () => {
+    if (!curSock || !curSock.pid || !curSock.name) return;
+    const proto = curSock.proto || '';
+    const rawName = curSock.name;
+    const arrow = rawName.indexOf('->');
+    const local = arrow >= 0 ? rawName.slice(0, arrow) : rawName;
+    const remote = arrow >= 0 ? rawName.slice(arrow + 2) : null;
+    const state = curSock.state || null;
+    const listening = state === 'LISTEN' || (!remote && !local.includes('->'));
+    const key = `${curSock.pid}|${proto}|${local}|${remote || ''}|${state || ''}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        pid: curSock.pid,
+        cmd: curSock.cmd,
+        proto,
+        local,
+        remote,
+        state,
+        listening,
+      });
+    }
+  };
+
+  for (const line of out.split('\n')) {
+    if (!line) continue;
+    const tag = line[0];
+    const val = line.slice(1);
+    if (tag === 'p') {
+      flush();
+      curPid = +val;
+      curCmd = '';
+      curSock = null;
+    } else if (tag === 'c') {
+      curCmd = val;
+    } else if (tag === 'f') {
+      flush();
+      curSock = { pid: curPid, cmd: curCmd, proto: null, name: null, state: null };
+    } else if (tag === 'P') {
+      if (!curSock || curSock.proto !== null) {
+        flush();
+        curSock = { pid: curPid, cmd: curCmd, proto: null, name: null, state: null };
+      }
+      curSock.proto = val;
+    } else if (tag === 'n') {
+      if (!curSock || curSock.name !== null) {
+        flush();
+        curSock = { pid: curPid, cmd: curCmd, proto: null, name: null, state: null };
+      }
+      curSock.name = val;
+    } else if (tag === 'T' && line.startsWith('TST=') && curSock) {
+      curSock.state = line.slice(4);
+    }
+  }
+  flush();
+
+  const rank = (s) => (s === 'LISTEN' ? 0 : s === 'ESTABLISHED' ? 1 : 2);
+  results.sort((a, b) => rank(a.state) - rank(b.state) || a.pid - b.pid || a.local.localeCompare(b.local));
+  return results;
+}
+
+function parseLaunchctlList(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    const cols = line.includes('\t') ? line.split('\t') : line.trim().split(/\s+/);
+    if (cols.length < 3) continue;
+    const pidStr = cols[0].trim();
+    const statusStr = cols[1].trim();
+    const label = cols.slice(2).join('\t').trim();
+    if (!label || pidStr === 'PID') continue;
+    const pid = pidStr === '-' ? null : (/^\d+$/.test(pidStr) ? +pidStr : null);
+    const status = statusStr === '-' ? null : (/^-?\d+$/.test(statusStr) ? +statusStr : null);
+    map.set(label, { pid, status });
+  }
+  return map;
+}
+
+function parseLaunchctlDisabled(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const line of out.split('\n')) {
+    const m = line.match(/"([^"]+)"\s*=>\s*(disabled|enabled)/i);
+    if (!m) continue;
+    map.set(m[1], m[2].toLowerCase() === 'disabled');
   }
   return map;
 }
@@ -1058,6 +1221,304 @@ function canWritePortFile(existingText, selfPid, checkAlive) {
   assert(isFresh(0, 10000) === false, 'diskReady: no iostat yet → false');
   assert(isFresh(9500, 10000) === true, 'diskReady: fresh iostat → true');
   assert(isFresh(9500, 30000) === false, 'diskReady: stale (>15s) → false');
+}
+
+/* ── parseSysctl (memory pressure levels) ───────────────────────────────── */
+console.log('\n--- parseSysctl (memory pressure) ---');
+{
+  const p1 = parseSysctl('hw.memsize: 17179869184\nkern.memorystatus_vm_pressure_level: 1\n');
+  assert(p1.memPressureLevel === 1 && p1.memPressureState === 'normal', 'pressure level 1 → normal');
+
+  const p2 = parseSysctl('kern.memorystatus_vm_pressure_level: 2');
+  assert(p2.memPressureLevel === 2 && p2.memPressureState === 'warn', 'pressure level 2 → warn');
+
+  const p4 = parseSysctl('kern.memorystatus_vm_pressure_level: 4');
+  assert(p4.memPressureLevel === 4 && p4.memPressureState === 'critical', 'pressure level 4 → critical');
+
+  const p5 = parseSysctl('kern.memorystatus_vm_pressure_level: 5');
+  assert(p5.memPressureLevel === 5 && p5.memPressureState === 'critical', 'pressure level 5 → critical');
+
+  const p0 = parseSysctl('kern.memorystatus_vm_pressure_level: 0');
+  assert(p0.memPressureLevel === 0 && p0.memPressureState === null, 'pressure level 0 → state null');
+
+  const pAbsent = parseSysctl('hw.memsize: 17179869184');
+  assert(pAbsent.memPressureLevel === null && pAbsent.memPressureState === null, 'absent pressure → nulls');
+  assert(parseSysctl(null).memPressureLevel === null && parseSysctl(null).memPressureState === null, 'null input → nulls');
+}
+
+/* ── parseTopProcs (5-col power + idlew + delta markers) ────────────────── */
+console.log('\n--- parseTopProcs (5-col power + idlew) ---');
+{
+  const out5 = `Processes: 765 total, 2 running, 763 sleeping
+2026/11/12 23:32:15
+CPU usage: 5.91% user, 14.58% sys, 79.49% idle
+
+PID    %CPU MEM  POWER IDLEW
+8872   0.0  16G  0.0   8781 
+99856  12.4 910M- 4.5  3036+
+409    0.0  708M+ -    57713-
+0      18.2 24M  1.2   100
+
+Processes: 765 total, 2 running, 763 sleeping
+PID    %CPU MEM  POWER IDLEW
+99856  15.1 912M+ 6.8+ 3099+`;
+
+  const m = parseTopProcs(out5);
+  assert(m.get(8872).power === 0 && m.get(8872).idlew === 8781, '5-col: zero power and idlew parsed');
+  assert(m.get(99856).cpu === 15.1 && m.get(99856).mem === 912 * 1024 ** 2 && m.get(99856).power === 6.8 && m.get(99856).idlew === 3099,
+    '5-col: 2nd sample wins and strips + markers');
+  assert(m.get(409).mem === 708 * 1024 ** 2 && m.get(409).power === null && m.get(409).idlew === 57713,
+    '5-col: "-" power → null, trailing - on idlew stripped');
+  assert(m.get(0).power === 1.2 && m.get(0).idlew === 100, '5-col: PID 0 power and idlew parsed');
+
+  // 3-col backwards compatibility
+  const out3 = `PID    %CPU MEM\n100    2.5  50M-`;
+  const m3 = parseTopProcs(out3);
+  assert(m3.get(100).mem === 50 * 1024 ** 2 && m3.get(100).cpu === 2.5 && m3.get(100).power === null && m3.get(100).idlew === null,
+    '3-col: power & idlew default to null');
+}
+
+/* ── parseAssertions ────────────────────────────────────────────────────── */
+console.log('\n--- parseAssertions ---');
+{
+  const assertOut = `2026-11-12 23:32:14 +0000 
+Assertion status system-wide:
+   BackgroundTask                 0
+   ApplePushServiceTask           0
+   UserIsActive                   1
+   PreventUserIdleDisplaySleep    2
+   SoftwareUpdateTask             0
+   PreventSystemSleep             1
+   PreventSystemSleepSecurityIndicator 4
+   ExternalMedia                  0
+   PreventUserIdleSystemSleep     3
+   NetworkClientActive            0
+Listed by owning process:
+   pid 352(powerd): [0x0001cd2500019ccb] 07:14:55 PreventUserIdleSystemSleep named: "Powerd - Prevent sleep while display is on"  
+   pid 409(WindowServer): [0x0001cd2400099cca] 00:03:33 UserIsActive named: "com.apple.iohideventsystem.queue.tickle"  
+   pid 500(Google Chrome Helper (Renderer)): [0x0001] 00:12:00 PreventUserIdleDisplaySleep named: "Playing video"
+   pid 500(Google Chrome Helper (Renderer)): [0x0002] 00:01:00 PreventSystemSleep named: "Audio playback"`;
+
+  const res = parseAssertions(assertOut);
+  assert(res.system.display === 2, 'system display count');
+  assert(res.system.system === 3, 'system sleep count');
+  assert(res.system.preventSystem === 1, 'system preventSystem count (ignores PreventSystemSleepSecurityIndicator)');
+  assert(res.byPid.size === 3, '3 distinct PIDs');
+  assert(res.byPid.get(352)[0].preventsSleep === true && res.byPid.get(352)[0].dur === '07:14:55', 'powerd preventsSleep=true');
+  assert(res.byPid.get(409)[0].preventsSleep === false && res.byPid.get(409)[0].type === 'UserIsActive', 'UserIsActive preventsSleep=false');
+  assert(res.byPid.get(500).length === 2 && res.byPid.get(500)[0].proc === 'Google Chrome Helper (Renderer)', 'process name with nested parens + multiple assertions');
+
+  const empty = parseAssertions(null);
+  assert(empty.system.display === 0 && empty.system.system === 0 && empty.system.preventSystem === 0 && empty.byPid.size === 0, 'null → empty defaults');
+}
+
+/* ── parseBattPower ─────────────────────────────────────────────────────── */
+console.log('\n--- parseBattPower ---');
+{
+  const ioregOut = `
+  |   "TimeRemaining" = 145
+  |   "ExternalConnected" = Yes
+  |   "AdapterDetails" = {"IsWireless"=No,"AdapterID"=0,"Watts"=140,"UsbHvcMenu"=({"Index"=0,"MaxCurrent"=2960}),"Description"="pd charger"}
+  |   "PowerTelemetryData" = {"SystemEnergyConsumed"=2850,"SystemLoad"=10263,"BatteryPower"=4321}
+  |   "BatteryData" = {"CurrentCapacity"=80,"BatteryPower"=0}`;
+
+  const bp = parseBattPower(ioregOut);
+  assert(bp.powerW === 10.3, 'SystemLoad 10263 mW → 10.3 W');
+  assert(bp.batteryW === 4.3, 'BatteryPower 4321 mW → 4.3 W');
+  assert(bp.adapterW === 140, 'AdapterDetails Watts → 140');
+  assert(bp.external === true, 'ExternalConnected Yes → true');
+  assert(bp.minsRemaining === 145, 'TimeRemaining 145 → 145');
+
+  const ioregUnknownTime = `
+  |   "TimeRemaining" = 65535
+  |   "ExternalConnected" = No
+  |   "AdapterDetails" = {}
+  |   "PowerTelemetryData" = {"SystemLoad"=0,"BatteryPower"=12550}`;
+  const bp2 = parseBattPower(ioregUnknownTime);
+  assert(bp2.minsRemaining === null, 'TimeRemaining 65535 → null');
+  assert(bp2.external === false, 'ExternalConnected No → false');
+  assert(bp2.adapterW === null, 'empty AdapterDetails → adapterW null');
+  assert(bp2.powerW === 0 && bp2.batteryW === 12.6, '0 mW → 0, 12550 mW → 12.6 W');
+
+  const bp0 = parseBattPower('"TimeRemaining" = 0');
+  assert(bp0.minsRemaining === null, 'TimeRemaining 0 → null');
+
+  const bpNull = parseBattPower(null);
+  assertDeepEquals(bpNull, { external: null, powerW: null, batteryW: null, adapterW: null, minsRemaining: null }, 'null input → all null');
+}
+
+/* ── parseLsofNet ───────────────────────────────────────────────────────── */
+console.log('\n--- parseLsofNet ---');
+{
+  const lsofOut = [
+    'p680',
+    'cControlCenter',
+    'f9',
+    'PTCP',
+    'n*:7000',
+    'TST=LISTEN',
+    'TQR=0',
+    'f10',
+    'PTCP',
+    'n*:7000',
+    'TST=LISTEN',
+    'p1234',
+    'cnode',
+    'f12',
+    'PTCP',
+    'n10.0.0.5:54321->142.250.72.14:443',
+    'TST=ESTABLISHED',
+    'f13',
+    'PUDP',
+    'n[::1]:5353',
+    'f14',
+    'PTCP',
+    'n10.0.0.5:54322->1.2.3.4:80',
+    'TST=CLOSE_WAIT',
+  ].join('\n');
+
+  const conns = parseLsofNet(lsofOut);
+  assert(conns.length === 4, 'deduplicates identical *:7000 LISTEN entries');
+  assert(conns[0].state === 'LISTEN' && conns[0].listening === true && conns[0].remote === null && conns[0].local === '*:7000',
+    'LISTEN sorted first with remote=null');
+  assert(conns[1].state === 'ESTABLISHED' && conns[1].listening === false && conns[1].local === '10.0.0.5:54321' && conns[1].remote === '142.250.72.14:443',
+    'ESTABLISHED splits -> into local/remote');
+  const cw = conns.find((c) => c.state === 'CLOSE_WAIT');
+  const udp = conns.find((c) => c.proto === 'UDP');
+  assert(cw && cw.listening === false && conns.indexOf(cw) >= 2, 'CLOSE_WAIT after ESTABLISHED');
+  assert(udp && udp.local === '[::1]:5353' && udp.listening === true && udp.state === null && conns.indexOf(udp) >= 2,
+    'UDP socket without remote has listening=true and state=null');
+  assert(parseLsofNet(null).length === 0 && parseLsofNet('').length === 0, 'null/empty → []');
+}
+
+/* ── parseLaunchctlList & parseLaunchctlDisabled ────────────────────────── */
+console.log('\n--- parseLaunchctlList & parseLaunchctlDisabled ---');
+{
+  const listOut = [
+    'PID\tStatus\tLabel',
+    '-\t0\tcom.apple.SafariHistoryServiceAgent',
+    '1097\t0\tcom.apple.progressd',
+    '-\t-15\tcom.example.crashed',
+    '-\t-\tcom.example.nostatus',
+  ].join('\n');
+
+  const lm = parseLaunchctlList(listOut);
+  assert(lm.size === 4, 'header skipped, 4 entries parsed');
+  assertDeepEquals(lm.get('com.apple.SafariHistoryServiceAgent'), { pid: null, status: 0 }, 'unloaded/idle pid=-');
+  assertDeepEquals(lm.get('com.apple.progressd'), { pid: 1097, status: 0 }, 'running pid=1097');
+  assertDeepEquals(lm.get('com.example.crashed'), { pid: null, status: -15 }, 'negative exit status');
+  assertDeepEquals(lm.get('com.example.nostatus'), { pid: null, status: null }, 'dash status → null');
+  assert(parseLaunchctlList(null).size === 0, 'null list → empty map');
+
+  const disOut = `
+\tdisabled services = {
+\t\t"com.apple.ManagedClientAgent.enrollagent" => disabled
+\t\t"com.ollama.ollama" => enabled
+\t\t"com.apple.Siri.agent" => disabled
+\t}`;
+  const dm = parseLaunchctlDisabled(disOut);
+  assert(dm.size === 3, '3 disabled-state entries');
+  assert(dm.get('com.apple.ManagedClientAgent.enrollagent') === true, 'disabled → true');
+  assert(dm.get('com.ollama.ollama') === false, 'enabled → false');
+  assert(parseLaunchctlDisabled(null).size === 0, 'null disabled → empty map');
+}
+
+/* ── blacklist helpers ──────────────────────────────────────────────────── */
+console.log('\n--- blacklist helpers ---');
+{
+  const PROTECTED_BLACKLIST_NAMES = new Set([
+    'kernel_task', 'launchd', 'WindowServer', 'loginwindow',
+    'Finder', 'Dock', 'SystemUIServer', 'ControlCenter',
+    'SecurityAgent', 'coreaudiod', 'diskarbitrationd', 'apfsd',
+    'opendirectoryd', 'notifyd', 'UserEventAgent', 'distnoted',
+    'cfprefsd', 'tccd', 'trustd', 'Pulse', 'pulse-thermal',
+  ]);
+  function isProtectedTarget({ pid, name, exe, bundle, selfPid = 999, selfPpid = 888, serverDir = '/app' } = {}) {
+    if (pid != null && (pid === 0 || pid === 1)) return 'Cannot auto-kill kernel_task or launchd (pid 0/1)';
+    if (pid != null && (pid === selfPid || pid === selfPpid)) return 'Cannot auto-kill Pulse or its parent process';
+    const exeBase = exe ? path.basename(exe) : '';
+    const bundleBase = bundle ? path.basename(bundle) : '';
+    if ((name && PROTECTED_BLACKLIST_NAMES.has(name)) || (exeBase && PROTECTED_BLACKLIST_NAMES.has(exeBase))) {
+      return `Refusing to auto-kill protected system or Pulse process (${name || exeBase})`;
+    }
+    if (bundleBase === 'Pulse.app' || (exe && (exe.includes('/Pulse.app/') || (serverDir && exe === path.join(serverDir, 'server.js'))))) {
+      return 'Refusing to auto-kill Pulse';
+    }
+    return null;
+  }
+  function normalizeBlacklistRule(input) {
+    if (!input || typeof input !== 'object') throw new Error('invalid blacklist rule');
+    let pattern = typeof input.pattern === 'string' ? input.pattern.trim() : '';
+    if (!pattern || pattern.includes('\0')) throw new Error('pattern is required');
+    if (pattern.startsWith('/') && pattern.length > 1) pattern = pattern.replace(/\/+$/, '') || '/';
+    let matchType = input.matchType;
+    if (matchType !== 'bundle' && matchType !== 'exe' && matchType !== 'name') {
+      if (pattern.startsWith('/') && pattern.endsWith('.app')) matchType = 'bundle';
+      else if (pattern.startsWith('/')) matchType = 'exe';
+      else matchType = 'name';
+    }
+    if ((matchType === 'bundle' || matchType === 'exe') && !pattern.startsWith('/')) {
+      throw new Error(`${matchType} pattern must be an absolute path`);
+    }
+    if (matchType === 'bundle' || matchType === 'exe') pattern = path.resolve(pattern);
+    const baseLabel = path.basename(pattern, matchType === 'bundle' ? '.app' : undefined) || pattern;
+    const label = (typeof input.label === 'string' && input.label.trim()) ? input.label.trim() : baseLabel;
+    const protectedErr = isProtectedTarget({
+      name: matchType === 'name' ? pattern : baseLabel,
+      exe: matchType === 'exe' ? pattern : null,
+      bundle: matchType === 'bundle' ? pattern : null,
+    });
+    if (protectedErr) throw new Error(protectedErr);
+    return {
+      id: `${matchType}:${pattern}`,
+      matchType,
+      pattern,
+      label,
+      sig: input.sig === 'TERM' ? 'TERM' : 'KILL',
+      enabled: input.enabled !== false,
+    };
+  }
+  function matchesBlacklistRule(rule, proc, group) {
+    if (!rule || !rule.enabled || !proc || !(proc.pid > 1)) return false;
+    if (rule.matchType === 'bundle') {
+      return (group && group.bundle === rule.pattern)
+        || !!(proc.exe && (proc.exe === rule.pattern || proc.exe.startsWith(rule.pattern + '/')));
+    }
+    if (rule.matchType === 'exe') return proc.exe === rule.pattern;
+    if (rule.matchType === 'name') {
+      const needle = rule.pattern.toLowerCase();
+      return (proc.name || '').toLowerCase() === needle
+        || !!(group && (group.name || '').toLowerCase() === needle);
+    }
+    return false;
+  }
+
+  assert(isProtectedTarget({ pid: 0 }) !== null, 'blocks pid 0 kernel_task');
+  assert(isProtectedTarget({ pid: 1 }) !== null, 'blocks pid 1 launchd');
+  assert(isProtectedTarget({ pid: 999 }) !== null, 'blocks self pid');
+  assert(isProtectedTarget({ name: 'WindowServer' }) !== null, 'blocks WindowServer');
+  assert(isProtectedTarget({ bundle: '/Applications/Pulse.app' }) !== null, 'blocks Pulse.app');
+  assert(isProtectedTarget({ pid: 33178, name: 'Siri AI', bundle: '/System/Applications/Siri AI.app' }) === null, 'allows Siri AI');
+  assert(isProtectedTarget({ pid: 639, name: 'assistantd', exe: '/System/Library/PrivateFrameworks/AssistantServices.framework/Versions/A/Support/assistantd' }) === null, 'allows assistantd');
+
+  const rBundle = normalizeBlacklistRule({ pattern: '/System/Applications/Siri AI.app' });
+  assert(rBundle.matchType === 'bundle' && rBundle.label === 'Siri AI' && rBundle.sig === 'KILL', 'infers bundle rule for .app');
+  const rBundleSlash = normalizeBlacklistRule({ pattern: '/System/Applications/Siri AI.app/' });
+  assert(rBundleSlash.matchType === 'bundle' && rBundleSlash.pattern === '/System/Applications/Siri AI.app', 'strips trailing slash before bundle detection');
+  const rExe = normalizeBlacklistRule({ pattern: '/usr/libexec/siriknowledged', sig: 'TERM' });
+  assert(rExe.matchType === 'exe' && rExe.label === 'siriknowledged' && rExe.sig === 'TERM', 'infers exe rule for /path');
+  const rName = normalizeBlacklistRule({ pattern: 'assistantd' });
+  assert(rName.matchType === 'name' && rName.id === 'name:assistantd', 'infers name rule for bare name');
+
+  let threw = false;
+  try { normalizeBlacklistRule({ pattern: 'launchd' }); } catch { threw = true; }
+  assert(threw, 'rejects protected launchd rule');
+
+  assert(matchesBlacklistRule(rBundle, { pid: 33178, name: 'Siri AI', exe: '/System/Applications/Siri AI.app/Contents/MacOS/Siri AI' }, { bundle: '/System/Applications/Siri AI.app', name: 'Siri AI' }), 'bundle matches child process');
+  assert(!matchesBlacklistRule(rBundle, { pid: 123, name: 'Safari', exe: '/Applications/Safari.app/Contents/MacOS/Safari' }, { bundle: '/Applications/Safari.app', name: 'Safari' }), 'bundle does not match Safari');
+  assert(matchesBlacklistRule(rName, { pid: 639, name: 'assistantd', exe: '/foo/assistantd' }, null), 'name matches exact case-insensitive');
+  assert(!matchesBlacklistRule({ ...rName, enabled: false }, { pid: 639, name: 'assistantd', exe: '/foo/assistantd' }, null), 'paused rule never matches');
+  assert(!matchesBlacklistRule(rName, { pid: 640, name: 'my_assistantd_wrapper', exe: '/foo' }, null), 'name does not substring match');
 }
 
 // ---------------------------------------------------------------------------

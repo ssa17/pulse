@@ -91,13 +91,67 @@ def make_dmg
   # Stable name (no version) so the README's "latest download" link
   # (releases/latest/download/Pulse.dmg) keeps working across releases.
   dmg_path = "#{OUTPUT_DIR}/#{APP_NAME}.dmg"
+  rw_dmg   = "#{OUTPUT_DIR}/#{APP_NAME}-rw.dmg"
   File.delete(dmg_path) if File.exist?(dmg_path)
-  # Stage the app + an Applications symlink (the classic drag-to-install layout).
+  File.delete(rw_dmg)   if File.exist?(rw_dmg)
+
+  bg_path = File.join(PROJECT_DIR, "app", "dmg-background.png")
+  system("node '#{File.join(PROJECT_DIR, "app", "make-dmg-bg.mjs")}' '#{bg_path}'")
+
+  # Stage the app + Applications symlink + hidden background + volume icon.
   stage = Dir.mktmpdir("pulse-dmg")
   system("cp -R '#{APP_BUNDLE}' '#{stage}/'")
   system("ln -s /Applications '#{stage}/Applications'")
-  system("hdiutil create -volname '#{APP_NAME}' -srcfolder '#{stage}' -ov -format UDZO '#{dmg_path}'")
+  bg_dir = File.join(stage, ".background")
+  FileUtils.mkdir_p(bg_dir)
+  FileUtils.cp(bg_path, File.join(bg_dir, "background.png")) if File.exist?(bg_path)
+
+  icns_src = File.join(APP_BUNDLE, "Contents", "Resources", "#{APP_NAME}.icns")
+  if File.exist?(icns_src)
+    FileUtils.cp(icns_src, File.join(stage, ".VolumeIcon.icns"))
+    system("SetFile -a C '#{stage}' 2>/dev/null || xcrun SetFile -a C '#{stage}' 2>/dev/null || true")
+  end
+
+  system("hdiutil create -volname '#{APP_NAME}' -srcfolder '#{stage}' -ov -format UDRW '#{rw_dmg}'")
   FileUtils.rm_rf(stage)
+
+  # Apply Finder window layout (background image, icon positions, window size).
+  mount_out = `hdiutil attach -readwrite -noverify -noautoopen '#{rw_dmg}'`
+  mount_pt = mount_out.lines.reverse.map { |l| l.split("\t").last&.strip }.find { |p| p&.start_with?("/Volumes/") }
+  if mount_pt && File.directory?(mount_pt)
+    vol_name = File.basename(mount_pt)
+    applescript = <<~APPLESCRIPT
+      tell application "Finder"
+        tell disk "#{vol_name}"
+          open
+          set current view of container window to icon view
+          set toolbar visible of container window to false
+          set statusbar visible of container window to false
+          set the bounds of container window to {200, 140, 860, 568}
+          set viewOptions to the icon view options of container window
+          set arrangement of viewOptions to not arranged
+          set icon size of viewOptions to 112
+          set text size of viewOptions to 13
+          set background picture of viewOptions to file ".background:background.png"
+          set position of item "#{APP_NAME}.app" of container window to {185, 195}
+          set position of item "Applications" of container window to {475, 195}
+          close
+          open
+          update without registering applications
+          delay 1
+          close
+        end tell
+      end tell
+    APPLESCRIPT
+    unless system("osascript", "-e", applescript)
+      UI.warn "Finder DMG layout skipped (headless session?); continuing with unstyled DMG."
+    end
+    system("sync")
+    system("hdiutil detach '#{mount_pt}' -quiet || hdiutil detach '#{mount_pt}' -force -quiet")
+  end
+
+  system("hdiutil convert '#{rw_dmg}' -format UDZO -imagekey zlib-level=9 -o '#{dmg_path}'")
+  File.delete(rw_dmg) if File.exist?(rw_dmg)
   UI.success "Created #{dmg_path} (v#{app_version})"
   dmg_path
 end

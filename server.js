@@ -193,7 +193,15 @@ function parseSize(v, unit) {
 }
 
 function parseSysctl(out) {
-  const r = { memTotal: 0, cores: os.cpus().length, swapTotal: 0, swapUsed: 0, bootTime: 0 };
+  const r = {
+    memTotal: 0,
+    cores: os.cpus().length,
+    swapTotal: 0,
+    swapUsed: 0,
+    bootTime: 0,
+    memPressureLevel: null,
+    memPressureState: null,
+  };
   if (!out) return r;
   const g = (re) => { const m = out.match(re); return m ? m[1] : null; };
   r.memTotal = +(g(/hw\.memsize:\s*(\d+)/)) || 0;
@@ -202,6 +210,12 @@ function parseSysctl(out) {
   if (sw) { r.swapTotal = parseSize(sw[1], sw[2]); r.swapUsed = parseSize(sw[3], sw[4]); }
   const bt = out.match(/kern\.boottime:\s*\{\s*sec = (\d+)/);
   if (bt) r.bootTime = +bt[1];
+  const mp = g(/kern\.memorystatus_vm_pressure_level:\s*(\d+)/);
+  if (mp !== null) {
+    const level = +mp;
+    r.memPressureLevel = level;
+    r.memPressureState = level >= 4 ? 'critical' : level === 2 ? 'warn' : level === 1 ? 'normal' : null;
+  }
   return r;
 }
 
@@ -277,7 +291,7 @@ function computeCoreClusterLoads(prevCpus, curCpus, eCount) {
 }
 
 /**
- * top -F -l 2 -n 800 -o mem -stats pid,cpu,mem → pid → { mem, cpu }.
+ * top -F -l 2 -n 2000 -o mem -stats pid,cpu,mem,power,idlew → pid → { mem, cpu, power, idlew }.
  * The MEM column is the kernel's phys_footprint — the same number Activity
  * Monitor shows: RSS with shared file pages (dyld shared cache, app bundles)
  * excluded, so apps stop double-counting each other. `top` is an Apple
@@ -288,19 +302,21 @@ function computeCoreClusterLoads(prevCpus, curCpus, eCount) {
  * Format quirks: top prints the whole header (incl. the PID/MEM column line)
  * once per sample, so the last occurrence of a pid wins; values are
  * human-scaled (1456K / 646M / 22G, never decimal) with a trailing +/-/space
- * delta marker that is stripped; -o mem sorts by memory so -n 800 keeps the
+ * delta marker that is stripped; -o mem sorts by memory so -n 2000 keeps the
  * ones that matter — anything unlisted (sub-MB tail) falls back to RSS.
  */
 function parseTopProcs(out) {
   const map = new Map();
   if (!out) return map;
   for (const line of out.split('\n')) {
-    const m = line.match(/^\s*(\d+)\s+(?:([\d.]+)\s+)?(\d+)([KMGTP]?B?)\s*[+-]?\s*$/);
+    const m = line.match(/^\s*(\d+)\s+(?:([\d.]+)\s+)?(\d+)([KMGTP]?B?)\s*[+-]?(?:\s+([\d.]+|-)[+-]?\s+(\d+)[+-]?)?\s*$/);
     if (!m) continue;
     const mult = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5 }[(m[4] || '')[0]] || 1;
     map.set(+m[1], {
       mem: +m[3] * mult,
       cpu: m[2] !== undefined ? +m[2] : null,
+      power: m[5] !== undefined && m[5] !== '-' ? +m[5] : null,
+      idlew: m[6] !== undefined ? +m[6] : null,
     });
   }
   return map;
@@ -428,6 +444,167 @@ function parseGpuMem(out) {
   if (!out) return null;
   const m = out.match(/"In use system memory"\s*=\s*(\d+)/);
   return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * `pmset -g assertions` → system-wide assertion counts + per-PID assertion entries.
+ */
+function parseAssertions(out) {
+  const system = { display: 0, system: 0, preventSystem: 0 };
+  const byPid = new Map();
+  if (!out) return { system, byPid };
+  const gCount = (re) => { const m = out.match(re); return m ? +m[1] : 0; };
+  system.display = gCount(/^\s*PreventUserIdleDisplaySleep\s+(\d+)/m);
+  system.system = gCount(/^\s*PreventUserIdleSystemSleep\s+(\d+)/m);
+  system.preventSystem = gCount(/^\s*PreventSystemSleep\s+(\d+)/m);
+
+  const lineRe = /^\s*pid\s+(\d+)\((.+?)\):\s+\[[^\]]+\]\s+(\S+)\s+(\S+)\s+named:\s+"(.*)"\s*$/;
+  for (const line of out.split('\n')) {
+    const m = line.match(lineRe);
+    if (!m) continue;
+    const pid = +m[1];
+    const proc = m[2].trim();
+    const dur = m[3];
+    const type = m[4];
+    const name = m[5];
+    const preventsSleep = /Prevent(UserIdle)?(System|Display)?Sleep/i.test(type);
+    const entry = { pid, proc, type, name, dur, preventsSleep };
+    const list = byPid.get(pid);
+    if (list) list.push(entry);
+    else byPid.set(pid, [entry]);
+  }
+  return { system, byPid };
+}
+
+/**
+ * `ioreg -r -w0 -c AppleSmartBattery` → power telemetry & adapter/battery details.
+ */
+function parseBattPower(out) {
+  const r = { external: null, powerW: null, batteryW: null, adapterW: null, minsRemaining: null };
+  if (!out) return r;
+  const ptdMatch = out.match(/"PowerTelemetryData"\s*=\s*\{([^}]*)\}/);
+  const ptd = ptdMatch ? ptdMatch[1] : out;
+  const sl = ptd.match(/"SystemLoad"=(\d+)/);
+  if (sl) r.powerW = +((+sl[1]) / 1000).toFixed(1);
+  const bp = ptd.match(/"BatteryPower"=(\d+)/) || out.match(/"BatteryPower"=(\d+)/);
+  if (bp) r.batteryW = +((+bp[1]) / 1000).toFixed(1);
+  const ad = out.match(/"AdapterDetails"\s*=\s*\{(?:[^{}]|\{[^{}]*\})*"Watts"=(\d+)/);
+  if (ad) r.adapterW = +ad[1];
+  const ext = out.match(/"ExternalConnected"\s*=\s*(Yes|No)/i);
+  if (ext) r.external = ext[1].toLowerCase() === 'yes';
+  const tr = out.match(/"TimeRemaining"\s*=\s*(\d+)/);
+  if (tr) {
+    const n = +tr[1];
+    r.minsRemaining = n > 0 && n < 65535 ? n : null;
+  }
+  return r;
+}
+
+/**
+ * `lsof -nP -a -p <pids> -i -F pcnTP -w` → array of unique network endpoints.
+ */
+function parseLsofNet(out) {
+  if (!out) return [];
+  const results = [];
+  const seen = new Set();
+  let curPid = null;
+  let curCmd = '';
+  let curSock = null;
+
+  const flush = () => {
+    if (!curSock || !curSock.pid || !curSock.name) return;
+    const proto = curSock.proto || '';
+    const rawName = curSock.name;
+    const arrow = rawName.indexOf('->');
+    const local = arrow >= 0 ? rawName.slice(0, arrow) : rawName;
+    const remote = arrow >= 0 ? rawName.slice(arrow + 2) : null;
+    const state = curSock.state || null;
+    const listening = state === 'LISTEN' || (!remote && !local.includes('->'));
+    const key = `${curSock.pid}|${proto}|${local}|${remote || ''}|${state || ''}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        pid: curSock.pid,
+        cmd: curSock.cmd,
+        proto,
+        local,
+        remote,
+        state,
+        listening,
+      });
+    }
+  };
+
+  for (const line of out.split('\n')) {
+    if (!line) continue;
+    const tag = line[0];
+    const val = line.slice(1);
+    if (tag === 'p') {
+      flush();
+      curPid = +val;
+      curCmd = '';
+      curSock = null;
+    } else if (tag === 'c') {
+      curCmd = val;
+    } else if (tag === 'f') {
+      flush();
+      curSock = { pid: curPid, cmd: curCmd, proto: null, name: null, state: null };
+    } else if (tag === 'P') {
+      if (!curSock || curSock.proto !== null) {
+        flush();
+        curSock = { pid: curPid, cmd: curCmd, proto: null, name: null, state: null };
+      }
+      curSock.proto = val;
+    } else if (tag === 'n') {
+      if (!curSock || curSock.name !== null) {
+        flush();
+        curSock = { pid: curPid, cmd: curCmd, proto: null, name: null, state: null };
+      }
+      curSock.name = val;
+    } else if (tag === 'T' && line.startsWith('TST=') && curSock) {
+      curSock.state = line.slice(4);
+    }
+  }
+  flush();
+
+  const rank = (s) => (s === 'LISTEN' ? 0 : s === 'ESTABLISHED' ? 1 : 2);
+  results.sort((a, b) => rank(a.state) - rank(b.state) || a.pid - b.pid || a.local.localeCompare(b.local));
+  return results;
+}
+
+/**
+ * `launchctl list` → Map<label, { pid, status }>.
+ */
+function parseLaunchctlList(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    const cols = line.includes('\t') ? line.split('\t') : line.trim().split(/\s+/);
+    if (cols.length < 3) continue;
+    const pidStr = cols[0].trim();
+    const statusStr = cols[1].trim();
+    const label = cols.slice(2).join('\t').trim();
+    if (!label || pidStr === 'PID') continue;
+    const pid = pidStr === '-' ? null : (/^\d+$/.test(pidStr) ? +pidStr : null);
+    const status = statusStr === '-' ? null : (/^-?\d+$/.test(statusStr) ? +statusStr : null);
+    map.set(label, { pid, status });
+  }
+  return map;
+}
+
+/**
+ * `launchctl print-disabled gui/<uid>` → Map<label, boolean>.
+ */
+function parseLaunchctlDisabled(out) {
+  const map = new Map();
+  if (!out) return map;
+  for (const line of out.split('\n')) {
+    const m = line.match(/"([^"]+)"\s*=>\s*(disabled|enabled)/i);
+    if (!m) continue;
+    map.set(m[1], m[2].toLowerCase() === 'disabled');
+  }
+  return map;
 }
 
 // Status-menu row ids. settings.json stores an ordered SUBSET under `menuRows`
@@ -587,7 +764,20 @@ const KNOWN = {
   nsurlsessiond: 'URL session daemon',
   storeuid: 'App Store UI',
   appstoreagent: 'App Store agent',
-  softwareupdated: 'Software Update daemon',
+  softwareupdated: 'macOS Software Update daemon',
+  mobileassetd: 'macOS background system asset & update downloads',
+  accessoryupdaterd: 'Apple accessory firmware updater',
+  uarpd: 'Accessory firmware update daemon',
+  xprotectd: 'macOS built-in malware protection (XProtect)',
+  XprotectService: 'macOS XProtect background malware scanner',
+  wdavdaemon: 'Microsoft Defender background scanner & definition updater',
+  wdavdaemon_unprivileged: 'Microsoft Defender helper daemon',
+  mdatp: 'Microsoft Defender for Endpoint daemon',
+  'Microsoft AutoUpdate': 'Microsoft Office & Defender updater',
+  'Microsoft Update Assistant': 'Microsoft background update assistant',
+  GoogleUpdater: 'Google apps background updater',
+  ksfetch: 'Google Keystone update fetcher',
+  ksadmin: 'Google Keystone update manager',
   diskarbitrationd: 'Disk arbitration',
   apfsd: 'APFS file system daemon',
   powerd: 'Power management',
@@ -656,7 +846,7 @@ let lastStatus = null;
 let sampleCount = 0;
 let sampleInFlight = null;
 let pendingFastSample = false;
-let lastTopProcs = new Map(); // pid → { mem, cpu } from most recent valid `top`
+let lastTopProcs = new Map(); // pid → { mem, cpu, power, idlew } from most recent valid `top`
 let lastTopCpu = { user: 0, sys: 0, idle: 100, total: 0 };
 let lastKernelCpu = 0; // raw %CPU for PID 0 from most recent 2-sample `top`
 let lastTopCpuT = 0;
@@ -665,6 +855,10 @@ let lastSnapshotReq = 0;
 let prevHostCpus = os.cpus();
 let lastDiskMbps = 0;
 let lastDiskT = 0;
+let prevIdlew = new Map(); // pid → cumulative idle wakeups from most recent `top`
+let prevIdlewT = 0;
+let lastIdlewRate = new Map(); // pid → wakeups/sec
+let lastKnownPaths = new Set(); // resolved exe & bundle paths from latest sample (for /api/reveal)
 const clients = new Set();
 
 // Network: `netstat -ib` can take seconds on machines with many interfaces,
@@ -675,6 +869,9 @@ let netRate = { down: 0, up: 0 };
 let netRateReady = false;
 let netBusy = false;
 let lastBattOut = null;
+let lastThermOut = null;
+let lastAssertOut = null;
+let lastBattIoregOut = null;
 let lastBattT = 0;
 // GPU: cumulative per-client accumulatedGPUTime from the previous tick (the
 // delta over the real interval is utilization). Apple Silicon only — on other
@@ -812,30 +1009,42 @@ async function sample(fast = false) {
   kickThermal(); // background — never blocks the sample
 
   let topOut = null, iostatOut = null;
-  let psMain, psArgs, vmOut, sysOut, battOut, gpuOut, accelOut;
-  const needBatt = !lastBattOut || Date.now() - lastBattT >= 4500;
+  let psMain, psArgs, vmOut, sysOut, battOut, thermOut, assertOut, battIoregOut, gpuOut, accelOut;
+  const needBatt = !lastBattT || Date.now() - lastBattT >= 4500;
+  const sysctlArgs = ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime', 'kern.memorystatus_vm_pressure_level'];
+  const battProm = () => needBatt ? run('pmset', ['-g', 'batt']) : Promise.resolve(lastBattOut);
+  const thermProm = () => needBatt ? run('pmset', ['-g', 'therm']) : Promise.resolve(lastThermOut);
+  const assertProm = () => needBatt ? run('pmset', ['-g', 'assertions']) : Promise.resolve(lastAssertOut);
+  const battIoregProm = () => needBatt ? run('ioreg', ['-r', '-w0', '-c', 'AppleSmartBattery'], 2500) : Promise.resolve(lastBattIoregOut);
+
   if (useFast) {
-    [psMain, psArgs, vmOut, sysOut, topOut, battOut, gpuOut, accelOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, topOut, battOut, thermOut, assertOut, battIoregOut, gpuOut, accelOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
-      run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
-      run('top', ['-F', '-l', '1', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem'], 4000),
-      needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
+      run('sysctl', sysctlArgs),
+      run('top', ['-F', '-l', '1', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem,power,idlew'], 4000),
+      battProm(),
+      thermProm(),
+      assertProm(),
+      battIoregProm(),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
       run('ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator'], 4000),
     ]);
   } else if (activeViewer) {
     [topOut, iostatOut] = await Promise.all([
-      run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem', '-s', '1'], 6000),
+      run('top', ['-F', '-l', '2', '-n', '2000', '-o', 'mem', '-stats', 'pid,cpu,mem,power,idlew', '-s', '1'], 6000),
       run('iostat', ['-d', '-c', '2', '-w', '1'], 6000),
     ]);
-    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut, accelOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, battOut, thermOut, assertOut, battIoregOut, gpuOut, accelOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
-      run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
-      needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
+      run('sysctl', sysctlArgs),
+      battProm(),
+      thermProm(),
+      assertProm(),
+      battIoregProm(),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
       run('ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator'], 4000),
     ]);
@@ -845,21 +1054,31 @@ async function sample(fast = false) {
     // Sleep 1s to preserve the 1s delta window and read system CPU in-process
     // via os.cpus() (host_processor_info).
     await new Promise((r) => setTimeout(r, 1000));
-    [psMain, psArgs, vmOut, sysOut, battOut, gpuOut, accelOut] = await Promise.all([
+    [psMain, psArgs, vmOut, sysOut, battOut, thermOut, assertOut, battIoregOut, gpuOut, accelOut] = await Promise.all([
       run('ps', ['-axo', 'pid=,ppid=,user=,time=,pcpu=,rss=,vsz=,stat=,etime=,comm=']),
       run('ps', ['-axo', 'pid=,args=']),
       run('vm_stat'),
-      run('sysctl', ['hw.memsize', 'hw.ncpu', 'vm.swapusage', 'kern.boottime']),
-      needBatt ? run('pmset', ['-g', 'batt', '-g', 'therm']) : Promise.resolve(lastBattOut),
+      run('sysctl', sysctlArgs),
+      battProm(),
+      thermProm(),
+      assertProm(),
+      battIoregProm(),
       run('ioreg', ['-r', '-l', '-c', 'AGXDeviceUserClient'], 4000),
       run('ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator'], 4000),
     ]);
   }
-  if (needBatt && battOut) { lastBattOut = battOut; lastBattT = Date.now(); }
+  if (needBatt) {
+    if (battOut != null) lastBattOut = battOut;
+    if (thermOut != null) lastThermOut = thermOut;
+    if (assertOut != null) lastAssertOut = assertOut;
+    if (battIoregOut != null) lastBattIoregOut = battIoregOut;
+    if (battOut || thermOut || assertOut || battIoregOut) lastBattT = Date.now();
+  }
   const curCpuTemp = Date.now() - lastCpuTempT < 15000 ? lastCpuTemp : null;
-  if (battOut || curCpuTemp !== lastTherm.cpu) {
+  const effectiveThermOut = thermOut || lastThermOut;
+  if (effectiveThermOut || curCpuTemp !== lastTherm.cpu) {
     // min/max are sampler-lifetime state, not pmset-derived — attach, don't parse.
-    lastTherm = { ...parseTherm(battOut || lastBattOut, curCpuTemp), min: thermalMin, max: thermalMax };
+    lastTherm = { ...parseTherm(effectiveThermOut, curCpuTemp), min: thermalMin, max: thermalMax };
   }
   if (accelOut) {
     const gm = parseGpuMem(accelOut);
@@ -896,7 +1115,21 @@ async function sample(fast = false) {
     const parsedTop = parseTopProcs(topOut);
     if (parsedTop.size) {
       lastTopProcs = parsedTop;
-      lastFullSampleTime = Date.now();
+      const topNow = Date.now();
+      lastFullSampleTime = topNow;
+      const idt = prevIdlewT ? Math.max((topNow - prevIdlewT) / 1000, 0.2) : dt;
+      const freshIdlewWindow = prevIdlewT > 0 && (topNow - prevIdlewT) < 15000;
+      for (const [pid, entry] of parsedTop) {
+        if (entry.idlew != null) {
+          const prev = prevIdlew.get(pid);
+          const rate = (freshIdlewWindow && prev !== undefined && entry.idlew >= prev)
+            ? +((entry.idlew - prev) / idt).toFixed(1)
+            : 0;
+          lastIdlewRate.set(pid, rate);
+          prevIdlew.set(pid, entry.idlew);
+        }
+      }
+      prevIdlewT = topNow;
     }
     // The `CPU usage:` line (and PID 0's %CPU) are RATES: with a single-shot
     // sample (-l 1 fast path) they reflect average-SINCE-BOOT / 0, not current
@@ -910,9 +1143,16 @@ async function sample(fast = false) {
       lastTopCpu = hostCpu;
       lastTopCpuT = Date.now();
     }
-  } else if (hostCpu) {
-    lastTopCpu = hostCpu;
-    lastTopCpuT = Date.now();
+  } else {
+    if (Date.now() - lastFullSampleTime >= 15000) {
+      prevIdlew.clear();
+      lastIdlewRate.clear();
+      prevIdlewT = 0;
+    }
+    if (hostCpu) {
+      lastTopCpu = hostCpu;
+      lastTopCpuT = Date.now();
+    }
   }
   if (iostatOut) { lastDiskMbps = parseIostat(iostatOut); lastDiskT = Date.now(); }
 
@@ -937,6 +1177,7 @@ async function sample(fast = false) {
     }
   }
   const topProcs = lastTopProcs;
+  const topFresh = lastFullSampleTime > 0 && (psNow - lastFullSampleTime < 15000);
   const seen = new Set();
   for (const p of procs.values()) {
     seen.add(p.pid);
@@ -952,10 +1193,15 @@ async function sample(fast = false) {
     p.name = path.basename(p.exe) || 'unknown';
     // Physical footprint (top) — the Activity Monitor number — with ps RSS as
     // the fallback for pids top didn't list (sub-MB tail beyond top-2000).
-    p.mem = topProcs.get(p.pid)?.mem ?? p.rss * 1024;
+    const tp = topProcs.get(p.pid);
+    p.mem = tp?.mem ?? p.rss * 1024;
+    p.power = topFresh && tp && tp.power != null ? +tp.power.toFixed(1) : null;
+    p.wakeups = topFresh ? (lastIdlewRate.get(p.pid) ?? 0) : 0;
   }
   for (const pid of prevCpuTime.keys()) if (!seen.has(pid)) prevCpuTime.delete(pid);
   for (const pid of lastTopProcs.keys()) if (pid > 0 && !seen.has(pid)) lastTopProcs.delete(pid);
+  for (const pid of prevIdlew.keys()) if (pid > 0 && !seen.has(pid)) prevIdlew.delete(pid);
+  for (const pid of lastIdlewRate.keys()) if (pid > 0 && !seen.has(pid)) lastIdlewRate.delete(pid);
   // BSD `ps` never lists PID 0 (`kernel_task`), whereas `top` does — surface it
   // so kernel CPU/memory load shows up in the panels like Activity Monitor.
   const k = topProcs.get(0);
@@ -969,7 +1215,16 @@ async function sample(fast = false) {
       name: 'kernel_task', args: 'kernel_task',
       cpu: Math.max(0, kCpu / cores),
       mem: k.mem,
+      power: topFresh && k.power != null ? +k.power.toFixed(1) : null,
+      wakeups: topFresh ? (lastIdlewRate.get(0) ?? 0) : 0,
     });
+  }
+
+  // ---- sleep assertions ----
+  const assertData = parseAssertions(assertOut || lastAssertOut);
+  let sleepBlockerCount = 0;
+  for (const list of assertData.byPid.values()) {
+    if (list.some((a) => a.preventsSleep)) sleepBlockerCount++;
   }
 
   // ---- group into apps ----
@@ -980,13 +1235,17 @@ async function sample(fast = false) {
     if (!grp) {
       grp = {
         key: g.key, name: g.name, kind: g.kind, bundle: g.bundle,
-        icon: null, cpu: 0, mem: 0, procs: 0, users: new Set(),
-        mainPid: null, processes: [],
+        icon: null, cpu: 0, mem: 0, power: null, wakeups: 0,
+        _powerSum: 0, _hasPower: false,
+        procs: 0, users: new Set(),
+        mainPid: null, processes: [], assertions: [],
       };
       groups.set(g.key, grp);
     }
     grp.cpu += p.cpu;
     grp.mem += p.mem;
+    if (p.power != null) { grp._powerSum += p.power; grp._hasPower = true; }
+    grp.wakeups += p.wakeups || 0;
     grp.procs++;
     grp.users.add(p.user);
     grp.processes.push(p);
@@ -999,6 +1258,28 @@ async function sample(fast = false) {
   }
   for (const grp of groups.values()) {
     grp.processes.sort((a, b) => b.cpu - a.cpu || b.mem - a.mem);
+    grp.power = grp._hasPower ? +grp._powerSum.toFixed(1) : null;
+    grp.wakeups = +grp.wakeups.toFixed(1);
+    const grpAssertions = [];
+    const seenAssert = new Set();
+    for (const p of grp.processes) {
+      const list = assertData.byPid.get(p.pid);
+      if (!list) continue;
+      for (const a of list) {
+        const ak = `${a.pid}|${a.type}|${a.name}`;
+        if (seenAssert.has(ak)) continue;
+        seenAssert.add(ak);
+        grpAssertions.push({
+          pid: a.pid,
+          type: a.type,
+          name: a.name,
+          dur: a.dur,
+          preventsSleep: a.preventsSleep,
+        });
+      }
+    }
+    grpAssertions.sort((a, b) => (b.preventsSleep ? 1 : 0) - (a.preventsSleep ? 1 : 0));
+    grp.assertions = grpAssertions;
     const killable = grp.processes.find((p) => p.pid > 0);
     if (grp.mainPid === null && killable) grp.mainPid = killable.pid;
     ensureIcon(grp);
@@ -1006,13 +1287,27 @@ async function sample(fast = false) {
     grp.icon = ic && ic.ready && ic.url ? ic.url : null;
   }
 
+  lastSampleProcs = procs;
+  lastSampleGroups = groups;
+  enforceBlacklist(procs, groups);
+
+  // Update path allowlist for POST /api/reveal
+  const nextPaths = new Set();
+  for (const p of procs.values()) {
+    if (p.exe && p.exe.startsWith('/')) nextPaths.add(path.resolve(p.exe));
+  }
+  for (const grp of groups.values()) {
+    if (grp.bundle && grp.bundle.startsWith('/')) nextPaths.add(path.resolve(grp.bundle));
+  }
+  lastKnownPaths = nextPaths;
+
   // ---- system stats ----
   const vm = parseVmStat(vmOut);
   // Rate metrics (CPU from top, MB/s from iostat) go honest-zero when the
   // backing tool has been failing long enough — same rule as the netstat
   // guard, so a stalled sampler never displays a frozen "live" number.
   const top = Date.now() - lastTopCpuT < 15000 ? lastTopCpu : { user: 0, sys: 0, idle: 100, total: 0 };
-  const batt = parseBatt(battOut);
+  const batt = { ...parseBatt(battOut || lastBattOut), ...parseBattPower(battIoregOut || lastBattIoregOut) };
   const diskReady = lastDiskT > 0 && (Date.now() - lastDiskT < 15000);
   const diskMbps = diskReady ? lastDiskMbps : 0;
 
@@ -1064,11 +1359,17 @@ async function sample(fast = false) {
         purgeable: vm.purgeable, filebacked: vm.filebacked,
         storedCompressed: vm.storedCompressed,
       },
-      swap: { used: sysc.swapUsed },  // total omitted: auto-allocated on macOS, means nothing
+      memPressure: { level: sysc.memPressureLevel, state: sysc.memPressureState },
+      swap: { used: sysc.swapUsed, total: sysc.swapTotal },
       uptime: sysc.bootTime ? Math.max(0, Math.floor(Date.now() / 1000 - sysc.bootTime)) : 0,
       net: { down: netDown, up: netUp, ready: netReady },
       disk: { mbps: diskMbps, ready: diskReady },
       batt,
+      sleepBlockers: {
+        display: assertData.system.display,
+        system: assertData.system.system,
+        count: sleepBlockerCount,
+      },
       gpu: {
         pct: gpuPct == null ? null : +gpuPct.toFixed(1),
         mem: lastGpuMem,
@@ -1076,15 +1377,19 @@ async function sample(fast = false) {
         cores: gpuHw.cores,
       },
       thermal: lastTherm,   // { level, state, cpu, min, max } — pmset state + observed temp range
+      blacklist: getBlacklistSummary(),
       procCount: procs.size,
       appCount: groups.size,
     },
     apps: [...groups.values()].map((g) => ({
       key: g.key, name: g.name, kind: g.kind, bundle: g.bundle, icon: g.icon,
-      cpu: g.cpu, mem: g.mem, procs: g.procs, users: [...g.users], mainPid: g.mainPid,
+      cpu: g.cpu, mem: g.mem, power: g.power, wakeups: g.wakeups,
+      procs: g.procs, users: [...g.users], mainPid: g.mainPid,
+      assertions: g.assertions,
       processes: g.processes.map((p) => ({
-        pid: p.pid, ppid: p.ppid, user: p.user, name: p.name,
-        cpu: p.cpu, mem: p.mem, vsz: p.vsz * 1024, stat: p.stat, etime: p.etime,
+        pid: p.pid, ppid: p.ppid, user: p.user, name: p.name, exe: p.exe,
+        cpu: p.cpu, mem: p.mem, power: p.power, wakeups: p.wakeups,
+        vsz: p.vsz * 1024, stat: p.stat, etime: p.etime,
         args: p.args, role: roleOf(p.name), desc: KNOWN[p.name] || null,
       })),
     })),
@@ -1128,6 +1433,15 @@ async function sample(fast = false) {
       compressed,
       free,
     },
+    memPressure: sysc.memPressureState,
+    swapUsed: sysc.swapUsed,
+    batt: {
+      pct: batt.pct,
+      charging: batt.charging,
+      powerW: batt.powerW,
+      minsRemaining: batt.minsRemaining,
+    },
+    sleepBlockers: sleepBlockerCount,
     gpuPct: gpuPct == null ? null : +gpuPct.toFixed(1),
     gpuMem: lastGpuMem,
     thermal: lastTherm,      // { level, state, cpu, min, max } — cpu temp is coloured on min..max by the UIs
@@ -1248,8 +1562,354 @@ function settlePurgeQueue(id, result) {
  *  /api/purge      POST {} → admin-prompted `purge`; app mode queues for the
  *                  app shell (in-process prompt), web mode runs osascript
  *  /api/purge-result POST { id, ok, cancelled } ← Pulse.swift (in-app outcome)
+ *  /api/app-details GET ?pids=1,2,3 → active network connections via lsof
+ *  /api/background-items GET (?fresh=1) → launchd agents & daemons
+ *  /api/blacklist  GET / POST → persistent auto-kill rules
+ *  /api/reveal     POST { path } → reveal an allowlisted path in Finder
  *  /icons/*        cached app icons
  * ------------------------------------------------------------------ */
+const LAUNCH_DIRS = [
+  { dir: path.join(os.homedir(), 'Library', 'LaunchAgents'), scope: 'user-agent' },
+  { dir: '/Library/LaunchAgents', scope: 'global-agent' },
+  { dir: '/Library/LaunchDaemons', scope: 'system-daemon' },
+];
+
+const BLACKLIST_FILE = path.join(PULSE_DIR, 'blacklist.json');
+const PROTECTED_BLACKLIST_NAMES = new Set([
+  'kernel_task', 'launchd', 'WindowServer', 'loginwindow',
+  'Finder', 'Dock', 'SystemUIServer', 'ControlCenter',
+  'SecurityAgent', 'coreaudiod', 'diskarbitrationd', 'apfsd',
+  'opendirectoryd', 'notifyd', 'UserEventAgent', 'distnoted',
+  'cfprefsd', 'tccd', 'trustd', 'Pulse', 'pulse-thermal',
+]);
+
+function isProtectedTarget({ pid, name, exe, bundle, selfPid = process.pid, selfPpid = process.ppid, serverDir = __dirname } = {}) {
+  if (pid != null && (pid === 0 || pid === 1)) {
+    return 'Cannot auto-kill kernel_task or launchd (pid 0/1)';
+  }
+  if (pid != null && (pid === selfPid || pid === selfPpid)) {
+    return 'Cannot auto-kill Pulse or its parent process';
+  }
+  const exeBase = exe ? path.basename(exe) : '';
+  const bundleBase = bundle ? path.basename(bundle) : '';
+  if ((name && PROTECTED_BLACKLIST_NAMES.has(name)) || (exeBase && PROTECTED_BLACKLIST_NAMES.has(exeBase))) {
+    return `Refusing to auto-kill protected system or Pulse process (${name || exeBase})`;
+  }
+  if (bundleBase === 'Pulse.app' || (exe && (exe.includes('/Pulse.app/') || (serverDir && exe === path.join(serverDir, 'server.js'))))) {
+    return 'Refusing to auto-kill Pulse';
+  }
+  return null;
+}
+
+function normalizeBlacklistRule(input) {
+  if (!input || typeof input !== 'object') throw new Error('invalid blacklist rule');
+  let pattern = typeof input.pattern === 'string' ? input.pattern.trim() : '';
+  if (!pattern || pattern.includes('\0')) throw new Error('pattern is required');
+  if (pattern.startsWith('/') && pattern.length > 1) pattern = pattern.replace(/\/+$/, '') || '/';
+  let matchType = input.matchType;
+  if (matchType !== 'bundle' && matchType !== 'exe' && matchType !== 'name') {
+    if (pattern.startsWith('/') && pattern.endsWith('.app')) matchType = 'bundle';
+    else if (pattern.startsWith('/')) matchType = 'exe';
+    else matchType = 'name';
+  }
+  if ((matchType === 'bundle' || matchType === 'exe') && !pattern.startsWith('/')) {
+    throw new Error(`${matchType} pattern must be an absolute path`);
+  }
+  if (matchType === 'bundle' || matchType === 'exe') pattern = path.resolve(pattern);
+  const baseLabel = path.basename(pattern, matchType === 'bundle' ? '.app' : undefined) || pattern;
+  const label = (typeof input.label === 'string' && input.label.trim()) ? input.label.trim() : baseLabel;
+  const protectedErr = isProtectedTarget({
+    name: matchType === 'name' ? pattern : baseLabel,
+    exe: matchType === 'exe' ? pattern : null,
+    bundle: matchType === 'bundle' ? pattern : null,
+  });
+  if (protectedErr) throw new Error(protectedErr);
+  return {
+    id: `${matchType}:${pattern}`,
+    matchType,
+    pattern,
+    label,
+    sig: input.sig === 'TERM' ? 'TERM' : 'KILL',
+    enabled: input.enabled !== false,
+    createdAt: Number.isFinite(+input.createdAt) && +input.createdAt > 0 ? +input.createdAt : Date.now(),
+    kills: Number.isFinite(+input.kills) && +input.kills >= 0 ? Math.floor(+input.kills) : 0,
+    lastKilledAt: Number.isFinite(+input.lastKilledAt) && +input.lastKilledAt > 0 ? +input.lastKilledAt : null,
+  };
+}
+
+function matchesBlacklistRule(rule, proc, group) {
+  if (!rule || !rule.enabled || !proc || !(proc.pid > 1)) return false;
+  if (rule.matchType === 'bundle') {
+    return (group && group.bundle === rule.pattern)
+      || !!(proc.exe && (proc.exe === rule.pattern || proc.exe.startsWith(rule.pattern + '/')));
+  }
+  if (rule.matchType === 'exe') {
+    return proc.exe === rule.pattern;
+  }
+  if (rule.matchType === 'name') {
+    const needle = rule.pattern.toLowerCase();
+    return (proc.name || '').toLowerCase() === needle
+      || !!(group && (group.name || '').toLowerCase() === needle);
+  }
+  return false;
+}
+
+const isSelfTestMode = () => process.env.PULSE_SELFTEST === '1';
+let blacklistRules = null;
+const blacklistRuntime = new Map(); // rule.id → { lastAttemptByPid, recentKills, lastRuleKillAt, lastKilledPid, lastError, runningNow }
+let blacklistStatsDirtyAt = 0;
+let lastSampleProcs = null;
+let lastSampleGroups = null;
+
+function loadBlacklist() {
+  if (blacklistRules !== null) return blacklistRules;
+  if (isSelfTestMode()) { blacklistRules = []; return blacklistRules; }
+  try {
+    const raw = JSON.parse(fs.readFileSync(BLACKLIST_FILE, 'utf8'));
+    const list = Array.isArray(raw) ? raw : (Array.isArray(raw && raw.rules) ? raw.rules : []);
+    const out = [];
+    const seen = new Set();
+    for (const item of list) {
+      try {
+        const rule = normalizeBlacklistRule(item);
+        if (!seen.has(rule.id)) { seen.add(rule.id); out.push(rule); }
+      } catch { /* ignore invalid/protected entry */ }
+    }
+    blacklistRules = out;
+  } catch {
+    blacklistRules = [];
+  }
+  return blacklistRules;
+}
+
+function saveBlacklist(force = false) {
+  if (isSelfTestMode()) return;
+  const rules = loadBlacklist();
+  const tmp = `${BLACKLIST_FILE}.tmp.${process.pid}`;
+  try {
+    fs.mkdirSync(PULSE_DIR, { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, rules }, null, 2) + '\n');
+    fs.renameSync(tmp, BLACKLIST_FILE);
+    if (force) blacklistStatsDirtyAt = 0;
+  } catch {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+}
+
+function getRuntime(ruleId) {
+  let rt = blacklistRuntime.get(ruleId);
+  if (!rt) {
+    rt = {
+      lastAttemptByPid: new Map(),
+      recentKills: [],
+      lastRuleKillAt: 0,
+      lastKilledPid: null,
+      lastError: null,
+      runningNow: 0,
+    };
+    blacklistRuntime.set(ruleId, rt);
+  }
+  return rt;
+}
+
+function enforceBlacklist(procs, groups, now = Date.now(), killFn = process.kill) {
+  if (isSelfTestMode() || !procs || !groups) return;
+  const rules = loadBlacklist();
+  if (!rules.length) {
+    blacklistRuntime.clear();
+    return;
+  }
+  // Map pid → group once so rule matching checks bundle attribution in O(1).
+  const pidToGroup = new Map();
+  for (const grp of groups.values()) {
+    for (const p of grp.processes) pidToGroup.set(p.pid, grp);
+  }
+  let statsUpdated = false;
+  for (const rule of rules) {
+    const rt = getRuntime(rule.id);
+    rt.runningNow = 0;
+    rt.recentKills = rt.recentKills.filter((t) => now - t < 30000);
+    for (const pid of rt.lastAttemptByPid.keys()) {
+      if (!procs.has(pid)) rt.lastAttemptByPid.delete(pid);
+    }
+    if (!rule.enabled) continue;
+
+    const matching = [];
+    for (const proc of procs.values()) {
+      const grp = pidToGroup.get(proc.pid) || null;
+      if (matchesBlacklistRule(rule, proc, grp)) matching.push({ proc, grp });
+    }
+    rt.runningNow = matching.length;
+    if (!matching.length) continue;
+
+    // Back off briefly if launchd keeps respawning the target repeatedly.
+    if (rt.recentKills.length >= 4 && now - rt.lastRuleKillAt < 3000) continue;
+
+    const sigName = rule.sig === 'TERM' ? 'SIGTERM' : 'SIGKILL';
+    for (const { proc, grp } of matching) {
+      if (isProtectedTarget({ pid: proc.pid, name: proc.name, exe: proc.exe, bundle: grp && grp.bundle })) {
+        rt.lastError = 'Protected process skipped';
+        continue;
+      }
+      const prev = rt.lastAttemptByPid.get(proc.pid);
+      const cooldown = prev && prev.permDenied ? 60000 : 5000;
+      if (prev && now - prev.t < cooldown) continue;
+      try {
+        killFn(proc.pid, sigName);
+        rule.kills = (rule.kills || 0) + 1;
+        rule.lastKilledAt = now;
+        rt.lastKilledPid = proc.pid;
+        rt.lastError = null;
+        rt.lastRuleKillAt = now;
+        rt.recentKills.push(now);
+        rt.lastAttemptByPid.set(proc.pid, { t: now, permDenied: false });
+        statsUpdated = true;
+      } catch (e) {
+        if (e && e.code === 'ESRCH') {
+          rt.lastAttemptByPid.delete(proc.pid);
+        } else if (e && e.code === 'EPERM') {
+          rt.lastError = `Permission denied (owned by ${proc.user})`;
+          rt.lastAttemptByPid.set(proc.pid, { t: now, permDenied: true });
+        } else {
+          rt.lastError = String((e && e.message) || e || 'kill failed');
+          rt.lastAttemptByPid.set(proc.pid, { t: now, permDenied: false });
+        }
+      }
+    }
+  }
+  if (statsUpdated) {
+    if (!blacklistStatsDirtyAt) blacklistStatsDirtyAt = now;
+    if (now - blacklistStatsDirtyAt >= 5000) {
+      saveBlacklist(true);
+    }
+  } else if (blacklistStatsDirtyAt && now - blacklistStatsDirtyAt >= 5000) {
+    saveBlacklist(true);
+  }
+}
+
+function getBlacklistView() {
+  const now = Date.now();
+  return loadBlacklist().map((rule) => {
+    const rt = blacklistRuntime.get(rule.id);
+    const recent = rt ? rt.recentKills.filter((t) => now - t < 30000).length : 0;
+    return {
+      ...rule,
+      runningNow: rt ? rt.runningNow : 0,
+      lastKilledPid: rt ? rt.lastKilledPid : null,
+      lastError: rt ? rt.lastError : null,
+      respawning: recent >= 3,
+      recentKills: recent,
+    };
+  });
+}
+
+function getBlacklistSummary() {
+  const rules = loadBlacklist();
+  let enabled = 0;
+  let kills = 0;
+  for (const r of rules) {
+    if (r.enabled) enabled++;
+    kills += r.kills || 0;
+  }
+  return { total: rules.length, enabled, kills };
+}
+
+const appDetailsCache = new Map(); // sortedPids → { t, data }
+let bgItemsCache = null; // { t, data }
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      out[i] = await fn(items[i], i);
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(workers);
+  return out;
+}
+
+async function getBackgroundItems(forceFresh = false) {
+  const now = Date.now();
+  if (!forceFresh && bgItemsCache && now - bgItemsCache.t < 10000) {
+    return bgItemsCache.data;
+  }
+
+  const plistEntries = [];
+  for (const { dir, scope } of LAUNCH_DIRS) {
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files) {
+      if (!f.endsWith('.plist')) continue;
+      plistEntries.push({ plistPath: path.join(dir, f), scope });
+    }
+  }
+
+  const uid = typeof process.getuid === 'function' ? process.getuid() : '';
+  const [listOut, disabledOut] = await Promise.all([
+    run('launchctl', ['list'], 2500),
+    uid !== '' ? run('launchctl', ['print-disabled', `gui/${uid}`], 2500) : Promise.resolve(null),
+  ]);
+  const listMap = parseLaunchctlList(listOut);
+  const disabledMap = parseLaunchctlDisabled(disabledOut);
+
+  const parsedItems = await mapLimit(plistEntries, 12, async ({ plistPath, scope }) => {
+    const jsonOut = await run('plutil', ['-convert', 'json', '-o', '-', plistPath], 2000);
+    if (!jsonOut) return null;
+    let plist;
+    try { plist = JSON.parse(jsonOut); } catch { return null; }
+    if (!plist || typeof plist !== 'object') return null;
+
+    const label = (typeof plist.Label === 'string' && plist.Label.trim())
+      ? plist.Label.trim()
+      : path.basename(plistPath, '.plist');
+    let program = null;
+    if (typeof plist.Program === 'string' && plist.Program) {
+      program = plist.Program;
+    } else if (Array.isArray(plist.ProgramArguments) && plist.ProgramArguments.length > 0) {
+      program = String(plist.ProgramArguments[0]);
+    }
+    const bundle = bundleOf(program)?.bundle || null;
+    const runAtLoad = !!plist.RunAtLoad;
+    const keepAlive = !!plist.KeepAlive;
+    const listInfo = listMap.get(label);
+    const loaded = listMap.has(label);
+    const pid = listInfo ? listInfo.pid : null;
+    const lastStatus = listInfo ? listInfo.status : null;
+    const disabled = !!(disabledMap.get(label) || plist.Disabled);
+    const state = pid ? 'running' : disabled ? 'disabled' : loaded ? 'loaded' : 'unloaded';
+
+    return {
+      label,
+      plistPath,
+      scope,
+      program,
+      bundle,
+      runAtLoad,
+      keepAlive,
+      disabled,
+      loaded,
+      pid,
+      lastStatus,
+      state,
+    };
+  });
+
+  const items = parsedItems.filter(Boolean);
+  const scopeRank = (s) => (s === 'user-agent' ? 0 : s === 'global-agent' ? 1 : 2);
+  items.sort((a, b) =>
+    ((b.state === 'running' ? 1 : 0) - (a.state === 'running' ? 1 : 0))
+    || (scopeRank(a.scope) - scopeRank(b.scope))
+    || a.label.localeCompare(b.label)
+  );
+
+  const data = { ok: true, items, updatedAt: Date.now() };
+  bgItemsCache = { t: data.updatedAt, data };
+  return data;
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -1434,6 +2094,164 @@ const server = http.createServer((req, res) => {
     } else {
       res.writeHead(405); res.end();
     }
+  } else if (url === '/api/app-details' && req.method === 'GET') {
+    let pidsParam = '';
+    try {
+      pidsParam = new URL(req.url, 'http://127.0.0.1').searchParams.get('pids') || '';
+    } catch { pidsParam = ''; }
+    const parts = pidsParam.split(',').map((s) => s.trim()).filter(Boolean);
+    const validPids = [];
+    const seenPid = new Set();
+    let badPid = false;
+    for (const s of parts) {
+      if (!/^\d+$/.test(s)) { badPid = true; break; }
+      const n = +s;
+      if (n <= 0 || !Number.isSafeInteger(n)) { badPid = true; break; }
+      if (!seenPid.has(n)) {
+        seenPid.add(n);
+        validPids.push(n);
+      }
+    }
+    if (badPid || !validPids.length || validPids.length > 80) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: badPid ? 'invalid pids' : !validPids.length ? 'pids required' : 'too many pids (max 80)' }));
+      return;
+    }
+    const cacheKey = [...validPids].sort((a, b) => a - b).join(',');
+    const now = Date.now();
+    const cached = appDetailsCache.get(cacheKey);
+    if (cached && now - cached.t < 1500) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: true, pids: validPids, connections: cached.data }));
+      return;
+    }
+    run('lsof', ['-nP', '-a', '-p', validPids.join(','), '-i', '-F', 'pcnTP', '-w'], 2500)
+      .then((out) => {
+        const connections = parseLsofNet(out);
+        const ts = Date.now();
+        for (const [k, v] of appDetailsCache) {
+          if (ts - v.t >= 1500) appDetailsCache.delete(k);
+        }
+        appDetailsCache.set(cacheKey, { t: ts, data: connections });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, pids: validPids, connections }));
+      })
+      .catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+      });
+  } else if (url === '/api/background-items' && req.method === 'GET') {
+    const forceFresh = (req.url || '').includes('fresh=1');
+    getBackgroundItems(forceFresh)
+      .then((data) => {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(data));
+      })
+      .catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+      });
+  } else if (url === '/api/blacklist') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: true, rules: getBlacklistView(), summary: getBlacklistSummary() }));
+    } else if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 1e4) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const msg = JSON.parse(body || '{}');
+          const rules = loadBlacklist();
+          const action = msg.action || 'add';
+          let changedRule = null;
+          if (action === 'add') {
+            const rule = normalizeBlacklistRule(msg);
+            const idx = rules.findIndex((r) => r.id === rule.id);
+            if (idx >= 0) {
+              rules[idx].enabled = true;
+              rules[idx].sig = rule.sig;
+              if (msg.label && msg.label.trim()) rules[idx].label = msg.label.trim();
+              changedRule = rules[idx];
+            } else {
+              rules.unshift(rule);
+              changedRule = rule;
+            }
+          } else if (action === 'toggle') {
+            const rule = rules.find((r) => r.id === msg.id);
+            if (!rule) throw new Error('rule not found');
+            rule.enabled = typeof msg.enabled === 'boolean' ? msg.enabled : !rule.enabled;
+            const rt = blacklistRuntime.get(rule.id);
+            if (rt) { rt.lastAttemptByPid.clear(); rt.lastError = null; }
+            changedRule = rule;
+          } else if (action === 'signal') {
+            const rule = rules.find((r) => r.id === msg.id);
+            if (!rule) throw new Error('rule not found');
+            rule.sig = msg.sig === 'TERM' ? 'TERM' : 'KILL';
+            changedRule = rule;
+          } else if (action === 'remove') {
+            const idx = rules.findIndex((r) => r.id === msg.id);
+            if (idx < 0) throw new Error('rule not found');
+            const [removed] = rules.splice(idx, 1);
+            blacklistRuntime.delete(removed.id);
+          } else {
+            throw new Error('unknown action');
+          }
+          saveBlacklist(true);
+          if (lastSampleProcs && lastSampleGroups) {
+            enforceBlacklist(lastSampleProcs, lastSampleGroups);
+            saveBlacklist(true);
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, rule: changedRule, rules: getBlacklistView(), summary: getBlacklistSummary() }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: String((e && e.message) || e) }));
+        }
+      });
+    } else {
+      res.writeHead(405); res.end();
+    }
+  } else if (url === '/api/reveal' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1e4) req.destroy(); });
+    req.on('end', () => {
+      let target;
+      try {
+        target = JSON.parse(body || '{}').path;
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      if (typeof target !== 'string' || !target.startsWith('/') || target.includes('\0')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid path' }));
+        return;
+      }
+      const resolved = path.resolve(target);
+      const isKnown = lastKnownPaths.has(resolved);
+      const isPlist = resolved.endsWith('.plist')
+        && LAUNCH_DIRS.some((d) => resolved.startsWith(path.resolve(d.dir) + '/'));
+      if (!isKnown && !isPlist) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'path not allowed' }));
+        return;
+      }
+      if (!fs.existsSync(resolved)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'path not found' }));
+        return;
+      }
+      execFile('/usr/bin/open', ['-R', resolved], (err) => {
+        if (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: String(err.message || err) }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
   } else if (url.startsWith('/icons/')) {
     const f = path.join(ICON_DIR, path.basename(url));
     if (!f.startsWith(ICON_DIR)) { res.writeHead(400); res.end(); return; }
@@ -1506,6 +2324,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 // Remove the port file on ANY exit path (signals, watchdog, crash) so a stale
 // file never points at a dead server, and only if BOTH port and pid match self.
 process.on('exit', () => {
+  if (blacklistStatsDirtyAt) saveBlacklist(true);
   if (skipPortFile()) return;
   try {
     const parsed = parsePortFile(fs.readFileSync(PORT_FILE, 'utf8'));

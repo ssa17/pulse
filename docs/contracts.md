@@ -34,19 +34,20 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
       active, inactive, speculative,                        // NOT part of the normalized `mem` segments above;
       purgeable, filebacked, storedCompressed              // powers the memory info popover in index.html
     },
-    swap: { used },                // bytes (total is auto-allocated on macOS — not shipped)
+    memPressure: { level, state }, // kern.memorystatus_vm_pressure_level (1=normal, 2=warn, >=4=critical)
+    swap: { used, total },         // bytes (total is auto-allocated by macOS; UI highlights `used`)
     uptime: <seconds>,
     net:  { down, up, ready },  // bytes/sec; ready=false until 2nd netstat delta lands (or stale >15s)
     disk: { mbps, ready },      // MB/s, read + write; ready=false until 1st iostat window completes (or stale >15s)
-    batt: { pct, charging },        // pct null when on AC / no battery
+    batt: { pct, charging, external, powerW, batteryW, adapterW, minsRemaining }, // AppleSmartBattery + pmset
+    sleepBlockers: { display, system, count }, // active Prevent*Sleep assertions from pmset -g assertions
     gpu:  { pct, mem, name, cores }, // Apple Silicon only (ioreg AGX/IOAccelerator); pct null elsewhere.
                                      // pct = delta of accumulatedGPUTime ÷ window ÷ MGPU units; mem = in use system memory (bytes);
                                      // name/cores from the GPU node
     thermal: { level, state, cpu, min, max }, // level 0..3 (pmset), state: nominal|slowed|throttled; cpu: temp in °C or null;
                                               // min/max: the machine's observed cold–hot range since the sampler
-                                              // started (null until the first reading). The UIs colour the ROUNDED
-                                              // temp on a span floored at 10°C so both show the same colour for the
-                                              // same number
+                                              // started (null until the first reading). UIs colour on absolute 40°C..90°C+ scale
+    blacklist: { total, enabled, kills },     // persistent auto-kill rules count & kill total (~/.pulse/blacklist.json)
     procCount, appCount
   },
   apps: [{
@@ -57,8 +58,11 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     mem,                       // bytes — physical footprint per process (top's MEM,
                                // the number Activity Monitor shows; RSS fallback),
                                // summed over the app's processes
+    power,                     // summed top POWER energy impact score, or null before top runs
+    wakeups,                   // summed delta idle wakeups/s across processes
+    assertions: [{ pid, type, name, dur, preventsSleep }], // active pmset assertions for this app
     procs, users: [..], mainPid,   // mainPid is always > 0 or null (PID 0 kernel_task is never killable)
-    processes: [{ pid, ppid, user, name, cpu, mem, vsz, stat, etime, args, role, desc }]
+    processes: [{ pid, ppid, user, name, exe, cpu, mem, power, wakeups, vsz, stat, etime, args, role, desc }]
   }]
 }
 ```
@@ -74,6 +78,10 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
   loadAvg: [ 1m, 5m, 15m ],          // load averages from os.loadavg()
   memPct, memUsed, memTotal,         // AM-style: memUsed = used − file cache
   memPools: { wired, active, compressed, free }, // bytes per memory pool for segmented bar & breakdown
+  memPressure: 'normal' | 'warn' | 'critical' | null, // kern.memorystatus_vm_pressure_level
+  swapUsed: <bytes>,                 // vm.swapusage used bytes
+  batt: { pct, charging, powerW, minsRemaining }, // battery + system wattage
+  sleepBlockers: <int>,              // active Prevent*Sleep assertions count
   gpuPct,                            // Apple Silicon GPU utilization %; null if unavailable
   gpuMem,                            // Apple Silicon in use GPU memory (bytes); null if unavailable
   thermal: { level, state, cpu, min, max }, // pmset level 0..3 + nominal|slowed|throttled; cpu temp in °C or null; min/max = observed range (colours use a 10°C-floored span of it)
@@ -244,8 +252,23 @@ not an app.
   while releasing the webview (`closedWindowHidden`, `closedWebReleased`,
   `backendAliveWhileClosed`), window reopen rendering live data (`reopenRenderOk`,
   `reopenMs`), LaunchAgent install/remove round-trip (`daemonRoundTripOk`), and
-  boot trace verification (`bootTraceOk`). Renaming those DOM ids silently breaks
-  the self-test. `PULSE_AUTOCONFIRM=1` makes the `WKUIDelegate` auto-approve
+  boot trace verification (`bootTraceOk`), plus new feature checks: `#mem-pressure`,
+  drawer extras (`#dcopy`, `#d-net-box` as `drawerExtrasOk`), Left Panel Energy toggle
+  (`energyToggleOk`), and Background Items modal (`bgItemsModalOk`). Renaming those
+  DOM ids silently breaks the self-test.
+- **Additional inspection & quick-action endpoints**:
+  * `GET /api/app-details?pids=1,2,3` — validates up to 80 positive PIDs, runs
+    `lsof -nP -a -p <pids> -i -F pcnTP -w` with a 1500ms cache, returning `{ ok, pids, connections }`.
+  * `GET /api/background-items` (`?fresh=1`) — scans `~/Library/LaunchAgents`,
+    `/Library/LaunchAgents`, `/Library/LaunchDaemons` with `plutil` + `launchctl list`
+    + `launchctl print-disabled gui/<uid>` (10s cache).
+  * `GET / POST /api/blacklist` — persistent auto-kill rules stored in `~/.pulse/blacklist.json`
+    (`action: 'add' | 'toggle' | 'signal' | 'remove'`). Refuses protected system/Pulse processes
+    and enforces enabled rules each sampler tick (skipped when `PULSE_SELFTEST=1`).
+  * `POST /api/reveal` (`{ path }`) — web-mode fallback allowing only active app bundles/exes
+    or `.plist` files in the three LaunchAgent/Daemon dirs; in app mode `Pulse.swift`
+    handles `{ action: 'revealInFinder', path }` natively via `NSWorkspace` and
+    `{ action: 'copyText', text }` via `NSPasteboard`. `PULSE_AUTOCONFIRM=1` makes the `WKUIDelegate` auto-approve
   `confirm()` dialogs so the test can run unattended.
 - **confirm() dialogs**: WKWebView returns false for confirm() unless a
   WKUIDelegate handles it — Pulse.swift renders native NSAlerts (without this the
