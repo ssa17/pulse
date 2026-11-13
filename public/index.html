@@ -272,36 +272,96 @@
   .infobtn:hover { color: var(--text); border-color: #3a4560; }
   .infobtn.on { color: var(--mem); border-color: var(--mem); }
   .mempop {
-    position: fixed; z-index: 120; width: 400px; max-width: calc(100vw - 24px);
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    box-shadow: 0 12px 32px rgba(0,0,0,.5); padding: 12px 14px;
+    position: fixed; z-index: 120; width: 448px; max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 28px); overflow-y: auto; overscroll-behavior: contain;
+    background: #131722; border: 1px solid #2b354b; border-radius: 14px;
+    box-shadow: 0 22px 56px rgba(0,0,0,.68), 0 0 0 1px rgba(255,255,255,.03) inset;
+    padding: 0; animation: memPopIn .16s cubic-bezier(.16,1,.3,1);
+  }
+  @keyframes memPopIn {
+    from { opacity: 0; transform: translateY(-6px) scale(.975); }
+    to { opacity: 1; transform: none; }
   }
   .mempop[hidden] { display: none; }
-  .mempop .mp-t { font-size: 12px; font-weight: 700; margin-bottom: 8px; }
-  .mempop .mp-sec { padding: 7px 0; border-top: 1px solid #1a1f2b; }
-  .mempop .mp-sec:first-of-type { border-top: none; }
-  .mempop .mp-h { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; }
-  .mempop .mp-h i { width: 8px; height: 8px; border-radius: 2px; }
-  .mempop .mp-h b { margin-left: auto; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-  .mempop canvas { width: 100%; height: 22px; margin: 4px 0 2px; }
-  .mempop p { font-size: 11.5px; color: var(--dim); line-height: 1.5; }
-  .mempop p b { color: var(--text); font-weight: 600; }
-  .mempop .purgebtn {
-    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    border-radius: 7px; padding: 4px 11px; font-size: 11.5px; cursor: pointer;
+  .mempop .mp-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 11px 15px 9px; border-bottom: 1px solid #1e2433;
+    background: linear-gradient(180deg, rgba(91,140,255,.07), rgba(91,140,255,.01) 70%, transparent);
+    position: sticky; top: 0; z-index: 2; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   }
-  .mempop .purgebtn:hover:not(:disabled) { border-color: var(--cache); color: var(--cache); }
-  .mempop .purgebtn:disabled { opacity: .55; cursor: default; }
-  .mempop .purge-note { color: var(--faint); font-size: 10.5px; }
-  .mempop .mp-status { color: var(--faint); }
-  .mempop .mp-status.good { color: var(--cache); }
-  .mempop .mp-status.bad { color: var(--danger); }
-  .mempop .mp-tip { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1f2b; font-size: 11px; color: var(--faint); }
-  .mempop .mp-summary { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; margin-bottom: 6px; border-top: 1px solid var(--border) !important; }
+  .mempop .mp-head-l { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .mempop .mp-t { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; color: var(--text); letter-spacing: -.01em; margin: 0; }
+  .mempop .mp-sub { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px; }
+  .mempop .mp-body { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .mempop .mp-summary {
+    background: linear-gradient(180deg, #181f2e, #141925);
+    border: 1px solid #27324a; border-radius: 10px; padding: 8px 11px;
+  }
   .mempop .mp-sum-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 5px; }
   .mempop .mp-sum-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
-  .mempop .mp-sum-lbl { color: var(--dim); font-weight: 600; }
-  .mempop .mp-sum-item b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .mempop .mp-sum-lbl { color: var(--dim); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
+  .mempop .mp-sum-item b { color: var(--text); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .mempop .mp-bar {
+    height: 6px; border-radius: 99px; background: #0d1018; overflow: hidden;
+    display: flex; gap: 1px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,.04);
+  }
+  .mempop .mp-bar > span { height: 100%; transition: width .35s ease; min-width: 0; }
+  .mempop .mp-cards { display: flex; flex-direction: column; gap: 7px; }
+  .mempop .mp-card {
+    background: var(--panel2); border: 1px solid #202738; border-radius: 10px;
+    padding: 8px 11px 9px; position: relative; transition: border-color .15s ease;
+  }
+  .mempop .mp-card:hover { border-color: #2e3850; }
+  .mempop .mp-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--text); }
+  .mempop .mp-h i { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+  .mempop .mp-tag {
+    font-size: 9.5px; font-weight: 600; color: var(--dim);
+    background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.06);
+    border-radius: 999px; padding: 1px 7px; letter-spacing: .01em;
+  }
+  .mempop .mp-h b { margin-left: auto; font-size: 12.8px; font-variant-numeric: tabular-nums; color: var(--text); }
+  .mempop canvas { width: 100%; height: 18px; margin: 4px 0 3px; display: block; }
+  .mempop p { font-size: 11.2px; color: var(--dim); line-height: 1.48; margin: 0; }
+  .mempop p + p { margin-top: 4px; }
+  .mempop p b { color: var(--text); font-weight: 600; }
+  .mempop .mp-purge-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 7px; padding-top: 7px; border-top: 1px dashed rgba(255,255,255,.07);
+  }
+  .mempop .purgebtn {
+    background: rgba(45,212,167,.1); color: var(--cache); border: 1px solid rgba(45,212,167,.35);
+    border-radius: 7px; padding: 4px 11px; font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: background .14s ease, border-color .14s ease, transform .12s ease;
+  }
+  .mempop .purgebtn:hover:not(:disabled) { background: rgba(45,212,167,.18); border-color: var(--cache); color: #fff; }
+  .mempop .purgebtn:active:not(:disabled) { transform: translateY(1px); }
+  .mempop .purgebtn:disabled { opacity: .55; cursor: default; }
+  .mempop .purge-note { color: var(--faint); font-size: 10.5px; }
+  .mempop .mp-status { color: var(--faint); font-size: 10.8px; margin-top: 5px; }
+  .mempop .mp-status.good { color: var(--cache); }
+  .mempop .mp-status.bad { color: var(--danger); }
+  .mempop .mp-foot {
+    background: rgba(255,255,255,.025); border: 1px solid #1d2434; border-radius: 9px;
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 5px;
+  }
+  .mempop .mp-tip { font-size: 10.8px; color: var(--dim); line-height: 1.45; }
+  .mempop .mp-tip-sub { font-size: 10.3px; color: var(--faint); line-height: 1.42; }
+
+  /* ---------- instant hover tooltips ---------- */
+  #tip {
+    position: fixed; z-index: 300; pointer-events: none;
+    max-width: 340px; width: max-content; padding: 6px 10px;
+    border-radius: 8px; background: rgba(18, 22, 33, .97);
+    border: 1px solid #303b54; color: #e8edf8;
+    font-size: 11.2px; font-weight: 500; line-height: 1.42;
+    font-variant-numeric: tabular-nums; white-space: pre-wrap; word-break: break-word;
+    box-shadow: 0 10px 28px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04) inset;
+    opacity: 0; transform: translateY(2px);
+    transition: opacity .06s ease-out, transform .06s ease-out;
+    will-change: transform, opacity;
+  }
+  #tip.on { opacity: 1; transform: translateY(0); }
+  #tip[hidden] { display: none; }
 
   /* ---------- settings modal ---------- */
   #settings-scrim {
@@ -947,41 +1007,62 @@
   </div>
 </aside>
 <div class="mempop" id="mempop" hidden>
-  <div class="mp-t">Your RAM, in plain terms</div>
-  <div class="mp-sec mp-summary" id="pop-pressure-sec">
-    <div class="mp-sum-row">
-      <div class="mp-sum-item">
-        <span class="mp-sum-lbl">Pressure</span>
-        <span class="mp-badge" id="pop-pressure">—</span>
+  <div class="mp-head">
+    <div class="mp-head-l">
+      <div class="mp-t">Your RAM, in plain terms</div>
+      <div class="mp-sub" id="pop-used-pill">—</div>
+    </div>
+    <button class="dclose" id="mem-pop-close" title="Close (Esc)">✕</button>
+  </div>
+  <div class="mp-body">
+    <div class="mp-summary" id="pop-pressure-sec">
+      <div class="mp-sum-row">
+        <div class="mp-sum-item">
+          <span class="mp-sum-lbl">Pressure</span>
+          <span class="mp-badge" id="pop-pressure">—</span>
+        </div>
+        <div class="mp-sum-item">
+          <span class="mp-sum-lbl">Swap</span>
+          <b id="pop-swap">—</b>
+        </div>
       </div>
-      <div class="mp-sum-item">
-        <span class="mp-sum-lbl">Swap</span>
-        <b id="pop-swap">—</b>
+      <div class="mp-bar" id="pop-bar" aria-hidden="true">
+        <span id="pop-seg-app" style="background:var(--mem)"></span>
+        <span id="pop-seg-wired" style="background:var(--wired)"></span>
+        <span id="pop-seg-comp" style="background:var(--comp)"></span>
+        <span id="pop-seg-cache" style="background:var(--cache)"></span>
+      </div>
+      <p id="pop-pressure-desc">macOS balances active RAM, compression, and SSD swap automatically.</p>
+    </div>
+    <div class="mp-cards">
+      <div class="mp-card">
+        <div class="mp-h"><i style="background:var(--wired)"></i>Wired<span class="mp-tag">Pinned</span><b id="pop-wired"></b></div>
+        <canvas id="pop-wired-spark"></canvas>
+        <p>Memory <b>pinned in RAM</b> — macOS can never page it out, compress, or swap it (kernel, GPU, display &amp; audio buffers, ML/AI compute).</p>
+        <p><b>Freeing it:</b> cannot be purged — the kernel's share clears on a <b>reboot</b>, app locks clear when the app quits.</p>
+      </div>
+      <div class="mp-card">
+        <div class="mp-h"><i style="background:var(--comp)"></i>Compressed<span class="mp-tag">Packed in RAM</span><b id="pop-comp"></b></div>
+        <canvas id="pop-comp-spark"></canvas>
+        <p id="pop-comp-2"><b>Your apps' own unused memory, packed.</b> When an app's pages sit idle, macOS compresses them in RAM instead of writing SSD swap.</p>
+        <p><b>Freeing it:</b> quit idle apps or close tabs — compression alone isn't slow, macOS unpacks pages on demand.</p>
+      </div>
+      <div class="mp-card">
+        <div class="mp-h"><i style="background:var(--cache)"></i>File cache<span class="mp-tag">Reclaimable</span><b id="pop-cache"></b></div>
+        <canvas id="pop-cache-spark"></canvas>
+        <p>Disk data cached for instant reads. macOS <b>reclaims it automatically</b> the moment any app needs RAM — a big cache is healthy.</p>
+        <div class="mp-purge-row">
+          <button class="purgebtn" id="mem-purge" title="Runs the built-in 'purge' after a Touch ID / password prompt">Purge disk cache</button>
+          <span class="purge-note">Prompts for Touch ID / password</span>
+        </div>
+        <p id="mem-purge-status" class="mp-status" hidden></p>
       </div>
     </div>
-    <p id="pop-pressure-desc">macOS balances active RAM, compression, and SSD swap automatically.</p>
+    <div class="mp-foot">
+      <div class="mp-tip"><b>Want real RAM back?</b> Quit the top consumers in Top Memory — both their resident and compressed pages go away.</div>
+      <div class="mp-tip-sub" id="pop-webkit-note">Pulse's WebKit rendering processes appear separately in Activity Monitor (macOS runs web views as standalone system XPC services).</div>
+    </div>
   </div>
-  <div class="mp-sec">
-    <div class="mp-h"><i style="background:var(--wired)"></i>Wired<b id="pop-wired"></b></div>
-    <canvas id="pop-wired-spark"></canvas>
-    <p>Memory <b>pinned in RAM</b> — macOS can never page it out, compress or swap it. Mostly the kernel and IOKit: GPU, display and audio buffers (WindowServer, video, ML/AI compute), plus anything an app locks down.</p>
-    <p><b>Freeing it:</b> it can't be purged — the kernel's share clears on a <b>reboot</b>, the apps' share when they quit.</p>
-  </div>
-  <div class="mp-sec">
-    <div class="mp-h"><i style="background:var(--comp)"></i>Compressed<b id="pop-comp"></b></div>
-    <canvas id="pop-comp-spark"></canvas>
-    <p id="pop-comp-2"><b>Your apps' own unused memory, packed.</b> When an app's pages sit idle, macOS compresses them in RAM instead of writing SSD swap.</p>
-    <p><b>Freeing it:</b> quit the app or close its tabs — and it's never pressure by itself, macOS uncompresses on demand.</p>
-  </div>
-  <div class="mp-sec">
-    <div class="mp-h"><i style="background:var(--cache)"></i>File cache<b id="pop-cache"></b></div>
-    <canvas id="pop-cache-spark"></canvas>
-    <p>Disk data cached for fast reads. macOS <b>reclaims it automatically</b> the moment any app needs RAM — a big cache is healthy, not a problem.</p>
-    <p><b>Force it:</b> <button class="purgebtn" id="mem-purge" title="Runs the built-in 'purge' after a Touch ID / password prompt">Purge disk cache</button> <span class="purge-note">asks for Touch ID / password</span></p>
-    <p id="mem-purge-status" class="mp-status" hidden></p>
-  </div>
-  <div class="mp-tip">Real usage? Quit the hogs in the Top Memory panel — their resident + compressed pages both go.</div>
-  <div class="mp-tip" id="pop-webkit-note">Pulse's WebKit rendering processes appear separately in Activity Monitor (macOS runs web views as standalone system XPC services).</div>
 </div>
 <div id="settings-scrim" aria-hidden="true">
   <div class="s-modal" id="settings-modal" role="dialog" aria-labelledby="s-title">
@@ -1140,6 +1221,7 @@
   </div>
 </div>
 <div class="ctx-menu" id="ctx-menu"></div>
+<div id="tip" role="tooltip" hidden></div>
 
 <script>
 /*
@@ -1531,6 +1613,22 @@ function renderMemPop() {
   if (!memPop || !S.sys) return;
   const s = S.sys;
   const d = s.memDetail || {};
+  const tot = s.memTotal || 1;
+  const inUse = s.mem.inUse ?? Math.max(0, s.mem.used - (s.mem.cache || 0));
+  const popUsedPill = $('#pop-used-pill');
+  if (popUsedPill && s.mem && s.memTotal) {
+    const totalLabel = s.memLabel || fmtBytes(s.memTotal).replace(/\.0 /, ' ');
+    const pct = Math.round((inUse / tot) * 100);
+    popUsedPill.textContent = `${fmtBytes(inUse)} / ${totalLabel} in use · ${pct}%`;
+  }
+  const setSeg = (id, bytes) => {
+    const el = $(id);
+    if (el) el.style.width = Math.max(0, Math.min(100, ((bytes || 0) / tot) * 100)).toFixed(2) + '%';
+  };
+  setSeg('#pop-seg-app', s.mem.apps);
+  setSeg('#pop-seg-wired', s.mem.wired);
+  setSeg('#pop-seg-comp', s.mem.compressed);
+  setSeg('#pop-seg-cache', s.mem.cache);
   const mp = parseMemPressure(s.memPressure);
   const popPress = $('#pop-pressure');
   if (popPress) {
@@ -1578,6 +1676,15 @@ function renderMemPop() {
   }
 }
 
+function positionMemPop() {
+  const pop = $('#mempop');
+  const r = $('#mem-info').getBoundingClientRect();
+  const w = pop.offsetWidth || 448;
+  pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + 'px';
+  const maxTop = Math.max(12, window.innerHeight - pop.offsetHeight - 12);
+  pop.style.top = Math.min(r.bottom + 8, maxTop) + 'px';
+}
+
 function setMemPop(open) {
   if (open === memPop) return;
   memPop = open;
@@ -1585,11 +1692,8 @@ function setMemPop(open) {
   pop.hidden = !open;
   $('#mem-info').classList.toggle('on', open);
   if (open) {
-    const r = $('#mem-info').getBoundingClientRect();
-    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 412)) + 'px';
     renderMemPop();
-    const maxTop = Math.max(12, window.innerHeight - pop.offsetHeight - 12);
-    pop.style.top = Math.min(r.bottom + 8, maxTop) + 'px';
+    positionMemPop();
   } else {
     releaseSpark($('#pop-wired-spark'));
     releaseSpark($('#pop-comp-spark'));
@@ -2247,7 +2351,7 @@ function renderSys() {
     upEl.title = `Up ${Math.floor(upDays)} days — a restart can clear stale background state`;
   } else {
     upEl.style.color = '';
-    upEl.title = '';
+    upEl.title = `System uptime: ${fmtDur(s.uptime)}`;
   }
   const bw = $('#h-batt-wrap');
   const bl = $('#h-batt-lbl');
@@ -3784,6 +3888,7 @@ document.addEventListener('click', (e) => {
     setMemPop(false);
   }
 });
+$('#mem-pop-close')?.addEventListener('click', () => setMemPop(false));
 $('#scrim').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => {
   const inInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
@@ -3824,14 +3929,148 @@ function drawIdleSparks() {
 window.addEventListener('resize', () => {
   drawIdleSparks();
   if (memPop) {
-    const r = $('#mem-info').getBoundingClientRect();
-    const pop = $('#mempop');
-    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 412)) + 'px';
     renderMemPop();
-    const maxTop = Math.max(12, window.innerHeight - pop.offsetHeight - 12);
-    pop.style.top = Math.min(r.bottom + 8, maxTop) + 'px';
+    positionMemPop();
+  }
+  hideTip();
+});
+
+/* ================= instant hover tooltips =================
+ * macOS / WKWebView waits ~1s before showing native [title] tooltips.
+ * Intercept all static & dynamically updated [title] attributes into [data-tip]
+ * and render one instant floating #tip element that updates live while hovered.
+ */
+const tipEl = $('#tip');
+let tipTarget = null;
+let lastTipEvent = null;
+
+function absorbTitle(el) {
+  if (!el || el.nodeType !== 1 || !el.hasAttribute('title')) return false;
+  const text = el.getAttribute('title');
+  el.removeAttribute('title');
+  if (text && text.trim()) {
+    el.dataset.tip = text;
+  } else {
+    delete el.dataset.tip;
+  }
+  return true;
+}
+
+function migrateTitles(root) {
+  if (!root || root.nodeType !== 1) return;
+  if (root.hasAttribute && root.hasAttribute('title')) absorbTitle(root);
+  if (root.querySelectorAll) {
+    for (const el of root.querySelectorAll('[title]')) absorbTitle(el);
+  }
+}
+
+function positionTip(el, ev) {
+  if (!tipEl || tipEl.hidden || !el || !el.isConnected) return;
+  const r = el.getBoundingClientRect();
+  if (r.width === 0 && r.height === 0) { hideTip(); return; }
+  const tw = tipEl.offsetWidth;
+  const th = tipEl.offsetHeight;
+  const anchorX = r.width > 260 && ev && ev.clientX ? ev.clientX : (r.left + r.width / 2);
+  let left = Math.round(anchorX - tw / 2);
+  left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+  let top = Math.round(r.bottom + 8);
+  if (top + th > window.innerHeight - 8) {
+    const above = Math.round(r.top - th - 8);
+    if (above >= 8) top = above;
+    else top = Math.max(8, window.innerHeight - th - 8);
+  }
+  tipEl.style.left = left + 'px';
+  tipEl.style.top = top + 'px';
+}
+
+function showTip(el, ev) {
+  if (!tipEl || !el) return;
+  if (el.hasAttribute('title')) absorbTitle(el);
+  const text = (el.dataset && el.dataset.tip) || '';
+  if (!text) { hideTip(); return; }
+  const isNew = tipTarget !== el;
+  tipTarget = el;
+  lastTipEvent = ev || lastTipEvent;
+  if (tipEl.textContent !== text) tipEl.textContent = text;
+  if (tipEl.hidden) {
+    tipEl.hidden = false;
+    void tipEl.offsetWidth;
+  }
+  positionTip(el, lastTipEvent);
+  if (isNew || !tipEl.classList.contains('on')) tipEl.classList.add('on');
+}
+
+function hideTip() {
+  tipTarget = null;
+  lastTipEvent = null;
+  if (!tipEl || tipEl.hidden) return;
+  tipEl.classList.remove('on');
+  tipEl.hidden = true;
+}
+
+const TIP_SEL = '[data-tip]:not([data-tip=""]), [title]:not([title=""])';
+
+migrateTitles(document.documentElement);
+
+const tipObserver = new MutationObserver((muts) => {
+  let lostTarget = false;
+  for (const m of muts) {
+    if (m.type === 'childList') {
+      for (const n of m.addedNodes) {
+        if (n.nodeType === 1) migrateTitles(n);
+      }
+      if (tipTarget && !tipTarget.isConnected) lostTarget = true;
+    } else if (m.type === 'attributes') {
+      if (m.attributeName === 'title') {
+        if (!absorbTitle(m.target)) continue;
+      }
+      if (tipTarget && m.target === tipTarget) {
+        const text = (tipTarget.dataset && tipTarget.dataset.tip) || '';
+        if (text) showTip(tipTarget, lastTipEvent);
+        else hideTip();
+      }
+    }
+  }
+  if (lostTarget) {
+    const px = lastTipEvent && lastTipEvent.clientX;
+    const py = lastTipEvent && lastTipEvent.clientY;
+    const under = (px != null && py != null) ? document.elementFromPoint(px, py)?.closest?.(TIP_SEL) : null;
+    if (under) showTip(under, lastTipEvent);
+    else hideTip();
   }
 });
+tipObserver.observe(document.documentElement, {
+  subtree: true,
+  childList: true,
+  attributes: true,
+  attributeFilter: ['title', 'data-tip'],
+});
+
+document.addEventListener('mouseover', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest(TIP_SEL) : null;
+  if (!el) { if (tipTarget) hideTip(); return; }
+  showTip(el, e);
+});
+document.addEventListener('mousemove', (e) => {
+  if (!tipTarget) return;
+  lastTipEvent = e;
+  if (tipTarget.getBoundingClientRect().width > 260) {
+    positionTip(tipTarget, e);
+  }
+}, { passive: true });
+document.addEventListener('mouseout', (e) => {
+  if (!tipTarget) return;
+  const rel = e.relatedTarget;
+  const next = rel && rel.closest ? rel.closest(TIP_SEL) : null;
+  if (next === tipTarget) return;
+  if (next) showTip(next, e);
+  else hideTip();
+});
+document.addEventListener('pointerdown', hideTip, { capture: true });
+document.addEventListener('scroll', hideTip, { capture: true, passive: true });
+window.addEventListener('blur', hideTip);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
+
 drawIdleSparks();
 if (!postNativeSetting({ action: 'sync' })) fetchSettingsFallback();
 if (hasBackend()) {

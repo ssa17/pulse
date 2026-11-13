@@ -17,6 +17,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 - Process Blacklist (Auto-Kill): automatically terminate recurring or unwanted processes (e.g. `Siri AI`, `assistantd`) when they spawn, with pause/signal controls and core-system protections
 
 ### Changed
+- Dashboard: redesigned the Memory explainer popover (`Your RAM, in plain terms`) with live usage/segment summary, card-based pool breakdowns, and compact sticky header
+- Dashboard: replaced slow native hover tooltips across the battery readout, uptime, thermal stats, memory segments, and controls with instant floating tooltips that update live while hovered
 - Redesigned Pulse's app icon, DMG drag-to-Applications installer, About window, Settings modal (with live menu-bar capsule preview), and custom native update dialog with smooth drawer & modal transitions
 - Dashboard: tightened Memory card and responsive grid breakpoints so stats fit cleanly down to the `940×620` minimum window size without legend clipping
 - Startup: the dashboard window opens immediately with shimmering skeleton placeholders and fills each metric independently as its measurement lands, while cold app launches show live CPU, memory, and app rows in under half a second
