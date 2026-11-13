@@ -9,25 +9,21 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+## [1.6] - 2026-11-13
+
 ### Added
-- Dashboard: added live macOS VM memory pressure (`Normal` / `Warn` / `Critical`) and SSD swap usage to the Memory card, Memory explainer popover, and status-bar menu
-- Dashboard: added an **Energy** mode toggle on the Top CPU panel (power impact & idle wakeups/s), plus battery wattage and AC status in the header
-- Process drawer: added active sleep-preventing assertions (`pmset`), live network sockets & listening ports (`lsof`), **Reveal in Finder**, and **Copy Diagnostics**
-- Background & Login Items inspector: view registered LaunchAgents and LaunchDaemons, running PIDs, `RunAtLoad` / `KeepAlive` flags, and `.plist` locations
-- Process Blacklist (Auto-Kill): automatically terminate recurring or unwanted processes (e.g. `Siri AI`, `assistantd`) when they spawn, with pause/signal controls and core-system protections
+- **Memory pressure, swap & Energy mode** — live macOS VM memory pressure (`Normal` / `Warn` / `Critical`) and SSD swap in the Memory card and menu bar, an **Energy** toggle on Top CPU, and battery wattage in the header
+- **Process Blacklist (Auto-Kill)** — automatically quit or force-kill recurring processes whenever they spawn, with pause/signal controls and core-system safeguards
+- **Background & Login Items inspector** — view registered LaunchAgents and LaunchDaemons, running status, and `.plist` locations
+- **Process drawer diagnostics** — inspect sleep-preventing assertions and live network sockets/ports, plus **Reveal in Finder** and **Copy Diagnostics**
 
 ### Changed
-- Dashboard: redesigned the Memory explainer popover (`Your RAM, in plain terms`) with live usage/segment summary, card-based pool breakdowns, and compact sticky header
-- Dashboard: replaced slow native hover tooltips across the battery readout, uptime, thermal stats, memory segments, and controls with instant floating tooltips that update live while hovered
-- Redesigned Pulse's app icon, DMG drag-to-Applications installer, About window, Settings modal (with live menu-bar capsule preview), and custom native update dialog with smooth drawer & modal transitions
-- Dashboard: tightened Memory card and responsive grid breakpoints so stats fit cleanly down to the `940×620` minimum window size without legend clipping
-- Startup: the dashboard window opens immediately with shimmering skeleton placeholders and fills each metric independently as its measurement lands, while cold app launches show live CPU, memory, and app rows in under half a second
+- **Refreshed UI & instant tooltips** — redesigned Memory info card, Settings (with live menu-bar capsule preview), About, update dialog, app icon, and DMG installer with smooth animations and instant hover tooltips
+- **Faster, responsive startup** — window opens immediately with skeleton placeholders, cold launch shows live stats in under half a second, and the layout fits cleanly down to `940×620`
 
 ### Fixed
-- Thermal & uptime displays now color reliably across `40°C–90°C+` die temperatures and flag long uptimes when a reboot is overdue
-- Startup: the dashboard window no longer flashes white before its first frame paints
-- Updates: the card no longer claims it “couldn't check for updates” after a successful check that found no update — the failure state was inverted, which is also why real failures (no network, unreachable feed) went unreported
-- Updates: when a check genuinely fails, the card now says so — including how long ago that attempt was (“· tried 5m ago”)
+- **Thermal & uptime coloring** — CPU die temperature gradients and long-uptime warnings now highlight reliably
+- **Updates & startup flash** — fixed update checks incorrectly reporting failures when up to date, and eliminated the white flash before the first frame paints
 
 ## [1.5] - 2026-11-12
 ### Added

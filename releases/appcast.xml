@@ -3,26 +3,29 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.5</title>
-            <pubDate>Thu, 12 Nov 2026 07:36:00 +0000</pubDate>
-            <sparkle:version>1.5</sparkle:version>
-            <sparkle:shortVersionString>1.5</sparkle:shortVersionString>
+            <title>1.6</title>
+            <pubDate>Fri, 13 Nov 2026 00:24:58 +0000</pubDate>
+            <sparkle:version>1.6</sparkle:version>
+            <sparkle:shortVersionString>1.6</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[### Added
-- Settings: a fuller Updates card — your current version and the latest one, an inline progress bar while a check runs, the last check time, and a highlighted card when a new version is out
-- The update strip along the top of the window is taller and shows its version — “Pulse X.X is available — click to update” — so it's obvious what it means
+            <description sparkle:format="markdown"><![CDATA[
+### Added
+- **Memory pressure, swap & Energy mode** — live macOS VM memory pressure (`Normal` / `Warn` / `Critical`) and SSD swap in the Memory card and menu bar, an **Energy** toggle on Top CPU, and battery wattage in the header
+- **Process Blacklist (Auto-Kill)** — automatically quit or force-kill recurring processes whenever they spawn, with pause/signal controls and core-system safeguards
+- **Background & Login Items inspector** — view registered LaunchAgents and LaunchDaemons, running status, and `.plist` locations
+- **Process drawer diagnostics** — inspect sleep-preventing assertions and live network sockets/ports, plus **Reveal in Finder** and **Copy Diagnostics**
 
 ### Changed
-- Thermal: the throttle word (nominal / slowed / throttled) is now colored by the actual SMC throttle level — nominal reads neutral instead of red
+- **Refreshed UI & instant tooltips** — redesigned Memory info card, Settings (with live menu-bar capsule preview), About, update dialog, app icon, and DMG installer with smooth animations and instant hover tooltips
+- **Faster, responsive startup** — window opens immediately with skeleton placeholders, cold launch shows live stats in under half a second, and the layout fits cleanly down to `940×620`
 
 ### Fixed
-- Updates: the scheduled hourly check now actually runs — it silently stopped after the Sparkle 2 migration, so new releases went unnoticed until you checked manually
-- Settings: “Check for Updates” no longer pops a pointless “you're up to date” dialog, shows a clear error when a check fails, and keeps up-to-date text out of its “New update available” card
-- The update card in Settings now says “up to date” correctly and folds its progress slot away when idle
+- **Thermal & uptime coloring** — CPU die temperature gradients and long-uptime warnings now highlight reliably
+- **Updates & startup flash** — fixed update checks incorrectly reporting failures when up to date, and eliminated the white flash before the first frame paints
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.5/Pulse-1.5.zip" length="1528064" type="application/octet-stream" sparkle:edSignature="IqPBWae1rX2nAVzST7loyBJuCb0B9RIjC75ruDYcBiVhqpl4i67JcBR8EoOk4JvS4P4aKwmjmwHuGzwy0luoDg=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.6/Pulse-1.6.zip" length="1856374" type="application/octet-stream" sparkle:edSignature="Se5E1Oe14S0nSvKXn8YGaXGUQZmJ3EkyqY7B4Jn3TPm0+r+WlLjNq+h4cIgxk5C1cUfa/WQeELOPUu9VenJaBw=="/>
         </item>
     </channel>
 </rss>
