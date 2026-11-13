@@ -14,7 +14,9 @@ import Sparkle
 
 let host = "127.0.0.1"
 let pulseDir = NSHomeDirectory() + "/.pulse"
-let isSelfTest = ProcessInfo.processInfo.environment["PULSE_SELFTEST"] == "1"
+let selfTestEnv = ProcessInfo.processInfo.environment["PULSE_SELFTEST"]
+let selfTestFast = (selfTestEnv == "fast")
+let isSelfTest = (selfTestEnv == "1" || selfTestFast)
 let reopenNotificationName = Notification.Name("local.pulse.monitor.reopen")
 let closeWindowNotificationName = Notification.Name("local.pulse.monitor.closeWindow")
 
@@ -4661,7 +4663,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     // MARK: Self-test (DOM + confirm + popover + lifecycle: close/reopen, settings migration/round-trip, LaunchAgent)
     private func scheduleSelfTest() {
-        Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: selfTestFast ? 2.5 : 6.0, repeats: false) { [weak self] _ in
             self?.runSelfTest()
         }
     }
@@ -4722,14 +4724,12 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             && updBtnText.includes(realVer);
           window.__pulseUpdate && window.__pulseUpdate({ current: realVer });
           const checkCardRestored = !document.querySelector('#st-check-card')?.hidden;
-          // Real check flow — regression for "the text said up to date before the
-          // bar finished". Reopen the modal (the bar must be visible to measure)
-          // and click the real button. evaluateJavaScript does not flatten
-          // promises in this WebKit, so all timing lives app-side: the app
-          // samples the card mid-ramp and reads the settled state once its own
-          // check completes (see armSelfTestCheckFlow / selfTestCheckCompleted).
-          document.querySelector('#settings-btn')?.click();
-          document.querySelector('#st-check-btn')?.click();
+          // Real check flow — skipped in PULSE_SELFTEST=fast so UI/layout checks
+          // finish offline in ~3s without waiting on Sparkle network requests.
+          if (\(selfTestFast ? "false" : "true")) {
+            document.querySelector('#settings-btn')?.click();
+            document.querySelector('#st-check-btn')?.click();
+          }
           return JSON.stringify({
             machine: document.querySelector('#machine')?.textContent,
             ver: document.querySelector('#ver')?.textContent,
@@ -4756,6 +4756,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         w.evaluateJavaScript(js) { [weak self] d, _ in
             guard let self else { return }
             let initialJson = (d as? String) ?? "{}"
+            if selfTestFast {
+                self.selfTestFlowResolved = true
+                self.selfTestBackgroundDone = true
+            }
             self.runSelfTestLifecycleChecks(initialJson: initialJson)
             // The check flow resolves from the app when the real check completes;
             // bound it so a check that never completes (offline) can't hold the
@@ -5041,7 +5045,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                     // LaunchAgent install/remove round-trip (uses isolated label local.pulse.monitor.selftest).
                     var daemonRoundTripOk = false
                     var daemonPortOwnerOk = false
-                    if let node = findNodeFast() {
+                    if !selfTestFast, let node = findNodeFast() {
                         let mgr = LaunchAgentManager.shared
                         let pf = portFilePath()
                         try? FileManager.default.removeItem(atPath: pf)

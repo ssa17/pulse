@@ -1,26 +1,31 @@
 #!/bin/bash
 # Build Pulse.app (native shell + bundled Node backend).
-# Usage: ./app/build.sh [--notarize | --no-notarize]
+# Usage: ./app/build.sh [--notarize | --no-notarize | --fast]
 #   (no flag)      sign locally, and re-notarize automatically when the PREVIOUS
 #                  build was notarized — once you've opted in, the dev loop keeps
 #                  Touch ID on "Purge disk cache" (macOS 26.3+ gates it on
 #                  codesign -R="notarized").
 #   --notarize     always notarize (timestamp + notarytool + staple)
 #   --no-notarize  never notarize (fast, offline, password-only prompt)
+#   --fast         dev-loop speed: implies --no-notarize, swiftc -Onone, and
+#                  reuses unchanged Sparkle/thermal/icon artifacts in dist/Pulse.app
 set -e
 cd "$(dirname "$0")/.."
 
 NOTARIZE=2  # 2 = auto, 1 = explicit --notarize, 0 = never
+FAST=0
 NOTARY_PROFILE="${NOTARY_PROFILE:-notary-profile}"
 for arg in "$@"; do
   case "$arg" in
     --notarize) NOTARIZE=1 ;;
     --no-notarize) NOTARIZE=0 ;;
+    --fast) FAST=1; NOTARIZE=0 ;;
     -h|--help)
-      echo "Usage: $0 [--notarize | --no-notarize]"
+      echo "Usage: $0 [--notarize | --no-notarize | --fast]"
       echo "  (no flag)      sign locally; re-notarize automatically if the previous build was"
       echo "  --notarize     always timestamp + notarytool ($NOTARY_PROFILE) + staple"
       echo "  --no-notarize  never notarize (fast + offline; password-only 'Purge' prompt)"
+      echo "  --fast         dev loop: --no-notarize + swiftc -Onone + incremental bundle"
       echo "Touch ID on 'Purge disk cache' needs a notarized build (macOS 26.3+)."
       exit 0
       ;;
@@ -39,8 +44,14 @@ if [ "$NOTARIZE" = 2 ]; then
     NOTARIZE=0
   fi
 fi
-rm -rf dist
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/Library"
+CACHE=dist/.cache
+if [ "$FAST" = 0 ]; then
+  rm -rf dist
+  mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/Library"
+else
+  rm -rf "$APP" dist/notarize.zip
+  mkdir -p "$CACHE" "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/Library"
+fi
 
 cp app/Info.plist "$APP/Contents/Info.plist"
 
@@ -55,41 +66,63 @@ fi
 
 # ── Sparkle (auto-update framework) ──────────────────────────────
 # Ensure the pre-built framework is present (downloads on a fresh clone).
-bash vendor/fetch-sparkle.sh
-# Bundle the framework + the Updater helper app (required for non-sandboxed apps).
-cp -R vendor/sparkle/Sparkle.framework "$APP/Contents/Frameworks/"
-cp -R vendor/sparkle/Sparkle.framework/Versions/Current/Updater.app "$APP/Contents/Library/"
+if [ "$FAST" = 0 ] || [ ! -d "$CACHE/Sparkle.framework" ] || [ ! -d "$CACHE/Updater.app" ]; then
+  bash vendor/fetch-sparkle.sh
+  # Bundle the framework + the Updater helper app (required for non-sandboxed apps).
+  cp -R vendor/sparkle/Sparkle.framework "$APP/Contents/Frameworks/"
+  cp -R vendor/sparkle/Sparkle.framework/Versions/Current/Updater.app "$APP/Contents/Library/"
+  if [ "$FAST" = 1 ]; then
+    rm -rf "$CACHE/Sparkle.framework" "$CACHE/Updater.app"
+    cp -R vendor/sparkle/Sparkle.framework "$CACHE/"
+    cp -R vendor/sparkle/Sparkle.framework/Versions/Current/Updater.app "$CACHE/"
+  fi
+else
+  cp -R "$CACHE/Sparkle.framework" "$APP/Contents/Frameworks/"
+  cp -R "$CACHE/Updater.app" "$APP/Contents/Library/"
+fi
 
-echo "→ compiling Swift shell"
+SWIFT_OPT="-O"
+[ "$FAST" = 1 ] && SWIFT_OPT="-Onone"
+echo "→ compiling Swift shell ($SWIFT_OPT)"
 # -target pins the deployment target to the supported floor (macOS 13) instead of
 # the build machine's OS version — without it the binary would only run on the
 # newest macOS (swiftc defaults minos to the host version).
-swiftc -O app/Pulse.swift -o "$APP/Contents/MacOS/Pulse" \
+swiftc "$SWIFT_OPT" app/Pulse.swift -o "$APP/Contents/MacOS/Pulse" \
   -target arm64-apple-macos13.0 \
   -framework Cocoa -framework WebKit \
   -F vendor/sparkle \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 
-echo "→ compiling thermal helper"
-clang -O2 app/pulse-thermal.c -o "$APP/Contents/MacOS/pulse-thermal" \
-  -target arm64-apple-macos13.0 \
-  -framework CoreFoundation -framework IOKit
+if [ "$FAST" = 0 ] || [ ! -x "$CACHE/pulse-thermal" ] || [ app/pulse-thermal.c -nt "$CACHE/pulse-thermal" ]; then
+  echo "→ compiling thermal helper"
+  clang -O2 app/pulse-thermal.c -o "$APP/Contents/MacOS/pulse-thermal" \
+    -target arm64-apple-macos13.0 \
+    -framework CoreFoundation -framework IOKit
+  [ "$FAST" = 1 ] && cp "$APP/Contents/MacOS/pulse-thermal" "$CACHE/pulse-thermal"
+else
+  cp "$CACHE/pulse-thermal" "$APP/Contents/MacOS/pulse-thermal"
+fi
 
-echo "→ building icon"
-node app/make-icon.mjs app/Pulse-1024.png
-rm -rf app/Pulse.iconset
-mkdir -p app/Pulse.iconset
-sips -z 16 16   app/Pulse-1024.png --out app/Pulse.iconset/icon_16x16.png      >/dev/null
-sips -z 32 32   app/Pulse-1024.png --out app/Pulse.iconset/icon_16x16@2x.png   >/dev/null
-sips -z 32 32   app/Pulse-1024.png --out app/Pulse.iconset/icon_32x32.png      >/dev/null
-sips -z 64 64   app/Pulse-1024.png --out app/Pulse.iconset/icon_32x32@2x.png   >/dev/null
-sips -z 128 128 app/Pulse-1024.png --out app/Pulse.iconset/icon_128x128.png    >/dev/null
-sips -z 256 256 app/Pulse-1024.png --out app/Pulse.iconset/icon_128x128@2x.png >/dev/null
-sips -z 256 256 app/Pulse-1024.png --out app/Pulse.iconset/icon_256x256.png    >/dev/null
-sips -z 512 512 app/Pulse-1024.png --out app/Pulse.iconset/icon_256x256@2x.png >/dev/null
-sips -z 512 512 app/Pulse-1024.png --out app/Pulse.iconset/icon_512x512.png    >/dev/null
-iconutil -c icns app/Pulse.iconset -o "$APP/Contents/Resources/Pulse.icns"
-rm -rf app/Pulse.iconset
+if [ "$FAST" = 0 ] || [ ! -f "$CACHE/Pulse.icns" ] || [ app/make-icon.mjs -nt "$CACHE/Pulse.icns" ]; then
+  echo "→ building icon"
+  node app/make-icon.mjs app/Pulse-1024.png
+  rm -rf app/Pulse.iconset
+  mkdir -p app/Pulse.iconset
+  sips -z 16 16   app/Pulse-1024.png --out app/Pulse.iconset/icon_16x16.png      >/dev/null
+  sips -z 32 32   app/Pulse-1024.png --out app/Pulse.iconset/icon_16x16@2x.png   >/dev/null
+  sips -z 32 32   app/Pulse-1024.png --out app/Pulse.iconset/icon_32x32.png      >/dev/null
+  sips -z 64 64   app/Pulse-1024.png --out app/Pulse.iconset/icon_32x32@2x.png   >/dev/null
+  sips -z 128 128 app/Pulse-1024.png --out app/Pulse.iconset/icon_128x128.png    >/dev/null
+  sips -z 256 256 app/Pulse-1024.png --out app/Pulse.iconset/icon_128x128@2x.png >/dev/null
+  sips -z 256 256 app/Pulse-1024.png --out app/Pulse.iconset/icon_256x256.png    >/dev/null
+  sips -z 512 512 app/Pulse-1024.png --out app/Pulse.iconset/icon_256x256@2x.png >/dev/null
+  sips -z 512 512 app/Pulse-1024.png --out app/Pulse.iconset/icon_512x512.png    >/dev/null
+  iconutil -c icns app/Pulse.iconset -o "$APP/Contents/Resources/Pulse.icns"
+  rm -rf app/Pulse.iconset
+  [ "$FAST" = 1 ] && cp "$APP/Contents/Resources/Pulse.icns" "$CACHE/Pulse.icns"
+else
+  cp "$CACHE/Pulse.icns" "$APP/Contents/Resources/Pulse.icns"
+fi
 
 echo "→ bundling backend"
 cp -R public "$APP/Contents/Resources/public"

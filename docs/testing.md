@@ -7,12 +7,13 @@ Pick the narrowest loop that exercises what you changed. Never kill or hijack a 
 | What you changed | Command | Typical time | Notes |
 |---|---|---|---|
 | `server.js` parsers / helpers | `node server.test.js` | `< 1s` | Runs 250 offline unit tests; no GUI or macOS tools needed |
-| `public/index.html` UI / CSS / JS | `PORT=8797 node server.js` | `~1s` | Runs on an isolated port alongside any live Pulse on `8787`; test in Playwright/browser at `1280×860` and `940×620` |
+| `public/index.html` UI / CSS / JS | `PORT=8797 node server.js` (or `Cmd-R` in dev `dist/Pulse.app`) | `~1s` | Isolated port alongside any live Pulse on `8787`; dev builds in `dist/` also read `public/` directly from the repo via `devCheckoutDir()` |
 | AppKit layout / constraints (`UpdateStripView`, etc.) | `swift -e '...'` | `~1–2s` | Instantiate the view + `NSWindow` inline and print `.frame` / constraint results without building `.app` |
-| Native macOS shell (`app/Pulse.swift`) — dev loop | `./app/build.sh --no-notarize && PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse` | `~15–20s` | Skips Apple Notary upload while keeping full Developer ID signing + Sparkle |
-| Final verification / Touch ID (`Purge disk cache`) | `./app/build.sh --notarize && PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse` | `~45–55s` | Re-notarizes and staples `dist/Pulse.app` (required once at the end if `--no-notarize` was used) |
+| Native macOS shell (`app/Pulse.swift`) — lightning dev loop | `./app/build.sh --fast && PULSE_SELFTEST=fast PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse` | `~7s total` | `--fast` uses `swiftc -Onone` + cached Sparkle/thermal/icon (`~3.6s`); `PULSE_SELFTEST=fast` skips Sparkle network + LaunchAgent cycles (`~3.4s`) while running all UI, layout, modal, and reopen checks |
+| Native macOS shell — full offline build | `./app/build.sh --no-notarize` | `~6s` | Full `-O` build without notarization |
+| Final verification / Touch ID (`Purge disk cache`) | `./app/build.sh --notarize && PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse` | `~45–55s` | Re-notarizes and staples `dist/Pulse.app` and runs full Sparkle + LaunchAgent checks |
 
-> **Important `--no-notarize` caveat:** plain `./app/build.sh` auto-detects whether the existing `dist/Pulse.app` is notarized. If you ran `--no-notarize`, a plain `./app/build.sh` afterward stays unnotarized until you explicitly pass `--notarize`.
+> **Important `--fast` / `--no-notarize` caveat:** plain `./app/build.sh` auto-detects whether the existing `dist/Pulse.app` is notarized. If you ran `--fast` or `--no-notarize`, a plain `./app/build.sh` afterward stays unnotarized until you explicitly pass `--notarize`.
 
 ---
 

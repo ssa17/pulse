@@ -83,12 +83,14 @@ Never store state inside the .app bundle — it must stay immutable and rebuilda
 
 ```bash
 node server.js                          # web mode → http://127.0.0.1:8787 (use PORT=8797 beside a live app)
-./app/build.sh --no-notarize            # fast dev build (~6s, password-only Purge prompt)
+./app/build.sh --fast                   # lightning dev build (~3.6s, -Onone + cached icon/Sparkle, no notarize)
+./app/build.sh --no-notarize            # fast -O dev build (~6s, password-only Purge prompt)
 ./app/build.sh                          # build dist/Pulse.app (auto re-notarizes if previous build was)
 ./app/build.sh --notarize               # force notarize & staple (needed for Touch ID on Purge)
 open dist/Pulse.app
 # Self-test (needs a GUI session; runs isolated alongside a live Pulse.app):
-PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse
+PULSE_SELFTEST=fast PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse  # ~3.4s UI/layout/lifecycle
+PULSE_SELFTEST=1 PULSE_AUTOCONFIRM=1 dist/Pulse.app/Contents/MacOS/Pulse     # full + Sparkle + LaunchAgent
 # Unit tests (off-line, no macOS dependencies):
 node server.test.js              # 250 parser unit tests — fast feedback loop
 ```
