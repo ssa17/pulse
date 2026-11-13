@@ -2449,6 +2449,7 @@ final class UpdateStripView: NSView {
     static let height: CGFloat = 24
     private let labelField = NSTextField(labelWithString: "")
     var onClick: (() -> Void)?
+    var labelFrame: NSRect { labelField.frame }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -3936,9 +3937,12 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         guard let cv = window.contentView else { return }
         if updateStrip.superview !== cv {
             updateStrip.removeFromSuperview()
-            // Any live constraints may still target the previous content view —
-            // deactivate them before re-anchoring.
-            for c in updateStrip.constraints { c.isActive = false }
+            // Deactivate only constraints owned solely by the strip itself (e.g. its
+            // height anchor); subview constraints (labelField centering) also live in
+            // `updateStrip.constraints` and must remain active across re-anchoring.
+            for c in updateStrip.constraints where c.firstItem === updateStrip && c.secondItem == nil {
+                c.isActive = false
+            }
             cv.addSubview(updateStrip, positioned: .above, relativeTo: nil)
             updateStrip.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
@@ -4973,6 +4977,42 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             }
         }
 
+        // 1b. Update strip layout invariant: when visible, strip is 24px tall,
+        // its label is horizontally & vertically centered (not knocked to bottom-left),
+        // and the webview sits below it without overlapping; when hidden, the webview
+        // reclaims the full content-view top.
+        var updateStripOk = false
+        var updateStripInfo: [String: Any] = [:]
+        if let cv = window.contentView {
+            let prevPending = pendingUpdateVersion
+            pendingUpdateVersion = "9.9.9"
+            setUpdateIndicators()
+            cv.layoutSubtreeIfNeeded()
+            let sf = updateStrip.frame
+            let lf = updateStrip.labelFrame
+            let wf = web?.frame ?? .zero
+            let hOk = !updateStrip.isHidden && abs(sf.height - UpdateStripView.height) < 0.5
+            let centeredXOk = abs(lf.midX - updateStrip.bounds.midX) <= 1.5
+            let centeredYOk = abs(lf.midY - updateStrip.bounds.midY) <= 1.5
+            let noOverlapOk = wf.maxY <= sf.minY + 0.5 && wf.height > 0
+
+            pendingUpdateVersion = prevPending
+            setUpdateIndicators()
+            cv.layoutSubtreeIfNeeded()
+            let hiddenRestoreOk = (prevPending != nil) || (updateStrip.isHidden && (web?.frame.maxY ?? 0) >= cv.bounds.maxY - 0.5)
+            updateStripOk = hOk && centeredXOk && centeredYOk && noOverlapOk && hiddenRestoreOk
+            updateStripInfo = [
+                "stripH": sf.height,
+                "labelX": Double(lf.origin.x),
+                "labelMidX": Double(lf.midX),
+                "stripMidX": Double(updateStrip.bounds.midX),
+                "centeredXOk": centeredXOk,
+                "centeredYOk": centeredYOk,
+                "noOverlapOk": noOverlapOk,
+                "hiddenRestoreOk": hiddenRestoreOk,
+            ]
+        }
+
         // 2. Window close -> app stays alive, webview released, backend still alive on serverPort.
         settings.closeBehavior = "background"
         settings.keepDashboardInMemory = false
@@ -5049,6 +5089,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                     merged["lifecycle"] = [
                         "settingsVisible": settingsVisible,
                         "settingsRoundTripOk": settingsRoundTripOk,
+                        "updateStripOk": updateStripOk,
+                        "updateStrip": updateStripInfo,
                         "closedWindowHidden": closedWindowHidden,
                         "closedWebReleased": closedWebReleased,
                         "backendAliveWhileClosed": backendAliveWhileClosed,
