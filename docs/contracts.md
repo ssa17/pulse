@@ -254,7 +254,12 @@ not an app.
   `reopenMs`), LaunchAgent install/remove round-trip (`daemonRoundTripOk`), and
   boot trace verification (`bootTraceOk`), plus new feature checks: `#mem-pressure`,
   drawer extras (`#dcopy`, `#d-net-box` as `drawerExtrasOk`), Left Panel Energy toggle
-  (`energyToggleOk`), and Background Items modal (`bgItemsModalOk`). Renaming those
+  (`energyToggleOk`), Background Items modal (`bgItemsModalOk`), and the row context
+  menu — dispatches a button-2 `mousedown` on a visible `#rows-cpu .row` (must open
+  `#ctx-menu.on` with items), then a `contextmenu` targeting the open menu itself
+  (must NOT close it: WebKit hit-tests that event after the menu is placed under the
+  cursor), then a `contextmenu` on `document.body` (must close it; reported as
+  `ctxMenuOk`). Renaming those
   DOM ids silently breaks the self-test.
 - **Additional inspection & quick-action endpoints**:
   * `GET /api/app-details?pids=1,2,3` — validates up to 80 positive PIDs, runs

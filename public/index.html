@@ -1436,10 +1436,11 @@ function makeRow(panel, key) {
     <canvas class="spark"></canvas>`;
   el.addEventListener('click', () => openDrawer(key));
   // Right-click → context menu. `contextmenu` works in browsers; WKWebView
-  // (the .app) is flaky about dispatching it, so mousedown button 2 is a
-  // fallback trigger that covers both.
+  // (the .app) is flaky about dispatching it, so mousedown/pointerdown button 2
+  // are fallback triggers that cover both.
   el.addEventListener('contextmenu', (e) => ctxForApp(e, key));
   el.addEventListener('mousedown', (e) => { if (e.button === 2) ctxForApp(e, key); });
+  el.addEventListener('pointerdown', (e) => { if (e.button === 2) ctxForApp(e, key); });
   const r = {
     panel, key,
     el,
@@ -2105,6 +2106,7 @@ function renderDrawer() {
     const pid = +row.dataset.pid;
     row.addEventListener('contextmenu', (e) => ctxForProc(e, S.drawerKey, pid));
     row.addEventListener('mousedown', (e) => { if (e.button === 2) ctxForProc(e, S.drawerKey, pid); });
+    row.addEventListener('pointerdown', (e) => { if (e.button === 2) ctxForProc(e, S.drawerKey, pid); });
   });
 }
 async function killProc(pid, sig, btn) {
@@ -2297,8 +2299,13 @@ function ctxForProc(e, key, pid) {
 
 // Global listeners: close the menu when the user dismisses it.
 document.addEventListener('contextmenu', (e) => {
-  if (e.target.closest && e.target.closest('.row, .prow')) return; // that element opens its own
+  const target = e.target && e.target.nodeType === 1 ? e.target : e.target?.parentElement;
+  if (target && target.closest('.row, .prow')) return; // that element opens its own
   e.preventDefault(); // no native context menu anywhere in the dashboard
+  // If mousedown/pointerdown (button 2) just opened #ctx-menu under the cursor,
+  // the subsequent contextmenu event can hit-test #ctx-menu instead of .row/.prow —
+  // keep it open instead of immediately dismissing it.
+  if (target && target.closest('#ctx-menu')) return;
   closeCtxMenu();
 });
 // Dismiss on a click outside the menu. Must run in the CAPTURE phase: a click

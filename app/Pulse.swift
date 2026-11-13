@@ -4685,6 +4685,18 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
           const memPressure = document.querySelector('#mem-pressure')?.textContent || null;
           const hasDrawerActions = !!document.querySelector('#dcopy') && !!document.querySelector('#d-net-box') && !!document.querySelector('#dblist');
           document.querySelector('#dclose')?.click();
+          let ctxMenuOk = false;
+          if (row) {
+            const rr = row.getBoundingClientRect();
+            row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2, clientX: rr.left + 10, clientY: rr.top + 10 }));
+            const ctxEl = document.querySelector('#ctx-menu');
+            const ctxOpened = !!ctxEl && ctxEl.classList.contains('on') && ctxEl.querySelectorAll('.ci').length > 0;
+            ctxEl?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rr.left + 10, clientY: rr.top + 10 }));
+            const ctxSurvived = !!ctxEl && ctxEl.classList.contains('on');
+            document.body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 2, clientY: 2 }));
+            const ctxClosed = !!ctxEl && !ctxEl.classList.contains('on');
+            ctxMenuOk = ctxOpened && ctxSurvived && ctxClosed;
+          }
           const energyBtn = document.querySelector('#cpu-mode-energy');
           energyBtn?.click();
           const energyToggleOk = !!energyBtn && document.querySelectorAll('#rows-cpu .row').length > 0;
@@ -4737,7 +4749,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             mem: document.querySelector('#mem-big')?.textContent,
             rows: document.querySelectorAll('#rows-cpu .row').length,
             live: document.querySelector('#live-text')?.textContent,
-            confirmWired, drawerRows, memPressure, drawerExtrasOk: hasDrawerActions, memInfo,
+            confirmWired, drawerRows, memPressure, drawerExtrasOk: hasDrawerActions, ctxMenuOk, memInfo,
             energyToggleOk, bgItemsModalOk, blacklistModalOk,
             dashboardSettingsOk: dashboardSettingsOpen && dashboardSettingsClosed,
             updatesCardOk: updateCardSwaps && checkCardRestored,

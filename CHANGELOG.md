@@ -12,6 +12,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 ### Changed
 - Updates: the “new version available” strip along the top of the window is slimmer with higher-contrast text, and the dashboard now sits below it instead of being partly covered
 
+### Fixed
+- Context menu: right-clicking a row no longer flashes the menu open and immediately closes it (seen on some macOS versions) — it now stays open until you dismiss it
+
 ## [1.6] - 2026-11-13
 
 ### Added
