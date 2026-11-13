@@ -2441,15 +2441,12 @@ final class SettingsWindowController: NSObject {
 /* ================================================================== *
  *  App shell
  * ================================================================== */
-/// Clickable view — the update strip's 4px edge needs a pointer cursor + a click target.
-final class ClickableView: NSView {
-    var onClick: (() -> Void)?
-    override func mouseDown(with event: NSEvent) { onClick?() }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
-}
-
-/// A clickable, text-labeled update strip.
+/// A clickable, text-labeled update strip — the quiet "an update is available"
+/// ribbon along the window's top edge. `Shell.syncUpdateStrip()` anchors it and
+/// keeps the webview *below* it, so the dashboard reflows instead of being covered.
 final class UpdateStripView: NSView {
+    /// Strip height — the exact space the webview reserves when the strip shows.
+    static let height: CGFloat = 24
     private let labelField = NSTextField(labelWithString: "")
     var onClick: (() -> Void)?
 
@@ -2465,22 +2462,24 @@ final class UpdateStripView: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor(red: 0.17, green: 0.83, blue: 0.65, alpha: 1).cgColor  // --net
+        // The web palette's --net green, with dark ink on it: white on this mint
+        // is only ~2:1 contrast, the dark ink is ~7:1 — readable at a glance.
+        layer?.backgroundColor = NSColor(srgbRed: 0x2d / 255.0, green: 0xd4 / 255.0, blue: 0xa7 / 255.0, alpha: 1).cgColor
         labelField.isEditable = false
         labelField.isSelectable = false
         labelField.alignment = .center
-        labelField.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        labelField.textColor = NSColor.white
+        labelField.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        labelField.textColor = NSColor(srgbRed: 0x07 / 255.0, green: 0x30 / 255.0, blue: 0x1f / 255.0, alpha: 1)
+        labelField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(labelField)
-        wantsLayer = true
-    }
-
-    override func layout() {
-        super.layout()
-        // Padding of 6px top/bottom, label fills the rest
-        let labelHeight = bounds.height - 12
-        let labelY = bounds.minY + 6
-        labelField.frame = NSRect(x: 8, y: labelY, width: bounds.width - 16, height: max(labelHeight, 14))
+        // Centered label; the leading/trailing clamp only kicks in on absurdly
+        // narrow windows (min is 940, the label is ~260 — it never binds).
+        NSLayoutConstraint.activate([
+            labelField.centerXAnchor.constraint(equalTo: centerXAnchor),
+            labelField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labelField.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 10),
+            labelField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+        ])
     }
 
     func setVersion(_ version: String?) {
@@ -3482,6 +3481,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     var checkFromWeb = false            // the in-flight check was initiated from the dashboard card
     var checkSafetyTimer: Timer?        // a canceled/dropped check never gets a result callback
     let updateStrip = UpdateStripView()
+    var webTopToWindowAnchor: NSLayoutConstraint?   // webview top ↔ content-view top (strip hidden)
+    var webTopToStripAnchor: NSLayoutConstraint?   // webview top ↔ strip bottom (strip visible)
     var launchSplash: NSView?
     var activityToken: NSObjectProtocol?
     let darkBg = NSColor(srgbRed: 0x0b / 255.0, green: 0x0d / 255.0, blue: 0x12 / 255.0, alpha: 1)
@@ -3509,7 +3510,16 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         cfg.userContentController.add(handler, name: "pulseSettings")
         let cv = window.contentView!
         let w = WKWebView(frame: cv.bounds, configuration: cfg)
-        w.autoresizingMask = [.width, .height]
+        w.translatesAutoresizingMaskIntoConstraints = false
+        // Two top edges, exactly one active at a time (toggled in syncUpdateStrip):
+        // flush with the window top while the strip is hidden, or below the strip
+        // while it's visible — the dashboard must never end up underneath it.
+        // The constraints are only *activated* once `w` has a superview (below):
+        // activating a constraint whose items don't share a hierarchy throws.
+        webTopToWindowAnchor = NSLayoutConstraint(item: w, attribute: .top, relatedBy: .equal,
+                                                  toItem: cv, attribute: .top, multiplier: 1, constant: 0)
+        webTopToStripAnchor = NSLayoutConstraint(item: w, attribute: .top, relatedBy: .equal,
+                                                 toItem: updateStrip, attribute: .bottom, multiplier: 1, constant: 0)
         w.navigationDelegate = self
         w.uiDelegate = self
         // Stop WebKit from drawing an opaque white backing before HTML commits, and keep the
@@ -3522,6 +3532,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             w.underPageBackgroundColor = darkBg
         }
         cv.addSubview(w, positioned: .below, relativeTo: updateStrip.superview === cv ? updateStrip : nil)
+        // Superview first: activating constraints whose items don't share a hierarchy
+        // throws. The top edge is pinned by syncUpdateStrip, which anchors the strip
+        // itself when needed and then selects the webview's top constraint.
+        NSLayoutConstraint.activate([
+            w.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            w.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            w.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+        ])
         web = w
         syncUpdateStrip()
         return w
@@ -3909,13 +3927,38 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         updater.checkForUpdates()
     }
 
-    /// Re-parent the strip onto whatever the current content view is — the content view
-    /// is replaced when the web opens/closes/reopens.
+    /// Anchor the strip to the top edge of whatever the current content view is, and
+    /// pin the webview's top edge *below* the strip while it's visible — the strip must
+    /// never cover the dashboard (the page reflows around it instead). The webview is
+    /// released and re-created when the dashboard closes/reopens, so this is re-asserted
+    /// on every (re)creation and on every update-state change. Idempotent.
     func syncUpdateStrip() {
         guard let cv = window.contentView else { return }
-        // Height: 30px for the strip, positioned at top
-        updateStrip.frame = NSRect(x: 0, y: cv.frame.maxY - 30, width: cv.frame.width, height: 30)
-        cv.addSubview(updateStrip)
+        if updateStrip.superview !== cv {
+            updateStrip.removeFromSuperview()
+            // Any live constraints may still target the previous content view —
+            // deactivate them before re-anchoring.
+            for c in updateStrip.constraints { c.isActive = false }
+            cv.addSubview(updateStrip, positioned: .above, relativeTo: nil)
+            updateStrip.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                updateStrip.topAnchor.constraint(equalTo: cv.topAnchor),
+                updateStrip.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+                updateStrip.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+                updateStrip.heightAnchor.constraint(equalToConstant: UpdateStripView.height),
+            ])
+        }
+        guard let w = web, w.superview === cv,
+              let toWindow = webTopToWindowAnchor, let toStrip = webTopToStripAnchor else { return }
+        // The strip's own anchor was ensured above; while it's visible the webview
+        // hangs off the strip's bottom edge, otherwise it's flush with the window top.
+        if updateStrip.isHidden {
+            toStrip.isActive = false
+            toWindow.isActive = true
+        } else {
+            toWindow.isActive = false
+            toStrip.isActive = true
+        }
     }
 
     // MARK: Update helpers
@@ -4213,9 +4256,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         launchSplash = splash
 
         // Update strip along the top edge — the quiet, persistent “an update is
-        // available, click to install” indicator (hidden until one is).
+        // available, click to install” indicator (hidden until one is). syncUpdateStrip
+        // owns its constraints (and the webview's top edge while it's visible).
         updateStrip.setVersion(nil)
-        updateStrip.autoresizingMask = [.width, .minYMargin]
+        updateStrip.translatesAutoresizingMaskIntoConstraints = false
         updateStrip.onClick = { [weak self] in self?.checkForUpdates() }
 
         // Kick off backend discovery / spawn immediately so it runs in parallel with

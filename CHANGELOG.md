@@ -9,6 +9,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Changed
+- Updates: the “new version available” strip along the top of the window is slimmer with higher-contrast text, and the dashboard now sits below it instead of being partly covered
+
 ## [1.6] - 2026-11-13
 
 ### Added
