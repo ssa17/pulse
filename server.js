@@ -806,29 +806,48 @@ function roleOf(name) {
 /* ------------------------------------------------------------------ *
  *  Icons: extract .icns from app bundles → 64px PNG, cached
  * ------------------------------------------------------------------ */
-const iconMap = new Map(); // bundle → { url?, ready }
+const iconMap = new Map(); // bundle → { url?, ready, mtimeMs?, checkedAt }
+const ICON_RECHECK_MS = 10_000;
+
+function iconCacheHash(bundlePath, mtimeMs) {
+  return crypto.createHash('md5').update(`${bundlePath}:${Math.floor(mtimeMs || 0)}`).digest('hex').slice(0, 12);
+}
 
 function ensureIcon(grp) {
-  if (!grp.bundle || iconMap.has(grp.bundle)) return;
-  const entry = { ready: false };
-  iconMap.set(grp.bundle, entry);
+  if (!grp.bundle) return;
+  const now = Date.now();
+  const existing = iconMap.get(grp.bundle);
+  if (existing && (now - existing.checkedAt < ICON_RECHECK_MS)) return;
+
+  const entry = existing || { ready: false, checkedAt: 0 };
+  entry.checkedAt = now;
+  if (!existing) iconMap.set(grp.bundle, entry);
+
   const resDir = path.join(grp.bundle, 'Contents', 'Resources');
   let icns = null;
+  let mtimeMs = 0;
   try {
     const files = fs.readdirSync(resDir);
     icns = files.find((f) => /appicon\.icns$/i.test(f)) || files.find((f) => /\.icns$/i.test(f));
+    if (icns) {
+      mtimeMs = fs.statSync(path.join(resDir, icns)).mtimeMs;
+    }
   } catch { /* no resources dir */ }
   if (!icns) return;
-  const hash = crypto.createHash('md5').update(grp.bundle).digest('hex').slice(0, 12);
+  if (existing && existing.ready && existing.mtimeMs === mtimeMs) return;
+
+  const hash = iconCacheHash(grp.bundle, mtimeMs);
   const out = path.join(ICON_DIR, hash + '.png');
   if (fs.existsSync(out)) {
     entry.url = '/icons/' + hash + '.png';
+    entry.mtimeMs = mtimeMs;
     entry.ready = true;
     return;
   }
   execFile('sips', ['-z', '64', '64', '-s', 'format', 'png', path.join(resDir, icns), '--out', out], () => {
     if (fs.existsSync(out)) {
       entry.url = '/icons/' + hash + '.png';
+      entry.mtimeMs = mtimeMs;
       entry.ready = true;
     }
   });

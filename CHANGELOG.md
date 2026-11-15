@@ -14,6 +14,7 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ### Fixed
 - Context menu: right-clicking a row no longer flashes the menu open and immediately closes it (seen on some macOS versions) — it now stays open until you dismiss it
+- App icons: cached app icons now invalidate when an app bundle's `.icns` file changes instead of serving stale icons indefinitely
 
 ## [1.6] - 2026-11-13
 
