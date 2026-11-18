@@ -9,6 +9,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Added
+- Dashboard: sort the Top CPU and Top Memory lists by CPU, memory, name, or process count — with an ascending/descending toggle — and your choice is remembered across launches
+
 ### Changed
 - Updates: the “new version available” strip along the top of the window is slimmer with higher-contrast text, and the dashboard now sits below it instead of being partly covered
 

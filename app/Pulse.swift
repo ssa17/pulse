@@ -140,6 +140,11 @@ final class BootTracer {
  *  Versioned settings store (~/.pulse/settings.json)
  *  Migrates legacy `statusBarGraphType` while preserving unknown keys.
  * ================================================================== */
+/// One panel's list sort: `key` ∈ cpu|mem|name|procs, `dir` -1 (desc) / 1 (asc).
+struct PanelSortEntry {
+    var key: String
+    var dir: Int
+}
 final class PulseSettings {
     static let currentVersion = 2
     /// Canonical order of the status-menu rows; a subset of `menuRows` = hidden.
@@ -151,12 +156,19 @@ final class PulseSettings {
     /// (uptime is a counter, and thermal has no bar, so neither gets a capsule).
     static let allBarRows = ["cpu", "gpu", "memory", "network"]
     static let defaultBarRows = ["cpu", "gpu", "memory", "network"]
+    /// Dashboard panel sort keys (the CPU/Memory list dropdowns).
+    static let allPanelSortKeys = ["cpu", "mem", "name", "procs"]
+    static let defaultPanelSort: [String: PanelSortEntry] = [
+        "cpu": PanelSortEntry(key: "cpu", dir: -1),
+        "mem": PanelSortEntry(key: "mem", dir: -1),
+    ]
     let filePath: String
     var startAtLogin: Bool = false
     var closeBehavior: String = "background" // "background" | "quit"
     var keepDashboardInMemory: Bool = true
     var menuRows: [String] = PulseSettings.defaultMenuRows
     var barRows: [String] = PulseSettings.defaultBarRows
+    var panelSort: [String: PanelSortEntry] = PulseSettings.defaultPanelSort
     var layoutGen: Int = 0 // settings-file revision (bumped on each layout write)
     private var storage: [String: Any] = [:]
 
@@ -195,6 +207,19 @@ final class PulseSettings {
             } else {
                 barRows = menuRows.filter { Self.allBarRows.contains($0) }
             }
+            if let ps = obj["panelSort"] as? [String: [String: Any]] {
+                var v: [String: PanelSortEntry] = [:]
+                for which in ["cpu", "mem"] {
+                    if let e = ps[which] {
+                        let k = e["key"] as? String ?? ""
+                        let key = Self.allPanelSortKeys.contains(k) ? k : (which == "cpu" ? "cpu" : "mem")
+                        v[which] = PanelSortEntry(key: key, dir: (e["dir"] as? Int) == 1 ? 1 : -1)
+                    }
+                }
+                panelSort = v
+            } else {
+                panelSort = Self.defaultPanelSort
+            }
         } else {
             storage = [:]
             startAtLogin = false
@@ -202,6 +227,7 @@ final class PulseSettings {
             keepDashboardInMemory = true
             menuRows = Self.defaultMenuRows
             barRows = Self.defaultBarRows
+            panelSort = Self.defaultPanelSort
             layoutGen = 0
         }
         if needsSave && persistMigration {
@@ -221,6 +247,9 @@ final class PulseSettings {
         storage["keepDashboardInMemory"] = keepDashboardInMemory
         storage["menuRows"] = menuRows
         storage["barRows"] = barRows
+        var psOut: [String: [String: Any]] = [:]
+        for (k, v) in panelSort { psOut[k] = ["key": v.key, "dir": v.dir] }
+        storage["panelSort"] = psOut
         layoutGen += 1  // this write advances the revision (any field, any writer)
         storage["layoutGen"] = layoutGen
         try? FileManager.default.createDirectory(atPath: (filePath as NSString).deletingLastPathComponent,
@@ -3690,6 +3719,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
             "keepDashboardInMemory": settings.keepDashboardInMemory,
             "menuRows": settings.menuRows,
             "barRows": settings.barRows,
+            "panelSort": settings.panelSort.mapValues { ["key": $0.key, "dir": $0.dir] },
             "daemonStatus": daemonStatus,
             "daemonError": mgr.lastError ?? "",
         ]
@@ -3738,6 +3768,21 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         // the button visibly changes.
         syncAllSettingsUI()
         status?.applyMenuLayout(menu: settings.menuRows, bar: settings.barRows)
+    }
+
+    func setPanelSort(_ ps: [String: [String: Any]]) {
+        settings.mergeFromDisk()
+        var v: [String: PanelSortEntry] = [:]
+        for which in ["cpu", "mem"] {
+            if let e = ps[which] {
+                let k = e["key"] as? String ?? ""
+                let key = PulseSettings.allPanelSortKeys.contains(k) ? k : (which == "cpu" ? "cpu" : "mem")
+                v[which] = PanelSortEntry(key: key, dir: (e["dir"] as? Int) == 1 ? 1 : -1)
+            }
+        }
+        settings.panelSort = v
+        settings.save()
+        syncAllSettingsUI()
     }
 
     func setStartAtLogin(_ enabled: Bool) {
@@ -4165,6 +4210,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if let val = body["value"] as? Bool { setKeepDashboardInMemory(val) }
             case "setMenuRows":
                 if let val = body["rows"] as? [String] { setMenuLayout(menu: val, bar: body["bar"] as? [String] ?? settings.barRows) }
+            case "setPanelSort":
+                if let val = body["value"] as? [String: [String: Any]] { setPanelSort(val) }
             case "checkForUpdates":
                 startUpdateCheck(fromWeb: true)
                 if isSelfTest { armSelfTestCheckFlow() }

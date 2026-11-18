@@ -634,6 +634,20 @@ function normalizeBarRows(v, menuRows) {
   // Key absent → follow the menu's visible set (capsules in the menu's order).
   return menuRows.filter((id) => BAR_ROW_IDS.includes(id));
 }
+// Per-panel list sort (the dashboard's CPU/Memory panels). Shape:
+// { cpu: { key, dir }, mem: { key, dir } } where key ∈ cpu|mem|name|procs and
+// dir is -1 (desc) or 1 (asc). Unknown/absent values fall back to the panel's
+// natural metric (cpu panel → cpu, mem panel → mem), descending.
+const PANEL_SORT_KEYS = ['cpu', 'mem', 'name', 'procs'];
+function normalizePanelSort(v) {
+  const out = {};
+  for (const which of ['cpu', 'mem']) {
+    const o = (v && typeof v === 'object' && v[which]) || {};
+    const key = PANEL_SORT_KEYS.includes(o.key) ? o.key : (which === 'cpu' ? 'cpu' : 'mem');
+    out[which] = { key, dir: o.dir === 1 ? 1 : -1 };
+  }
+  return out;
+}
 let lastMenuRows = [...DEFAULT_MENU_ROWS];
 let lastBarRows = [...BAR_ROW_IDS];
 // Settings-file revision. Bumped on every layout write (app or web); the app
@@ -2070,6 +2084,7 @@ const server = http.createServer((req, res) => {
           keepDashboardInMemory: !!raw.keepDashboardInMemory,
           menuRows: normalizeMenuRows(raw.menuRows),
           barRows: normalizeBarRows(raw.barRows, normalizeMenuRows(raw.menuRows)),
+          panelSort: normalizePanelSort(raw.panelSort),
           layoutGen: typeof raw.layoutGen === 'number' ? raw.layoutGen : 0,
           daemonStatus: fs.existsSync(plistPath) ? 'active' : 'off',
         },
@@ -2090,6 +2105,7 @@ const server = http.createServer((req, res) => {
           if (typeof patch.keepDashboardInMemory === 'boolean') state.keepDashboardInMemory = patch.keepDashboardInMemory;
           if (patch.menuRows !== undefined) state.menuRows = normalizeMenuRows(patch.menuRows);
           if (patch.barRows !== undefined) state.barRows = normalizeBarRows(patch.barRows, state.menuRows);
+          if (patch.panelSort !== undefined) state.panelSort = normalizePanelSort(patch.panelSort);
           state.layoutGen = (typeof raw.layoutGen === 'number' ? raw.layoutGen : 0) + 1; // any settings write advances the revision
           const merged = {
             ...raw,
@@ -2099,6 +2115,7 @@ const server = http.createServer((req, res) => {
             keepDashboardInMemory: state.keepDashboardInMemory,
             menuRows: state.menuRows,
             barRows: state.barRows,
+            panelSort: state.panelSort,
             layoutGen: state.layoutGen,
           };
           fs.mkdirSync(PULSE_DIR, { recursive: true });

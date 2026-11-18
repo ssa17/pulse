@@ -193,9 +193,18 @@ not an app.
     "closeBehavior": "background",
     "keepDashboardInMemory": false,
     "menuRows": ["cpu", "gpu", "memory", "network", "uptime"],
-    "barRows": ["cpu", "gpu", "memory", "network"]
+    "barRows": ["cpu", "gpu", "memory", "network"],
+    "panelSort": { "cpu": { "key": "cpu", "dir": -1 }, "mem": { "key": "mem", "dir": -1 } }
   }
   ```
+  `panelSort` is the dashboard's per-panel list sort: each of `cpu`/`mem` is
+  `{ key, dir }` where `key` ∈ `cpu, mem, name, procs` and `dir` is `-1`
+  (descending, the default for metrics) or `1` (ascending, the default for
+  `name`). A missing/invalid value falls back to the panel's natural metric
+  (cpu panel → `cpu`, mem panel → `mem`), descending. It is set from the
+  in-panel sort dropdowns (`#sort-cpu`/`#sort-mem` + direction buttons) and
+  pushed via the `setPanelSort` `pulseSettings` action (or `POST /api/settings`
+  in web mode).
   `menuRows` is the ordered list of VISIBLE dropdown row ids from
   `cpu, gpu, memory, thermal, network, uptime` — absent id = hidden row (default
   hides thermal). `barRows` is the set of VISIBLE status-bar capsules from

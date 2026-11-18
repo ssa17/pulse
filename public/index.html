@@ -227,6 +227,19 @@
   }
   .pseg button:hover { color: var(--text); }
   .pseg button.on { background: #1d2332; color: var(--text); border-color: #323c52; }
+  .psort { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; }
+  .psort select {
+    background: #0e1118; border: 1px solid var(--border); border-radius: 7px;
+    color: var(--dim); font-size: 10.5px; font-weight: 600; padding: 2px 4px;
+    cursor: pointer; text-transform: none; letter-spacing: 0; line-height: 1.25;
+  }
+  .psort select:hover, .psort select:focus { color: var(--text); border-color: #323c52; outline: none; }
+  .psort-dir {
+    background: none; border: 1px solid transparent; color: var(--dim);
+    border-radius: 5px; padding: 2px 6px; font-size: 11px; font-weight: 600;
+    cursor: pointer; line-height: 1.25; transition: color .14s;
+  }
+  .psort-dir:hover { color: var(--text); }
   .rows { flex: 1; overflow-y: auto; min-height: 0; }
   .rows::-webkit-scrollbar { width: 9px; }
   .rows::-webkit-scrollbar-thumb { background: #2a3342; border-radius: 5px; }
@@ -963,7 +976,7 @@
 
   <section class="panels">
     <div class="panel">
-      <h2><span class="swatch" id="left-swatch" style="background:var(--cpu)"></span><span id="left-title">Top CPU</span><div class="pseg" role="group" aria-label="Left panel metric"><button type="button" class="on" id="cpu-mode-cpu">CPU</button><button type="button" id="cpu-mode-energy">Energy</button></div><span class="note" id="note-cpu">share of all cores</span></h2>
+      <h2><span class="swatch" id="left-swatch" style="background:var(--cpu)"></span><span id="left-title">Top CPU</span><div class="pseg" role="group" aria-label="Left panel metric"><button type="button" class="on" id="cpu-mode-cpu">CPU</button><button type="button" id="cpu-mode-energy">Energy</button></div><div class="psort" role="group" aria-label="Sort CPU panel"><select id="sort-cpu" aria-label="Sort CPU panel by"><option value="cpu">CPU</option><option value="mem">Memory</option><option value="name">Name</option><option value="procs">Processes</option></select><button type="button" class="psort-dir" id="sortdir-cpu" title="Descending — click for ascending" aria-label="Toggle CPU sort direction">↓</button></div><span class="note" id="note-cpu">share of all cores</span></h2>
       <div class="rows" id="rows-cpu">
         <div class="skel-list" id="skel-cpu">
           <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:68%;margin-bottom:5px"></div><div class="skel-box" style="width:45%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
@@ -977,7 +990,7 @@
       <button class="showall" id="showall-cpu"></button>
     </div>
     <div class="panel">
-      <h2><span class="swatch" style="background:var(--mem)"></span>Top Memory <span class="note">share of total RAM</span></h2>
+      <h2><span class="swatch" style="background:var(--mem)"></span>Top Memory <div class="psort" role="group" aria-label="Sort Memory panel"><select id="sort-mem" aria-label="Sort Memory panel by"><option value="cpu">CPU</option><option value="mem" selected>Memory</option><option value="name">Name</option><option value="procs">Processes</option></select><button type="button" class="psort-dir" id="sortdir-mem" title="Descending — click for ascending" aria-label="Toggle Memory sort direction">↓</button></div><span class="note">share of total RAM</span></h2>
       <div class="rows" id="rows-mem">
         <div class="skel-list" id="skel-mem">
           <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:66%;margin-bottom:5px"></div><div class="skel-box" style="width:46%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
@@ -1255,6 +1268,7 @@ const S = {
   lastFailedAt: null,    // epoch ms of the last failed check — the err state's “· tried <age>”
   showAll: { cpu: false, mem: false },
   leftMode: 'cpu',       // 'cpu' | 'energy'
+  sort: { cpu: { key: 'cpu', dir: -1 }, mem: { key: 'mem', dir: -1 } }, // per-panel sort (dir: -1 desc, 1 asc)
   drawerKey: null,
   drawerNet: { key: null, pidKey: '', loading: false, error: null, connections: [], fetchedAt: 0 },
   closing: new Set(),       // app keys with a quit in flight ("closing…" row state)
@@ -1550,14 +1564,13 @@ function matchesSearch(data) {
 function renderPanel(which) {
   const metric = which === 'cpu' ? S.leftMode : 'mem'; // 'cpu' | 'energy' | 'mem'
   const container = $(which === 'cpu' ? '#rows-cpu' : '#rows-mem');
+  const sort = S.sort[which];
   const list = [...S.apps.values()].map((a) => a.data)
     .filter(matchesSearch)
     .sort((a, b) => {
-      if (metric === 'energy') {
-        const diff = energyScore(b) - energyScore(a);
-        return diff || (b.cpu - a.cpu) || (b.mem - a.mem);
-      }
-      return (b[metric] - a[metric]) || (b.mem - a.mem);
+      const d = sortCmp(a, b, sort.key) * sort.dir;
+      // Deterministic tiebreakers so equal values don't jump between ticks.
+      return d || (b.mem - a.mem) || (b.cpu - a.cpu) || a.name.localeCompare(b.name);
     });
   const total = metric === 'cpu'
     ? 100
@@ -2806,9 +2819,65 @@ const settingsState = {
   menuRowsFull: ['cpu', 'gpu', 'memory', 'network', 'uptime'], // all rows, UI order (hidden included)
   menuHidden: [],
   barRows: ['cpu', 'gpu', 'memory', 'network'], // visible status-bar capsules (menu order applies)
+  panelSort: { cpu: { key: 'cpu', dir: -1 }, mem: { key: 'mem', dir: -1 } }, // per-panel list sort (persisted)
   daemonStatus: 'off', // 'active' | 'busy' | 'error' | 'stopped' | 'off'
   daemonError: '',
 };
+
+/* Per-panel list sorting. `dir` is -1 (descending, the default for metrics) or
+ * 1 (ascending, the default for Name). Persisted via settings.json as `panelSort`.
+ */
+const SORT_KEYS = ['cpu', 'mem', 'name', 'procs'];
+const SORT_DEFAULT_DIR = { cpu: -1, mem: -1, procs: -1, name: 1 };
+function normalizePanelSort(ps) {
+  const out = {};
+  for (const which of ['cpu', 'mem']) {
+    const o = (ps && typeof ps === 'object' && ps[which]) || {};
+    const key = SORT_KEYS.includes(o.key) ? o.key : (which === 'cpu' ? 'cpu' : 'mem');
+    out[which] = { key, dir: o.dir === 1 ? 1 : -1 };
+  }
+  return out;
+}
+function sortCmp(a, b, key) {
+  switch (key) {
+    case 'name': return a.name.localeCompare(b.name);
+    case 'mem': return a.mem - b.mem;
+    case 'procs': return (a.procs || 0) - (b.procs || 0);
+    case 'energy': return energyScore(a) - energyScore(b);
+    default: return a.cpu - b.cpu;
+  }
+}
+// Reflect the live sort state onto a panel's header controls.
+function syncSortUI(which) {
+  const s = S.sort[which];
+  const sel = $('#sort-' + which);
+  const btn = $('#sortdir-' + which);
+  if (sel && sel.value !== s.key) sel.value = s.key;
+  if (btn) {
+    btn.textContent = s.dir === 1 ? '↑' : '↓';
+    btn.title = s.dir === 1 ? 'Ascending — click for descending' : 'Descending — click for ascending';
+  }
+}
+// Persist the current per-panel sort (native bridge, HTTP fallback in web mode).
+function persistPanelSort() {
+  settingsState.panelSort = S.sort;
+  if (!postNativeSetting({ action: 'setPanelSort', value: S.sort })) {
+    saveSettingsFallback({ panelSort: S.sort });
+  }
+}
+// Adopt a persisted sort (from the app push or the web-mode fetch) and re-render.
+// Only re-render once the first snapshot has landed (skelCleared) — before that the
+// panels show the loading skeleton, and an empty re-render would flash "nothing
+// matches" over it. The sort still takes effect on the first onTick render.
+function applyPanelSort(ps) {
+  S.sort = normalizePanelSort(ps);
+  syncSortUI('cpu');
+  syncSortUI('mem');
+  if (skelCleared) {
+    renderPanel('cpu');
+    renderPanel('mem');
+  }
+}
 
 const ALL_MENU_ROWS = [
   ['cpu', 'CPU', true], ['gpu', 'GPU', true], ['memory', 'Memory', true],
@@ -3116,6 +3185,7 @@ async function fetchSettingsFallback() {
     if (r.ok) {
       const d = await r.json();
       Object.assign(settingsState, d);
+      if (d.panelSort) applyPanelSort(d.panelSort);
       renderSettingsUI();
     }
   } catch { /* noop */ }
@@ -3540,6 +3610,7 @@ function setBlModal(open) {
 window.__pulseSyncSettings = (st) => {
   if (st && typeof st === 'object') {
     Object.assign(settingsState, st);
+    if (st.panelSort) applyPanelSort(st.panelSort);
     renderSettingsUI();
   }
 };
@@ -3554,6 +3625,21 @@ searchEl.addEventListener('input', (e) => {
 });
 $('#showall-cpu').addEventListener('click', () => { S.showAll.cpu = !S.showAll.cpu; renderPanel('cpu'); });
 $('#showall-mem').addEventListener('click', () => { S.showAll.mem = !S.showAll.mem; renderPanel('mem'); });
+for (const which of ['cpu', 'mem']) {
+  $('#sort-' + which).addEventListener('change', (e) => {
+    const key = SORT_KEYS.includes(e.target.value) ? e.target.value : (which === 'cpu' ? 'cpu' : 'mem');
+    S.sort[which] = { key, dir: SORT_DEFAULT_DIR[key] };
+    syncSortUI(which);
+    persistPanelSort();
+    renderPanel(which);
+  });
+  $('#sortdir-' + which).addEventListener('click', () => {
+    S.sort[which].dir *= -1;
+    syncSortUI(which);
+    persistPanelSort();
+    renderPanel(which);
+  });
+}
 function setLeftMode(mode) {
   const next = mode === 'energy' ? 'energy' : 'cpu';
   if (S.leftMode === next) return;
