@@ -3,29 +3,25 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.6</title>
-            <pubDate>Fri, 13 Nov 2026 00:24:58 +0000</pubDate>
-            <sparkle:version>1.6</sparkle:version>
-            <sparkle:shortVersionString>1.6</sparkle:shortVersionString>
+            <title>1.7</title>
+            <pubDate>Wed, 18 Nov 2026 07:41:38 +0000</pubDate>
+            <sparkle:version>1.7</sparkle:version>
+            <sparkle:shortVersionString>1.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[
 ### Added
-- **Memory pressure, swap & Energy mode** — live macOS VM memory pressure (`Normal` / `Warn` / `Critical`) and SSD swap in the Memory card and menu bar, an **Energy** toggle on Top CPU, and battery wattage in the header
-- **Process Blacklist (Auto-Kill)** — automatically quit or force-kill recurring processes whenever they spawn, with pause/signal controls and core-system safeguards
-- **Background & Login Items inspector** — view registered LaunchAgents and LaunchDaemons, running status, and `.plist` locations
-- **Process drawer diagnostics** — inspect sleep-preventing assertions and live network sockets/ports, plus **Reveal in Finder** and **Copy Diagnostics**
+- Dashboard: sort the Top CPU and Top Memory lists by CPU, memory, name, or process count — with an ascending/descending toggle — and your choice is remembered across launches
 
 ### Changed
-- **Refreshed UI & instant tooltips** — redesigned Memory info card, Settings (with live menu-bar capsule preview), About, update dialog, app icon, and DMG installer with smooth animations and instant hover tooltips
-- **Faster, responsive startup** — window opens immediately with skeleton placeholders, cold launch shows live stats in under half a second, and the layout fits cleanly down to `940×620`
+- Updates: the “new version available” strip along the top of the window is slimmer with higher-contrast text, and the dashboard now sits below it instead of being partly covered
 
 ### Fixed
-- **Thermal & uptime coloring** — CPU die temperature gradients and long-uptime warnings now highlight reliably
-- **Updates & startup flash** — fixed update checks incorrectly reporting failures when up to date, and eliminated the white flash before the first frame paints
+- Context menu: right-clicking a row no longer flashes the menu open and immediately closes it (seen on some macOS versions) — it now stays open until you dismiss it
+- App icons: cached app icons now invalidate when an app bundle's `.icns` file changes instead of serving stale icons indefinitely
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.6/Pulse-1.6.zip" length="1856374" type="application/octet-stream" sparkle:edSignature="Se5E1Oe14S0nSvKXn8YGaXGUQZmJ3EkyqY7B4Jn3TPm0+r+WlLjNq+h4cIgxk5C1cUfa/WQeELOPUu9VenJaBw=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.7/Pulse-1.7.zip" length="1867001" type="application/octet-stream" sparkle:edSignature="Ysyavf5yyb884wa7hG84E5nG6chwLWRfcITZhEtx/IYNMSUccLs0EkNi3gVrB+cJdHhuGisgCxifT4Ncv9WgDw=="/>
         </item>
     </channel>
 </rss>

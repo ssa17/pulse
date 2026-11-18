@@ -9,6 +9,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+## [1.7] - 2026-11-18
+
 ### Added
 - Dashboard: sort the Top CPU and Top Memory lists by CPU, memory, name, or process count — with an ascending/descending toggle — and your choice is remembered across launches
 
