@@ -9,6 +9,14 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-20
+
+### Changed
+- Dashboard: Top CPU sort menu now lists CPU, Name, and Processes; Top Memory lists Memory, Name, and Processes
+
+### Fixed
+- Dashboard: Top CPU and Top Memory rows now reorder properly as values change
+
 ## [1.7] - 2026-11-18
 
 ### Added

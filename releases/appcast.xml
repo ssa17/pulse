@@ -3,25 +3,21 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.7</title>
-            <pubDate>Wed, 18 Nov 2026 07:41:38 +0000</pubDate>
-            <sparkle:version>1.7</sparkle:version>
-            <sparkle:shortVersionString>1.7</sparkle:shortVersionString>
+            <title>1.7.1</title>
+            <pubDate>Fri, 20 Nov 2026 14:48:43 +0000</pubDate>
+            <sparkle:version>1.7.1</sparkle:version>
+            <sparkle:shortVersionString>1.7.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[
-### Added
-- Dashboard: sort the Top CPU and Top Memory lists by CPU, memory, name, or process count — with an ascending/descending toggle — and your choice is remembered across launches
-
 ### Changed
-- Updates: the “new version available” strip along the top of the window is slimmer with higher-contrast text, and the dashboard now sits below it instead of being partly covered
+- Dashboard: Top CPU sort menu now lists CPU, Name, and Processes; Top Memory lists Memory, Name, and Processes
 
 ### Fixed
-- Context menu: right-clicking a row no longer flashes the menu open and immediately closes it (seen on some macOS versions) — it now stays open until you dismiss it
-- App icons: cached app icons now invalidate when an app bundle's `.icns` file changes instead of serving stale icons indefinitely
+- Dashboard: Top CPU and Top Memory rows now reorder properly as values change
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.7/Pulse-1.7.zip" length="1867001" type="application/octet-stream" sparkle:edSignature="Ysyavf5yyb884wa7hG84E5nG6chwLWRfcITZhEtx/IYNMSUccLs0EkNi3gVrB+cJdHhuGisgCxifT4Ncv9WgDw=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.7.1/Pulse-1.7.1.zip" length="1867052" type="application/octet-stream" sparkle:edSignature="kr37Vb3opW5BvJV7RMu6dqIoUKTh6uVvCcia6xJ0sCZuchXAPrlXqICqKZkeLJctZJQx4bEKreUNzzKHRI7TCQ=="/>
         </item>
     </channel>
 </rss>
