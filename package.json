@@ -1,6 +1,6 @@
 {
   "name": "pulse",
-  "version": "1.7",
+  "version": "1.7.1",
   "description": "Real-time macOS resource dashboard — see which apps use your CPU and memory",
   "main": "server.js",
   "scripts": {
