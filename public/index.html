@@ -976,7 +976,7 @@
 
   <section class="panels">
     <div class="panel">
-      <h2><span class="swatch" id="left-swatch" style="background:var(--cpu)"></span><span id="left-title">Top CPU</span><div class="pseg" role="group" aria-label="Left panel metric"><button type="button" class="on" id="cpu-mode-cpu">CPU</button><button type="button" id="cpu-mode-energy">Energy</button></div><div class="psort" role="group" aria-label="Sort CPU panel"><select id="sort-cpu" aria-label="Sort CPU panel by"><option value="cpu">CPU</option><option value="mem">Memory</option><option value="name">Name</option><option value="procs">Processes</option></select><button type="button" class="psort-dir" id="sortdir-cpu" title="Descending — click for ascending" aria-label="Toggle CPU sort direction">↓</button></div><span class="note" id="note-cpu">share of all cores</span></h2>
+      <h2><span class="swatch" id="left-swatch" style="background:var(--cpu)"></span><span id="left-title">Top CPU</span><div class="pseg" role="group" aria-label="Left panel metric"><button type="button" class="on" id="cpu-mode-cpu">CPU</button><button type="button" id="cpu-mode-energy">Energy</button></div><div class="psort" role="group" aria-label="Sort CPU panel"><select id="sort-cpu" aria-label="Sort CPU panel by"><option value="cpu">CPU</option><option value="name">Name</option><option value="procs">Processes</option></select><button type="button" class="psort-dir" id="sortdir-cpu" title="Descending — click for ascending" aria-label="Toggle CPU sort direction">↓</button></div><span class="note" id="note-cpu">share of all cores</span></h2>
       <div class="rows" id="rows-cpu">
         <div class="skel-list" id="skel-cpu">
           <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:68%;margin-bottom:5px"></div><div class="skel-box" style="width:45%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:44px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
@@ -990,7 +990,7 @@
       <button class="showall" id="showall-cpu"></button>
     </div>
     <div class="panel">
-      <h2><span class="swatch" style="background:var(--mem)"></span>Top Memory <div class="psort" role="group" aria-label="Sort Memory panel"><select id="sort-mem" aria-label="Sort Memory panel by"><option value="cpu">CPU</option><option value="mem" selected>Memory</option><option value="name">Name</option><option value="procs">Processes</option></select><button type="button" class="psort-dir" id="sortdir-mem" title="Descending — click for ascending" aria-label="Toggle Memory sort direction">↓</button></div><span class="note">share of total RAM</span></h2>
+      <h2><span class="swatch" style="background:var(--mem)"></span>Top Memory <div class="psort" role="group" aria-label="Sort Memory panel"><select id="sort-mem" aria-label="Sort Memory panel by"><option value="mem" selected>Memory</option><option value="name">Name</option><option value="procs">Processes</option></select><button type="button" class="psort-dir" id="sortdir-mem" title="Descending — click for ascending" aria-label="Toggle Memory sort direction">↓</button></div><span class="note">share of total RAM</span></h2>
       <div class="rows" id="rows-mem">
         <div class="skel-list" id="skel-mem">
           <div class="skel-row"><div class="skel-icon"></div><div><div class="skel-box" style="width:66%;margin-bottom:5px"></div><div class="skel-box" style="width:46%;height:8px"></div></div><div class="skel-box" style="height:8px"></div><div class="skel-box" style="width:48px;margin-left:auto"></div><div class="skel-box" style="height:18px"></div></div>
@@ -1580,11 +1580,13 @@ function renderPanel(which) {
 
   const visible = S.showAll[which] || S.search ? list : list.slice(0, TOP_N);
   const seen = new Set();
+  let cursor = container.firstElementChild;
   for (const d of visible) {
     seen.add(d.key);
     const r = updateRow(which, d.key, d, metric, total);
-    if (r.el.parentNode !== container) container.appendChild(r.el);
-    else r.el.style.display = '';
+    if (r.el.style.display === 'none') r.el.style.display = '';
+    if (r.el !== cursor) container.insertBefore(r.el, cursor);
+    else cursor = cursor.nextElementSibling;
     const a = S.apps.get(d.key);
     const hist = metric === 'energy' ? (a.energyHist || a.cpuHist) : (metric === 'cpu' ? a.cpuHist : a.memHist);
     const col = metric === 'energy' ? '#34c759' : (metric === 'cpu' ? '#ff9f43' : '#4d9fff');
@@ -2827,13 +2829,13 @@ const settingsState = {
 /* Per-panel list sorting. `dir` is -1 (descending, the default for metrics) or
  * 1 (ascending, the default for Name). Persisted via settings.json as `panelSort`.
  */
-const SORT_KEYS = ['cpu', 'mem', 'name', 'procs'];
+const SORT_KEYS = { cpu: ['cpu', 'name', 'procs'], mem: ['mem', 'name', 'procs'] };
 const SORT_DEFAULT_DIR = { cpu: -1, mem: -1, procs: -1, name: 1 };
 function normalizePanelSort(ps) {
   const out = {};
   for (const which of ['cpu', 'mem']) {
     const o = (ps && typeof ps === 'object' && ps[which]) || {};
-    const key = SORT_KEYS.includes(o.key) ? o.key : (which === 'cpu' ? 'cpu' : 'mem');
+    const key = SORT_KEYS[which].includes(o.key) ? o.key : which;
     out[which] = { key, dir: o.dir === 1 ? 1 : -1 };
   }
   return out;
