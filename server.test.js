@@ -1196,6 +1196,24 @@ function canWritePortFile(existingText, selfPid, checkAlive) {
   return !checkAlive(parsed.pid);
 }
 
+function shouldTakeOverPortFile(
+  existingText,
+  probe,
+  selfPid,
+  { isDaemon = false, serverMtime = 1000 } = {},
+  checkAlive,
+) {
+  if (canWritePortFile(existingText, selfPid, checkAlive)) return true;
+  if (!probe) return true;
+  const parsed = parsePortFile(existingText);
+  if (parsed && parsed.pid && typeof probe.pid === 'number' && probe.pid !== parsed.pid) return true;
+  if (isDaemon) {
+    if (typeof probe.serverMtime === 'number' && serverMtime && probe.serverMtime !== serverMtime) return true;
+    if (probe.daemon === false) return true;
+  }
+  return false;
+}
+
 {
   const p1 = parsePortFile('54321\n');
   assert(p1 && p1.port === 54321 && p1.pid === null, 'parsePortFile: legacy 1-line format');
@@ -1211,6 +1229,18 @@ function canWritePortFile(existingText, selfPid, checkAlive) {
   assert(canWritePortFile('8787\n100\n', 100, () => true) === true, 'canWritePortFile: owner == self → allowed');
   assert(canWritePortFile('8787\n200\n', 100, () => true) === false, 'canWritePortFile: live foreign pid → blocked');
   assert(canWritePortFile('8787\n200\n', 100, () => false) === true, 'canWritePortFile: dead foreign pid → allowed');
+
+  assert(shouldTakeOverPortFile(null, null, 100, {}, () => true) === true, 'shouldTakeOverPortFile: absent → allowed');
+  assert(shouldTakeOverPortFile('garbage', null, 100, {}, () => true) === true, 'shouldTakeOverPortFile: corrupt → allowed');
+  assert(shouldTakeOverPortFile('8787\n100\n', { pid: 100, serverMtime: 1000, daemon: true }, 100, {}, () => true) === true, 'shouldTakeOverPortFile: self owner → allowed');
+  assert(shouldTakeOverPortFile('8787\n200\n', null, 100, {}, () => false) === true, 'shouldTakeOverPortFile: dead pid → allowed');
+  assert(shouldTakeOverPortFile('8787\n200\n', null, 100, { isDaemon: true }, () => true) === true, 'shouldTakeOverPortFile: recycled alive pid with dead/non-Pulse port → allowed');
+  assert(shouldTakeOverPortFile('8787\n200\n', { pid: 300, serverMtime: 1000, daemon: true }, 100, { isDaemon: false }, () => true) === true, 'shouldTakeOverPortFile: mismatched probe.pid → allowed');
+  assert(shouldTakeOverPortFile('8787\n200\n', { pid: 200, serverMtime: 1000, daemon: true }, 100, { isDaemon: true, serverMtime: 1000 }, () => true) === false, 'shouldTakeOverPortFile: matching live daemon → blocked');
+  assert(shouldTakeOverPortFile('8787\n200\n', { pid: 200, serverMtime: 900, daemon: true }, 100, { isDaemon: false, serverMtime: 1000 }, () => true) === false, 'shouldTakeOverPortFile: stale-mtime owner blocks non-daemon');
+  assert(shouldTakeOverPortFile('8787\n200\n', { pid: 200, serverMtime: 900, daemon: true }, 100, { isDaemon: true, serverMtime: 1000 }, () => true) === true, 'shouldTakeOverPortFile: daemon takes over stale-mtime owner');
+  assert(shouldTakeOverPortFile('8787\n200\n', { pid: 200, serverMtime: 1000, daemon: false }, 100, { isDaemon: false, serverMtime: 1000 }, () => true) === false, 'shouldTakeOverPortFile: non-daemon respects live non-daemon');
+  assert(shouldTakeOverPortFile('8787\n200\n', { pid: 200, serverMtime: 1000, daemon: false }, 100, { isDaemon: true, serverMtime: 1000 }, () => true) === true, 'shouldTakeOverPortFile: daemon takes over non-daemon server');
 
   const isFresh = (t, now) => t > 0 && (now - t < 15000);
   const netReady = (counters, rateReady, now) => !!(counters && rateReady && isFresh(counters.t, now));
@@ -1476,7 +1506,48 @@ console.log('\n--- blacklist helpers ---');
       label,
       sig: input.sig === 'TERM' ? 'TERM' : 'KILL',
       enabled: input.enabled !== false,
+      createdAt: Number.isFinite(+input.createdAt) && +input.createdAt > 0 ? +input.createdAt : 1,
+      kills: Number.isFinite(+input.kills) && +input.kills >= 0 ? Math.floor(+input.kills) : 0,
+      lastKilledAt: Number.isFinite(+input.lastKilledAt) && +input.lastKilledAt > 0 ? +input.lastKilledAt : null,
     };
+  }
+  function parseBlacklistFileContent(text) {
+    const raw = JSON.parse(text);
+    const rev = raw && !Array.isArray(raw) && Number.isFinite(+raw.rev) && +raw.rev >= 0
+      ? Math.floor(+raw.rev)
+      : 0;
+    const list = Array.isArray(raw) ? raw : (Array.isArray(raw && raw.rules) ? raw.rules : []);
+    const out = [];
+    const seen = new Set();
+    for (const item of list) {
+      try {
+        const rule = normalizeBlacklistRule(item);
+        if (!seen.has(rule.id)) { seen.add(rule.id); out.push(rule); }
+      } catch { /* ignore invalid/protected entry */ }
+    }
+    return { rev, rules: out };
+  }
+  function mergePendingBlacklistStats(diskRules, pendingMap) {
+    if (!pendingMap || pendingMap.size === 0) {
+      return { rules: diskRules.map((r) => ({ ...r })), applied: false };
+    }
+    let applied = false;
+    const rules = diskRules.map((r) => {
+      const delta = pendingMap.get(r.id);
+      if (!delta) return { ...r };
+      const killsDelta = Number.isFinite(+delta.killsDelta) && +delta.killsDelta > 0
+        ? Math.floor(+delta.killsDelta)
+        : 0;
+      const nextKills = (r.kills || 0) + killsDelta;
+      const prevTs = r.lastKilledAt || 0;
+      const deltaTs = Number.isFinite(+delta.lastKilledAt) && +delta.lastKilledAt > 0
+        ? +delta.lastKilledAt
+        : 0;
+      const nextKilledAt = Math.max(prevTs, deltaTs) || null;
+      if (killsDelta > 0 || (nextKilledAt && nextKilledAt !== r.lastKilledAt)) applied = true;
+      return { ...r, kills: nextKills, lastKilledAt: nextKilledAt };
+    });
+    return { rules, applied };
   }
   function matchesBlacklistRule(rule, proc, group) {
     if (!rule || !rule.enabled || !proc || !(proc.pid > 1)) return false;
@@ -1519,6 +1590,52 @@ console.log('\n--- blacklist helpers ---');
   assert(matchesBlacklistRule(rName, { pid: 639, name: 'assistantd', exe: '/foo/assistantd' }, null), 'name matches exact case-insensitive');
   assert(!matchesBlacklistRule({ ...rName, enabled: false }, { pid: 639, name: 'assistantd', exe: '/foo/assistantd' }, null), 'paused rule never matches');
   assert(!matchesBlacklistRule(rName, { pid: 640, name: 'my_assistantd_wrapper', exe: '/foo' }, null), 'name does not substring match');
+
+  const pV1Rev = parseBlacklistFileContent(JSON.stringify({
+    version: 1,
+    rev: 7,
+    rules: [
+      { pattern: '/System/Applications/Siri AI.app', kills: 5 },
+      { pattern: '/System/Applications/Siri AI.app/', kills: 99 },
+      { pattern: 'launchd' },
+    ],
+  }));
+  assert(pV1Rev.rev === 7 && pV1Rev.rules.length === 1 && pV1Rev.rules[0].kills === 5,
+    'parseBlacklistFileContent: reads rev, deduplicates, rejects protected rules');
+  const pV1NoRev = parseBlacklistFileContent(JSON.stringify({
+    version: 1,
+    rules: [{ pattern: 'assistantd' }],
+  }));
+  assert(pV1NoRev.rev === 0 && pV1NoRev.rules.length === 1, 'parseBlacklistFileContent: missing rev defaults to 0');
+  const pLegacy = parseBlacklistFileContent(JSON.stringify([{ pattern: 'assistantd' }]));
+  assert(pLegacy.rev === 0 && pLegacy.rules.length === 1 && pLegacy.rules[0].id === 'name:assistantd',
+    'parseBlacklistFileContent: supports legacy array format');
+
+  const pendingRemoved = new Map([['name:removedapp', { killsDelta: 4, lastKilledAt: 9000 }]]);
+  const mergedEmpty = mergePendingBlacklistStats([], pendingRemoved);
+  assert(mergedEmpty.rules.length === 0 && mergedEmpty.applied === false,
+    'mergePendingBlacklistStats: never resurrects rule removed from disk');
+
+  const diskPaused = normalizeBlacklistRule({
+    pattern: '/usr/local/bin/foo',
+    enabled: false,
+    sig: 'TERM',
+    kills: 10,
+    lastKilledAt: 5000,
+  });
+  const diskAdded = normalizeBlacklistRule({ pattern: 'bar', enabled: true, kills: 1, lastKilledAt: 2000 });
+  const pendingMixed = new Map([
+    [diskPaused.id, { killsDelta: 3, lastKilledAt: 8000 }],
+    ['name:deleted_elsewhere', { killsDelta: 9, lastKilledAt: 9000 }],
+  ]);
+  const mergedMixed = mergePendingBlacklistStats([diskPaused, diskAdded], pendingMixed);
+  assert(mergedMixed.applied === true && mergedMixed.rules.length === 2,
+    'mergePendingBlacklistStats: keeps only disk rules when merging');
+  assert(mergedMixed.rules[0].enabled === false && mergedMixed.rules[0].sig === 'TERM'
+    && mergedMixed.rules[0].kills === 13 && mergedMixed.rules[0].lastKilledAt === 8000,
+    'mergePendingBlacklistStats: preserves disk paused/sig state while merging kill delta & max timestamp');
+  assert(mergedMixed.rules[1].id === 'name:bar' && mergedMixed.rules[1].kills === 1,
+    'mergePendingBlacklistStats: preserves newly added disk rules unchanged');
 }
 
 // ---------------------------------------------------------------------------

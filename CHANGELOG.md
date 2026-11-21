@@ -9,6 +9,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Fixed
+- Blacklist: removing or editing a blacklisted app now persists reliably across updates and restarts instead of being restored by a background daemon
+
 ## [1.7.2] - 2026-11-21
 
 ### Fixed

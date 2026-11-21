@@ -47,7 +47,7 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
     thermal: { level, state, cpu, min, max }, // level 0..3 (pmset), state: nominal|slowed|throttled; cpu: temp in °C or null;
                                               // min/max: the machine's observed cold–hot range since the sampler
                                               // started (null until the first reading). UIs colour on absolute 40°C..90°C+ scale
-    blacklist: { total, enabled, kills },     // persistent auto-kill rules count & kill total (~/.pulse/blacklist.json)
+    blacklist: { total, enabled, kills, rev }, // persistent auto-kill rules count, kill total & file rev (~/.pulse/blacklist.json)
     procCount, appCount
   },
   apps: [{
@@ -71,8 +71,12 @@ shows "—", the menu-bar graph goes blank) rather than erroring.
 
 ```js
 { t: <ms epoch>,                     // sample completion timestamp
+  pid: <int>,                        // backend node PID
+  daemon: <bool>,                    // true when running under LaunchAgent (PULSE_DAEMON=1)
   serverMtime: <sec epoch>,          // mtime of server.js at boot (triggers live backend reload on rebuild)
   bootTrace: { start, listen, firstSnapshot }, // epoch ms timestamps for startup trace logging
+  // Note: `GET /api/status?probe=1` returns immediately (without waiting for a sample) with
+  // `{ ok: true, pid, serverMtime, daemon }` for lightweight health/ownership verification.
   memDebug: { rss, heapTotal, heapUsed, external }, // Node V8 memory telemetry (bytes)
   cpu: { user, sys, idle, total, temp, eCores, pCores }, // SYSTEM cpu (from top) — NOT an app; temp in °C or null; eCores/pCores load %
   loadAvg: [ 1m, 5m, 15m ],          // load averages from os.loadavg()
@@ -134,7 +138,8 @@ not an app.
   `index.html` directly over HTTP from `GET /`.
 - **Port discovery & spawn-race**: the backend writes `<port>\n<pid>\n` to
   `~/.pulse/port` (`PULSE_PORT_FILE` overrides in self-tests) when no different
-  live owner holds it (`canWritePortFile()` / `isPidAlive()`), and removes it on
+  live owner holds it (`canWritePortFile()` / `isPidAlive()`, verified live via
+  `/api/status?probe=1` so recycled/stale PID entries are healed), and removes it on
   exit only if the file still matches both its own port and pid. A new launch
   reuses a running backend when its pid (if present) is alive and that port
   answers `/api/snapshot` with a matching `serverMtime` (`checkServerAlive` in

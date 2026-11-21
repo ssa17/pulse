@@ -48,6 +48,7 @@ const SERVER_MTIME = (() => {
 const PULSE_DIR = path.join(os.homedir(), '.pulse');
 const PORT_FILE = process.env.PULSE_PORT_FILE || path.join(PULSE_DIR, 'port');
 const ICON_DIR = path.join(PULSE_DIR, 'icons');
+const isSelfTestMode = () => process.env.PULSE_SELFTEST === '1' || process.env.PULSE_SELFTEST === 'fast';
 const _PUBLIC_DIR = path.join(__dirname, 'public');
 
 // When running from the app bundle, check if a source public/ exists in the
@@ -1450,6 +1451,8 @@ async function sample(fast = false) {
   // from the netstat counters above — the status payload reports them as MB/s.
   const st = {
     t: snapTime,
+    pid: process.pid,
+    daemon: process.env.PULSE_DAEMON === '1',
     serverMtime: SERVER_MTIME,
     bootTrace: BOOT_TRACE,
     memDebug: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
@@ -1607,7 +1610,7 @@ const LAUNCH_DIRS = [
   { dir: '/Library/LaunchDaemons', scope: 'system-daemon' },
 ];
 
-const BLACKLIST_FILE = path.join(PULSE_DIR, 'blacklist.json');
+const BLACKLIST_FILE = process.env.PULSE_BLACKLIST_FILE || path.join(PULSE_DIR, 'blacklist.json');
 const PROTECTED_BLACKLIST_NAMES = new Set([
   'kernel_task', 'launchd', 'WindowServer', 'loginwindow',
   'Finder', 'Dock', 'SystemUIServer', 'ControlCenter',
@@ -1687,46 +1690,172 @@ function matchesBlacklistRule(rule, proc, group) {
   return false;
 }
 
-const isSelfTestMode = () => process.env.PULSE_SELFTEST === '1';
 let blacklistRules = null;
+let blacklistRev = 0;
+let blacklistFileSig = null; // "<ino>:<mtimeMs>:<size>" of the last observed blacklist.json
 const blacklistRuntime = new Map(); // rule.id → { lastAttemptByPid, recentKills, lastRuleKillAt, lastKilledPid, lastError, runningNow }
+const pendingBlacklistStats = new Map(); // rule.id → { killsDelta, lastKilledAt }
 let blacklistStatsDirtyAt = 0;
 let lastSampleProcs = null;
 let lastSampleGroups = null;
 
-function loadBlacklist() {
-  if (blacklistRules !== null) return blacklistRules;
-  if (isSelfTestMode()) { blacklistRules = []; return blacklistRules; }
-  try {
-    const raw = JSON.parse(fs.readFileSync(BLACKLIST_FILE, 'utf8'));
-    const list = Array.isArray(raw) ? raw : (Array.isArray(raw && raw.rules) ? raw.rules : []);
-    const out = [];
-    const seen = new Set();
-    for (const item of list) {
-      try {
-        const rule = normalizeBlacklistRule(item);
-        if (!seen.has(rule.id)) { seen.add(rule.id); out.push(rule); }
-      } catch { /* ignore invalid/protected entry */ }
-    }
-    blacklistRules = out;
-  } catch {
-    blacklistRules = [];
+function fileSigFromStat(st) {
+  return `${st.ino}:${st.mtimeMs}:${st.size}`;
+}
+
+function parseBlacklistFileContent(text) {
+  const raw = JSON.parse(text);
+  const rev = raw && !Array.isArray(raw) && Number.isFinite(+raw.rev) && +raw.rev >= 0
+    ? Math.floor(+raw.rev)
+    : 0;
+  const list = Array.isArray(raw) ? raw : (Array.isArray(raw && raw.rules) ? raw.rules : []);
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    try {
+      const rule = normalizeBlacklistRule(item);
+      if (!seen.has(rule.id)) { seen.add(rule.id); out.push(rule); }
+    } catch { /* ignore invalid/protected entry */ }
   }
+  return { rev, rules: out };
+}
+
+function mergePendingBlacklistStats(diskRules, pendingMap) {
+  if (!pendingMap || pendingMap.size === 0) {
+    return { rules: diskRules.map((r) => ({ ...r })), applied: false };
+  }
+  let applied = false;
+  const rules = diskRules.map((r) => {
+    const delta = pendingMap.get(r.id);
+    if (!delta) return { ...r };
+    const killsDelta = Number.isFinite(+delta.killsDelta) && +delta.killsDelta > 0
+      ? Math.floor(+delta.killsDelta)
+      : 0;
+    const nextKills = (r.kills || 0) + killsDelta;
+    const prevTs = r.lastKilledAt || 0;
+    const deltaTs = Number.isFinite(+delta.lastKilledAt) && +delta.lastKilledAt > 0
+      ? +delta.lastKilledAt
+      : 0;
+    const nextKilledAt = Math.max(prevTs, deltaTs) || null;
+    if (killsDelta > 0 || (nextKilledAt && nextKilledAt !== r.lastKilledAt)) applied = true;
+    return { ...r, kills: nextKills, lastKilledAt: nextKilledAt };
+  });
+  return { rules, applied };
+}
+
+function statBlacklistFile() {
+  try {
+    return fileSigFromStat(fs.statSync(BLACKLIST_FILE));
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return null;
+    return undefined;
+  }
+}
+
+function readBlacklistFromDisk() {
+  let fd = null;
+  try {
+    fd = fs.openSync(BLACKLIST_FILE, 'r');
+    const st = fs.fstatSync(fd);
+    const text = fs.readFileSync(fd, 'utf8');
+    const parsed = parseBlacklistFileContent(text);
+    return { exists: true, sig: fileSigFromStat(st), rev: parsed.rev, rules: parsed.rules };
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { exists: false, sig: null, rev: 0, rules: [] };
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function pruneBlacklistState(rules) {
+  const keep = new Set(rules.map((r) => r.id));
+  for (const id of blacklistRuntime.keys()) {
+    if (!keep.has(id)) blacklistRuntime.delete(id);
+  }
+  for (const id of pendingBlacklistStats.keys()) {
+    if (!keep.has(id)) pendingBlacklistStats.delete(id);
+  }
+  if (pendingBlacklistStats.size === 0) blacklistStatsDirtyAt = 0;
+}
+
+function writeBlacklistFile(rules, rev) {
+  if (isSelfTestMode()) {
+    blacklistRev = rev;
+    blacklistRules = rules;
+    return true;
+  }
+  const tmp = `${BLACKLIST_FILE}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    fs.mkdirSync(PULSE_DIR, { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, rev, rules }, null, 2) + '\n');
+    const st = fs.statSync(tmp);
+    fs.renameSync(tmp, BLACKLIST_FILE);
+    blacklistFileSig = fileSigFromStat(st);
+    blacklistRev = rev;
+    blacklistRules = rules;
+    return true;
+  } catch {
+    try { fs.unlinkSync(tmp); } catch {}
+    return false;
+  }
+}
+
+function loadBlacklist(force = false) {
+  if (isSelfTestMode()) {
+    if (blacklistRules === null) blacklistRules = [];
+    return blacklistRules;
+  }
+  if (!force && blacklistRules !== null) {
+    const sig = statBlacklistFile();
+    if (sig === undefined || sig === blacklistFileSig) return blacklistRules;
+  }
+  const disk = readBlacklistFromDisk();
+  if (!disk) {
+    if (blacklistRules === null) blacklistRules = [];
+    return blacklistRules;
+  }
+  blacklistFileSig = disk.sig;
+  blacklistRev = disk.rev;
+  pruneBlacklistState(disk.rules);
+  blacklistRules = mergePendingBlacklistStats(disk.rules, pendingBlacklistStats).rules;
   return blacklistRules;
 }
 
-function saveBlacklist(force = false) {
-  if (isSelfTestMode()) return;
-  const rules = loadBlacklist();
-  const tmp = `${BLACKLIST_FILE}.tmp.${process.pid}`;
-  try {
-    fs.mkdirSync(PULSE_DIR, { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, rules }, null, 2) + '\n');
-    fs.renameSync(tmp, BLACKLIST_FILE);
-    if (force) blacklistStatsDirtyAt = 0;
-  } catch {
-    try { fs.unlinkSync(tmp); } catch {}
+function flushBlacklistStats() {
+  if (isSelfTestMode()) {
+    pendingBlacklistStats.clear();
+    blacklistStatsDirtyAt = 0;
+    return false;
   }
+  if (pendingBlacklistStats.size === 0) {
+    blacklistStatsDirtyAt = 0;
+    return false;
+  }
+  const disk = readBlacklistFromDisk();
+  if (!disk) return false;
+  if (!disk.exists || disk.rules.length === 0) {
+    blacklistFileSig = disk.sig;
+    blacklistRev = disk.rev;
+    blacklistRules = [];
+    pruneBlacklistState([]);
+    return false;
+  }
+  const { rules: merged, applied } = mergePendingBlacklistStats(disk.rules, pendingBlacklistStats);
+  if (!applied) {
+    blacklistFileSig = disk.sig;
+    blacklistRev = disk.rev;
+    blacklistRules = merged;
+    pruneBlacklistState(merged);
+    return false;
+  }
+  if (!writeBlacklistFile(merged, disk.rev)) return false;
+  pendingBlacklistStats.clear();
+  blacklistStatsDirtyAt = 0;
+  pruneBlacklistState(merged);
+  return true;
 }
 
 function getRuntime(ruleId) {
@@ -1750,6 +1879,8 @@ function enforceBlacklist(procs, groups, now = Date.now(), killFn = process.kill
   const rules = loadBlacklist();
   if (!rules.length) {
     blacklistRuntime.clear();
+    pendingBlacklistStats.clear();
+    blacklistStatsDirtyAt = 0;
     return;
   }
   // Map pid → group once so rule matching checks bundle attribution in O(1).
@@ -1791,6 +1922,10 @@ function enforceBlacklist(procs, groups, now = Date.now(), killFn = process.kill
         killFn(proc.pid, sigName);
         rule.kills = (rule.kills || 0) + 1;
         rule.lastKilledAt = now;
+        const delta = pendingBlacklistStats.get(rule.id) || { killsDelta: 0, lastKilledAt: 0 };
+        delta.killsDelta += 1;
+        if (now > delta.lastKilledAt) delta.lastKilledAt = now;
+        pendingBlacklistStats.set(rule.id, delta);
         rt.lastKilledPid = proc.pid;
         rt.lastError = null;
         rt.lastRuleKillAt = now;
@@ -1813,10 +1948,10 @@ function enforceBlacklist(procs, groups, now = Date.now(), killFn = process.kill
   if (statsUpdated) {
     if (!blacklistStatsDirtyAt) blacklistStatsDirtyAt = now;
     if (now - blacklistStatsDirtyAt >= 5000) {
-      saveBlacklist(true);
+      flushBlacklistStats();
     }
   } else if (blacklistStatsDirtyAt && now - blacklistStatsDirtyAt >= 5000) {
-    saveBlacklist(true);
+    flushBlacklistStats();
   }
 }
 
@@ -1844,7 +1979,7 @@ function getBlacklistSummary() {
     if (r.enabled) enabled++;
     kills += r.kills || 0;
   }
-  return { total: rules.length, enabled, kills };
+  return { total: rules.length, enabled, kills, rev: blacklistRev };
 }
 
 const appDetailsCache = new Map(); // sortedPids → { t, data }
@@ -2003,6 +2138,19 @@ const server = http.createServer((req, res) => {
       reply();
     }
   } else if (url === '/api/status') {
+    if ((req.url || '').includes('probe=1')) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(JSON.stringify({
+        ok: true,
+        pid: process.pid,
+        serverMtime: SERVER_MTIME,
+        daemon: process.env.PULSE_DAEMON === '1',
+      }));
+      return;
+    }
     // Await the fresh sample like /api/snapshot does — replying fire-and-forget
     // would hand the menu bar a minutes-old graph right after wake/stall.
     const reply = () => {
@@ -2197,7 +2345,7 @@ const server = http.createServer((req, res) => {
       req.on('end', () => {
         try {
           const msg = JSON.parse(body || '{}');
-          const rules = loadBlacklist();
+          const rules = loadBlacklist(true).map((r) => ({ ...r }));
           const action = msg.action || 'add';
           let changedRule = null;
           if (action === 'add') {
@@ -2229,13 +2377,21 @@ const server = http.createServer((req, res) => {
             if (idx < 0) throw new Error('rule not found');
             const [removed] = rules.splice(idx, 1);
             blacklistRuntime.delete(removed.id);
+            pendingBlacklistStats.delete(removed.id);
           } else {
             throw new Error('unknown action');
           }
-          saveBlacklist(true);
+          const nextRev = blacklistRev + 1;
+          if (!writeBlacklistFile(rules, nextRev)) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'Failed to save blacklist' }));
+            return;
+          }
+          pendingBlacklistStats.clear();
+          blacklistStatsDirtyAt = 0;
           if (lastSampleProcs && lastSampleGroups) {
             enforceBlacklist(lastSampleProcs, lastSampleGroups);
-            saveBlacklist(true);
+            flushBlacklistStats();
           }
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ ok: true, rule: changedRule, rules: getBlacklistView(), summary: getBlacklistSummary() }));
@@ -2323,7 +2479,7 @@ function parsePortFile(text) {
 function isPidAlive(pid) {
   if (!pid || pid <= 0) return false;
   try { process.kill(pid, 0); return true; }
-  catch (e) { return !!(e && e.code === 'EPERM'); }
+  catch { return false; }
 }
 
 function canWritePortFile(existingText, selfPid, checkAlive = isPidAlive) {
@@ -2334,9 +2490,89 @@ function canWritePortFile(existingText, selfPid, checkAlive = isPidAlive) {
   return !checkAlive(parsed.pid);
 }
 
+function shouldTakeOverPortFile(
+  existingText,
+  probe,
+  selfPid,
+  { isDaemon = false, serverMtime = SERVER_MTIME } = {},
+  checkAlive = isPidAlive,
+) {
+  if (canWritePortFile(existingText, selfPid, checkAlive)) return true;
+  if (!probe) return true;
+  const parsed = parsePortFile(existingText);
+  if (parsed && parsed.pid && typeof probe.pid === 'number' && probe.pid !== parsed.pid) return true;
+  if (isDaemon) {
+    if (typeof probe.serverMtime === 'number' && serverMtime && probe.serverMtime !== serverMtime) return true;
+    if (probe.daemon === false) return true;
+  }
+  return false;
+}
+
+function probePulsePort(port, expectedPid, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+    const req = http.get({
+      host: HOST,
+      port,
+      path: '/api/status?probe=1',
+      headers: { 'Cache-Control': 'no-store' },
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => {
+        body += c;
+        if (body.length > 65536) { req.destroy(); finish(null); }
+      });
+      res.on('end', () => {
+        if (res.statusCode !== 200) { finish(null); return; }
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj || typeof obj !== 'object') { finish(null); return; }
+          if (typeof obj.serverMtime !== 'number' && typeof obj.bootTime !== 'number') {
+            finish(null);
+            return;
+          }
+          if (expectedPid && typeof obj.pid === 'number' && obj.pid !== expectedPid) {
+            finish(null);
+            return;
+          }
+          finish({
+            pid: typeof obj.pid === 'number' ? obj.pid : null,
+            serverMtime: typeof obj.serverMtime === 'number' ? obj.serverMtime : null,
+            daemon: typeof obj.daemon === 'boolean' ? obj.daemon : null,
+          });
+        } catch {
+          finish(null);
+        }
+      });
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      finish(null);
+    });
+    req.on('error', () => finish(null));
+  });
+}
+
 const skipPortFile = () =>
   process.env.PULSE_RACE === '1'
-  || (process.env.PULSE_SELFTEST === '1' && !process.env.PULSE_PORT_FILE);
+  || (isSelfTestMode() && !process.env.PULSE_PORT_FILE);
+
+function writePortFileAtomically() {
+  fs.mkdirSync(path.dirname(PORT_FILE), { recursive: true });
+  const tmp = `${PORT_FILE}.tmp.${process.pid}`;
+  try {
+    fs.writeFileSync(tmp, `${actualPort}\n${process.pid}\n`);
+    fs.renameSync(tmp, PORT_FILE);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw e;
+  }
+}
 
 // Tell the world where we are: a stdout line for the app shell, plus a pid-owned
 // port file (`<port>\n<pid>\n`) so a later launch (app or web) can find and reuse this server.
@@ -2344,12 +2580,25 @@ function announcePort() {
   console.log(`PULSE_LISTENING=${actualPort}`);
   if (skipPortFile()) return; // don't clobber a live session's port file
   try {
-    fs.mkdirSync(path.dirname(PORT_FILE), { recursive: true });
     let existing = null;
     try { existing = fs.readFileSync(PORT_FILE, 'utf8'); } catch { /* absent */ }
     if (canWritePortFile(existing, process.pid)) {
-      fs.writeFileSync(PORT_FILE, `${actualPort}\n${process.pid}\n`);
+      writePortFileAtomically();
+      return;
     }
+    const parsed = parsePortFile(existing);
+    if (!parsed) return;
+    probePulsePort(parsed.port, parsed.pid).then((probe) => {
+      try {
+        let current = null;
+        try { current = fs.readFileSync(PORT_FILE, 'utf8'); } catch { /* absent */ }
+        const opts = { isDaemon: process.env.PULSE_DAEMON === '1', serverMtime: SERVER_MTIME };
+        if (canWritePortFile(current, process.pid)
+          || (current === existing && shouldTakeOverPortFile(existing, probe, process.pid, opts))) {
+          writePortFileAtomically();
+        }
+      } catch { /* non-fatal */ }
+    });
   } catch { /* non-fatal */ }
 }
 
@@ -2360,7 +2609,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 // Remove the port file on ANY exit path (signals, watchdog, crash) so a stale
 // file never points at a dead server, and only if BOTH port and pid match self.
 process.on('exit', () => {
-  if (blacklistStatsDirtyAt) saveBlacklist(true);
+  if (blacklistStatsDirtyAt || pendingBlacklistStats.size > 0) flushBlacklistStats();
   if (skipPortFile()) return;
   try {
     const parsed = parsePortFile(fs.readFileSync(PORT_FILE, 'utf8'));
@@ -2371,7 +2620,7 @@ process.on('exit', () => {
 });
 
 function consumePreferredPort() {
-  if (PORT !== 0 || process.env.PULSE_SELFTEST === '1') return PORT;
+  if (PORT !== 0 || isSelfTestMode()) return PORT;
   const f = path.join(PULSE_DIR, 'preferred-port');
   try {
     const p = Math.floor(+fs.readFileSync(f, 'utf8').trim());

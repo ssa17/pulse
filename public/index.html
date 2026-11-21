@@ -1286,6 +1286,8 @@ let bgSearch = '';
 let blacklistCache = [];
 let blacklistLoaded = false;
 let blacklistInitFetched = false;
+let blacklistRev = -1;
+let blacklistFetchInFlight = false;
 let blOpen = false;
 let blRefreshTimer = null;
 let blError = '';
@@ -2649,7 +2651,9 @@ function onTick(p) {
     bgItemsInitFetched = true;
     fetchBackgroundItems(false);
   }
-  if (!blacklistInitFetched && hasBackend()) {
+  const sysBlRev = S.sys && S.sys.blacklist && typeof S.sys.blacklist.rev === 'number'
+    ? S.sys.blacklist.rev : null;
+  if (hasBackend() && !blacklistFetchInFlight && (!blacklistInitFetched || (blacklistLoaded && sysBlRev !== null && sysBlRev !== blacklistRev))) {
     blacklistInitFetched = true;
     fetchBlacklist();
   }
@@ -2775,10 +2779,12 @@ window.__pulseSetBackend = function(url) {
   if (!clean || clean === __backend) return;
   const hadBackend = !!__backend;
   __backend = clean;
+  blacklistInitFetched = false;
   if (!hadBackend) enterConnectingState();
   sseFails = 0;
   pollOnce(true);
   connect(true);
+  fetchBlacklist();
   if (!postNativeSetting({ action: 'sync' })) fetchSettingsFallback();
   if (S.apps.size) {
     renderPanel('cpu');
@@ -3445,15 +3451,19 @@ function updateBlacklistBadge() {
   let enabled = 0;
   let total = blacklistCache.length;
   let kills = 0;
+  const sysBl = S.sys && S.sys.blacklist;
   if (blacklistLoaded) {
     for (const r of blacklistCache) {
       if (r.enabled) enabled++;
       kills += r.kills || 0;
     }
-  } else if (S.sys && S.sys.blacklist) {
-    total = S.sys.blacklist.total || 0;
-    enabled = S.sys.blacklist.enabled || 0;
-    kills = S.sys.blacklist.kills || 0;
+    if (sysBl && (typeof sysBl.rev !== 'number' || sysBl.rev === blacklistRev)) {
+      kills = Math.max(kills, sysBl.kills || 0);
+    }
+  } else if (sysBl) {
+    total = sysBl.total || 0;
+    enabled = sysBl.enabled || 0;
+    kills = sysBl.kills || 0;
   }
   cntEl.textContent = String(total);
   btn.classList.toggle('bl-on', enabled > 0);
@@ -3527,19 +3537,25 @@ function renderBlacklist() {
 }
 
 async function fetchBlacklist() {
-  if (!hasBackend()) return;
+  if (!hasBackend() || blacklistFetchInFlight) return;
+  const reqBackend = __backend;
+  blacklistFetchInFlight = true;
   try {
     const r = await fetch(apiUrl('/api/blacklist'), { cache: 'no-store' });
-    if (!r.ok) return;
+    if (!r.ok || __backend !== reqBackend) return;
     const j = await r.json();
+    if (__backend !== reqBackend) return;
     if (j && Array.isArray(j.rules)) {
       blacklistCache = j.rules;
       blacklistLoaded = true;
+      if (j.summary && typeof j.summary.rev === 'number') blacklistRev = j.summary.rev;
       updateBlacklistBadge();
       if (S.drawerKey) renderDrawer();
       if (blOpen) renderBlacklist();
     }
-  } catch { /* retry next tick */ }
+  } catch { /* retry next tick */ } finally {
+    blacklistFetchInFlight = false;
+  }
 }
 
 async function postBlacklist(body) {
@@ -3560,6 +3576,7 @@ async function postBlacklist(body) {
     }
     blacklistCache = Array.isArray(j.rules) ? j.rules : [];
     blacklistLoaded = true;
+    if (j.summary && typeof j.summary.rev === 'number') blacklistRev = j.summary.rev;
     updateBlacklistBadge();
     if (S.drawerKey) renderDrawer();
     if (blOpen) renderBlacklist();

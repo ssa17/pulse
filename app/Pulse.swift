@@ -49,8 +49,7 @@ func readPortFile() -> Int? {
 
 func isProcessAlive(_ pid: Int32) -> Bool {
     guard pid > 0 else { return false }
-    if kill(pid, 0) == 0 { return true }
-    return errno == EPERM
+    return kill(pid, 0) == 0
 }
 
 /// Claims the port file for a promoted backend if no live owner currently holds it.
@@ -60,6 +59,12 @@ func writePortFileIfUnowned(port: Int, pid: Int32, path: String = portFilePath()
     }
     try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
     try? "\(port)\n\(pid)\n".write(toFile: path, atomically: true, encoding: .utf8)
+}
+
+/// Removes `path` only if its port and pid still match `stale`.
+func removePortFileIfMatching(_ stale: PortFileInfo, path: String = portFilePath()) {
+    guard let cur = readPortFileInfo(path: path), cur.port == stale.port, cur.pid == stale.pid else { return }
+    try? FileManager.default.removeItem(atPath: path)
 }
 
 func epochMsNow() -> Int64 {
@@ -576,6 +581,7 @@ final class LaunchAgentManager {
         // Unload any prior instance first (ignore error if not currently loaded).
         _ = runLaunchctl(["bootout", serviceTarget])
         usleep(40_000)
+        try? FileManager.default.removeItem(atPath: portFilePath())
         let (code, err) = runLaunchctl(["bootstrap", domainTarget, plistPath])
         if code != 0 && !isLoaded() {
             // Clean up plist if bootstrap failed in a non-GUI/unsupported session so state stays honest.
@@ -613,11 +619,12 @@ final class LaunchAgentManager {
     /// calls block the same way). Returns the daemon's `serverMtime`, or nil if it
     /// isn't answering (dead / still binding its socket).
     func probeServerMtime(port: Int, timeout: TimeInterval = 1.0) -> Int? {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/status") else { return nil }
-        let req = URLRequest(url: url, timeoutInterval: timeout)
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/status?probe=1") else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         let sem = DispatchSemaphore(value: 0)
         var mtime: Int?
-        URLSession.shared.dataTask(with: req) { d, _, _ in
+        probeSession.dataTask(with: req) { d, _, _ in
             if let d, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                 mtime = o["serverMtime"] as? Int
             }
@@ -4123,7 +4130,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                             self.settings.startAtLogin = true
                             self.settings.save()
                             self.syncAllSettingsUI()
-                            self.attachToDaemonPort(attemptsLeft: 25, gen: gen)
+                            self.attachToDaemonPort(attemptsLeft: 40, gen: gen)
                         case .failure:
                             try? FileManager.default.removeItem(atPath: pulseDir + "/preferred-port")
                             self.switchingBackend = false
@@ -4747,6 +4754,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         let agent = LaunchAgentManager.shared
         if let info = readPortFileInfo() {
             if let pid = info.pid, !isProcessAlive(pid) {
+                removePortFileIfMatching(info)
                 if agent.plistExists {
                     refreshDaemonOrSpawn()
                 } else {
@@ -4768,6 +4776,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 if agent.plistExists {
                     self.refreshDaemonOrSpawn()
                 } else {
+                    removePortFileIfMatching(info)
                     self.spawnBackend(portOverride: nil)
                 }
             }
@@ -4810,7 +4819,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                         guard let self, !self.quitting, gen == self.daemonAttachGen else { return }
                         switch res {
                         case .success:
-                            self.attachToDaemonPort(attemptsLeft: 40, gen: gen)
+                            self.attachToDaemonPort(attemptsLeft: 60, gen: gen)
                         case .failure:
                             self.promoteOrSpawnFallback(nodePath: node)
                         }
@@ -4818,18 +4827,30 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                 } else {
                     // Daemon is loaded with the current plist — but a rebuild changes the
                     // CODE (server.js), which the plist doesn't track. Probe the daemon's
-                    // serverMtime and kickstart it if stale, so we adopt ONE fresh backend
-                    // instead of spawning a second one beside a stale daemon.
+                    // serverMtime (or dead/stale port file) and kickstart it if needed, so we
+                    // adopt ONE fresh backend instead of spawning a second one beside a stale daemon.
                     var kicked = false
-                    if let p = readPortFile(), let disk = expectedServerMtime(),
-                       let sm = agent.probeServerMtime(port: p), sm != disk {
+                    let disk = expectedServerMtime()
+                    let currentPort = readPortFileInfo()
+                    let liveMtime: Int? = {
+                        guard let info = currentPort else { return nil }
+                        if let pid = info.pid, !isProcessAlive(pid) { return nil }
+                        return agent.probeServerMtime(port: info.port)
+                    }()
+                    let needsKick = (liveMtime == nil) || (disk != nil && liveMtime != disk)
+                    if needsKick {
+                        if let stale = currentPort {
+                            removePortFileIfMatching(stale)
+                        } else {
+                            try? FileManager.default.removeItem(atPath: portFilePath())
+                        }
                         BootTracer.shared.mark("kickstart_call", once: true, launchOnly: true)
                         kicked = agent.kickstart()
                         BootTracer.shared.mark("kickstart_done", once: true, launchOnly: true)
                     }
                     DispatchQueue.main.async {
                         guard let self, !self.quitting, gen == self.daemonAttachGen else { return }
-                        self.attachToDaemonPort(attemptsLeft: kicked ? 40 : 30, gen: gen)
+                        self.attachToDaemonPort(attemptsLeft: kicked ? 60 : 40, gen: gen)
                     }
                 }
             }
@@ -4838,11 +4859,14 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
 
     private func promoteOrSpawnFallback(nodePath: String? = nil) {
         switchingBackend = false
+        let agent = LaunchAgentManager.shared
+        if agent.plistExists {
+            agent.workQueue.async { _ = agent.bootoutSessionOnly() }
+        }
         if isRacingDaemon, spawnedNode, let port = serverPort, let proc = nodeProc, proc.isRunning {
             isRacingDaemon = false
-            // If launchd finishes binding after the 40-attempt (~4.8s) attach window,
-            // it leaves a second sampler running for this session and self-heals on next
-            // launch/toggle via the pid-owned port file.
+            // If launchd fails or times out waiting for the attach window, keep
+            // the racer as the single session backend (daemon booted out above).
             writePortFileIfUnowned(port: port, pid: proc.processIdentifier)
             return
         }
@@ -5392,7 +5416,9 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                     if !selfTestFast, let node = findNodeFast() {
                         let mgr = LaunchAgentManager.shared
                         let pf = portFilePath()
-                        try? FileManager.default.removeItem(atPath: pf)
+                        // Seed a poisoned port file pointing at an alive non-daemon PID (our own)
+                        // to verify installAndBootstrap + server.js heal stale/recycled PID entries.
+                        try? "1\n\(getpid())\n".write(toFile: pf, atomically: true, encoding: .utf8)
                         if case .success = mgr.installAndBootstrap(nodePath: node) {
                             let installedOk = mgr.plistExists && mgr.isLoaded()
                             let deadline = Date().addingTimeInterval(3.0)
