@@ -3,18 +3,18 @@
     <channel>
         <title>Pulse</title>
         <item>
-            <title>1.7.2</title>
-            <pubDate>Sat, 21 Nov 2026 11:40:16 +0000</pubDate>
-            <sparkle:version>1.7.2</sparkle:version>
-            <sparkle:shortVersionString>1.7.2</sparkle:shortVersionString>
+            <title>1.7.3</title>
+            <pubDate>Sat, 21 Nov 2026 12:40:01 +0000</pubDate>
+            <sparkle:version>1.7.3</sparkle:version>
+            <sparkle:shortVersionString>1.7.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[
 ### Fixed
-- Updates: the update dialog is wider and renders release notes with proper headings, bullets, **bold**, *italics*, and `code` formatting instead of raw Markdown
+- Blacklist: removing or editing a blacklisted app now persists reliably across updates and restarts instead of being restored by a background daemon
 
 ]]></description>
-            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.7.2/Pulse-1.7.2.zip" length="1875547" type="application/octet-stream" sparkle:edSignature="sOmsjM2hWZAP7tvVjG4AF5aDVVOYIRFT6xWtJhMSgQq92UUjUyN76HyeUPXpjSqNwIctqGcbiQo4Cg7zclttDw=="/>
+            <enclosure url="https://github.com/ssa17/pulse/releases/download/v1.7.3/Pulse-1.7.3.zip" length="1878251" type="application/octet-stream" sparkle:edSignature="A0EzybEKGwUFN19Wm+vPR02GBIc0EvAyZB8P1tTfIkVloP4C36QD3v7FdJ1KWVcyU3Q6Ao9XT+R7MWJfOn6RAg=="/>
         </item>
     </channel>
 </rss>
