@@ -2681,12 +2681,13 @@ final class PulseAboutWindowController: NSObject {
 final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
     let window: NSWindow
 
-    private let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
-    private let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
-    private let borderCol = NSColor(red: 0.137, green: 0.165, blue: 0.220, alpha: 1) // #232a38
-    private let textCol = NSColor(red: 0.910, green: 0.925, blue: 0.957, alpha: 1)   // #e8ecf4
-    private let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
-    private let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1) // #ff9f43
+    private static let panelBg = NSColor(red: 0.071, green: 0.082, blue: 0.114, alpha: 1)  // #12151d
+    private static let cardBg = NSColor(red: 0.090, green: 0.106, blue: 0.145, alpha: 1)   // #171b25
+    private static let borderCol = NSColor(red: 0.137, green: 0.165, blue: 0.220, alpha: 1) // #232a38
+    private static let textCol = NSColor(red: 0.910, green: 0.925, blue: 0.957, alpha: 1)   // #e8ecf4
+    private static let dimCol = NSColor(red: 0.545, green: 0.580, blue: 0.655, alpha: 1)    // #8b94a7
+    private static let accentOrange = NSColor(red: 1.0, green: 0.624, blue: 0.263, alpha: 1) // #ff9f43
+    private static let codeBg = NSColor(white: 1.0, alpha: 0.08)
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -2714,7 +2715,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 452, height: 182),
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 182),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -2723,7 +2724,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = panelBg
+        window.backgroundColor = Self.panelBg
         window.isReleasedWhenClosed = false
         window.center()
         super.init()
@@ -2734,7 +2735,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
     private func buildUI() {
         let root = NSView(frame: window.contentView?.bounds ?? .zero)
         root.wantsLayer = true
-        root.layer?.backgroundColor = panelBg.cgColor
+        root.layer?.backgroundColor = Self.panelBg.cgColor
         window.contentView = root
 
         let icon = NSImageView()
@@ -2744,26 +2745,27 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         root.addSubview(icon)
 
         titleLabel.font = .systemFont(ofSize: 15, weight: .bold)
-        titleLabel.textColor = textCol
+        titleLabel.textColor = Self.textCol
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(titleLabel)
 
         subtitleLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        subtitleLabel.textColor = dimCol
+        subtitleLabel.textColor = Self.dimCol
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(subtitleLabel)
 
         // Release notes / message card
         notesCard.wantsLayer = true
-        notesCard.layer?.backgroundColor = cardBg.cgColor
-        notesCard.layer?.borderColor = borderCol.cgColor
+        notesCard.layer?.backgroundColor = Self.cardBg.cgColor
+        notesCard.layer?.borderColor = Self.borderCol.cgColor
         notesCard.layer?.borderWidth = 1
         notesCard.layer?.cornerRadius = 10
         notesCard.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(notesCard)
 
         notesScroll.hasVerticalScroller = true
+        notesScroll.autohidesScrollers = true
         notesScroll.drawsBackground = false
         notesScroll.borderType = .noBorder
         notesScroll.translatesAutoresizingMaskIntoConstraints = false
@@ -2772,9 +2774,9 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         notesTextView.isEditable = false
         notesTextView.isSelectable = true
         notesTextView.drawsBackground = false
-        notesTextView.textContainerInset = NSSize(width: 8, height: 8)
-        notesTextView.font = .systemFont(ofSize: 12)
-        notesTextView.textColor = textCol
+        notesTextView.textContainerInset = NSSize(width: 10, height: 10)
+        notesTextView.font = .systemFont(ofSize: 12.5)
+        notesTextView.textColor = Self.textCol
         notesTextView.isVerticallyResizable = true
         notesTextView.isHorizontallyResizable = false
         notesTextView.autoresizingMask = [.width]
@@ -2786,22 +2788,22 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         root.addSubview(progressWrap)
 
         progressTrack.wantsLayer = true
-        progressTrack.layer?.backgroundColor = cardBg.cgColor
-        progressTrack.layer?.borderColor = borderCol.cgColor
+        progressTrack.layer?.backgroundColor = Self.cardBg.cgColor
+        progressTrack.layer?.borderColor = Self.borderCol.cgColor
         progressTrack.layer?.borderWidth = 1
         progressTrack.layer?.cornerRadius = 4
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
         progressWrap.addSubview(progressTrack)
 
         progressFill.wantsLayer = true
-        progressFill.layer?.backgroundColor = accentOrange.cgColor
+        progressFill.layer?.backgroundColor = Self.accentOrange.cgColor
         progressFill.layer?.cornerRadius = 3
         progressFill.translatesAutoresizingMaskIntoConstraints = false
         progressTrack.addSubview(progressFill)
         progressFillWidth = progressFill.widthAnchor.constraint(equalToConstant: 0)
 
         progressLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        progressLabel.textColor = dimCol
+        progressLabel.textColor = Self.dimCol
         progressLabel.translatesAutoresizingMaskIntoConstraints = false
         progressWrap.addSubview(progressLabel)
 
@@ -2875,17 +2877,17 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         btn.isBordered = false
         btn.wantsLayer = true
         btn.font = .systemFont(ofSize: 12, weight: .semibold)
-        btn.contentTintColor = primary ? NSColor(red: 0.04, green: 0.05, blue: 0.07, alpha: 1) : textCol
-        btn.layer?.backgroundColor = (primary ? accentOrange : cardBg).cgColor
+        btn.contentTintColor = primary ? NSColor(red: 0.04, green: 0.05, blue: 0.07, alpha: 1) : Self.textCol
+        btn.layer?.backgroundColor = (primary ? Self.accentOrange : Self.cardBg).cgColor
         btn.layer?.cornerRadius = 8
         if !primary {
-            btn.layer?.borderColor = borderCol.cgColor
+            btn.layer?.borderColor = Self.borderCol.cgColor
             btn.layer?.borderWidth = 1
         }
         btn.translatesAutoresizingMaskIntoConstraints = false
     }
 
-    private func resize(width: CGFloat = 452, height: CGFloat) {
+    private func resize(width: CGFloat = 540, height: CGFloat) {
         var f = window.frame
         let dy = height - f.height
         f.origin.y -= dy
@@ -2909,34 +2911,304 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         permReply = nil
     }
 
-    private func setNotesPlain(_ text: String) {
-        notesTextView.textStorage?.setAttributedString(NSAttributedString(
-            string: text,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 12),
-                .foregroundColor: textCol,
-            ]
-        ))
+    // MARK: Release notes formatting
+
+    /// Builds an `NSAttributedString` for the update dialog's notes card based on `format`
+    /// (`"markdown"`, `"html"`, or `"plain-text"`), sniffing the text when `format` is nil/empty.
+    static func attributedNotes(for text: String, format: String?) -> NSAttributedString {
+        let fmt = (format ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let looksLikeHTML = text.range(of: "<[a-zA-Z/][^>]*>", options: .regularExpression) != nil
+        let looksLikeMarkdown = text.contains("### ")
+            || text.contains("## ")
+            || text.contains("\n- ")
+            || text.hasPrefix("- ")
+            || text.contains("**")
+            || text.contains("`")
+        if fmt == "plain-text" || fmt == "plain" {
+            return attributedPlainNotes(text)
+        } else if fmt == "markdown" || (fmt.isEmpty && looksLikeMarkdown && !looksLikeHTML) {
+            return attributedMarkdownNotes(text)
+        } else if fmt == "html" || looksLikeHTML {
+            if let data = text.data(using: .utf8), let attr = attributedHTMLNotes(data) {
+                return attr
+            }
+            return attributedPlainNotes(text)
+        } else {
+            return attributedPlainNotes(text)
+        }
     }
 
-    private func setNotesHTML(_ data: Data) {
-        if let attr = try? NSMutableAttributedString(
+    static func attributedPlainNotes(_ text: String) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.3
+        return NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12.5),
+                .foregroundColor: textCol,
+                .paragraphStyle: style,
+            ]
+        )
+    }
+
+    /// Renders CHANGELOG.md's Markdown subset (ATX headings, bullets with hanging indents
+    /// and wrapped continuations, `**bold**`, `*italic*`, and `` `code` ``) with dialog typography.
+    static func attributedMarkdownNotes(_ text: String) -> NSAttributedString {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let bodyFont = NSFont.systemFont(ofSize: 12.5)
+        let boldFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+        let italicFont = NSFontManager.shared.convert(bodyFont, toHaveTrait: .italicFontMask)
+        let codeFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        let headingFont = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
+        let headingItalicFont = NSFontManager.shared.convert(headingFont, toHaveTrait: .italicFontMask)
+
+        let bodyParagraph = NSMutableParagraphStyle()
+        bodyParagraph.lineHeightMultiple = 1.3
+        bodyParagraph.paragraphSpacing = 4
+
+        let bodyAfterBlankParagraph = NSMutableParagraphStyle()
+        bodyAfterBlankParagraph.lineHeightMultiple = 1.3
+        bodyAfterBlankParagraph.paragraphSpacingBefore = 6
+        bodyAfterBlankParagraph.paragraphSpacing = 4
+
+        let bulletParagraph = NSMutableParagraphStyle()
+        bulletParagraph.lineHeightMultiple = 1.3
+        bulletParagraph.paragraphSpacing = 5
+        bulletParagraph.firstLineHeadIndent = 4
+        bulletParagraph.headIndent = 16
+        bulletParagraph.tabStops = [NSTextTab(textAlignment: .left, location: 16)]
+
+        let headingFirstParagraph = NSMutableParagraphStyle()
+        headingFirstParagraph.lineHeightMultiple = 1.2
+        headingFirstParagraph.paragraphSpacing = 5
+
+        let headingParagraph = NSMutableParagraphStyle()
+        headingParagraph.lineHeightMultiple = 1.2
+        headingParagraph.paragraphSpacingBefore = 12
+        headingParagraph.paragraphSpacing = 5
+
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: bodyFont,
+            .foregroundColor: textCol,
+            .paragraphStyle: bodyParagraph,
+        ]
+
+        let result = NSMutableAttributedString()
+        var firstBlock = true
+        var sawBlankLine = false
+        var lastWasBullet = false
+
+        for rawLine in normalized.components(separatedBy: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                sawBlankLine = true
+                continue
+            }
+
+            if let level = markdownHeadingLevel(line) {
+                let content = String(line.dropFirst(level + 1)).trimmingCharacters(in: .whitespaces)
+                if !firstBlock {
+                    result.append(NSAttributedString(string: "\n", attributes: baseAttrs))
+                }
+                var attrs = baseAttrs
+                attrs[.font] = headingFont
+                attrs[.paragraphStyle] = firstBlock ? headingFirstParagraph : headingParagraph
+                appendMarkdownInline(content, to: result, base: attrs, boldFont: headingFont, italicFont: headingItalicFont, codeFont: codeFont)
+                lastWasBullet = false
+            } else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
+                let content = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if !firstBlock {
+                    result.append(NSAttributedString(string: "\n", attributes: baseAttrs))
+                }
+                var attrs = baseAttrs
+                attrs[.paragraphStyle] = bulletParagraph
+                result.append(NSAttributedString(
+                    string: "•\t",
+                    attributes: [
+                        .font: bodyFont,
+                        .foregroundColor: dimCol,
+                        .paragraphStyle: bulletParagraph,
+                    ]
+                ))
+                appendMarkdownInline(content, to: result, base: attrs, boldFont: boldFont, italicFont: italicFont, codeFont: codeFont)
+                lastWasBullet = true
+            } else if !sawBlankLine && lastWasBullet && (rawLine.hasPrefix("  ") || rawLine.hasPrefix("\t")) {
+                var attrs = baseAttrs
+                attrs[.paragraphStyle] = bulletParagraph
+                result.append(NSAttributedString(string: " ", attributes: attrs))
+                appendMarkdownInline(line, to: result, base: attrs, boldFont: boldFont, italicFont: italicFont, codeFont: codeFont)
+                lastWasBullet = true
+            } else {
+                if !firstBlock {
+                    result.append(NSAttributedString(string: "\n", attributes: baseAttrs))
+                }
+                var attrs = baseAttrs
+                attrs[.paragraphStyle] = (sawBlankLine && !firstBlock) ? bodyAfterBlankParagraph : bodyParagraph
+                appendMarkdownInline(line, to: result, base: attrs, boldFont: boldFont, italicFont: italicFont, codeFont: codeFont)
+                lastWasBullet = false
+            }
+
+            firstBlock = false
+            sawBlankLine = false
+        }
+
+        return result
+    }
+
+    private static func markdownHeadingLevel(_ line: String) -> Int? {
+        var count = 0
+        for ch in line {
+            if ch == "#" { count += 1 } else { break }
+        }
+        guard (1...6).contains(count) else { return nil }
+        return line.dropFirst(count).first == " " ? count : nil
+    }
+
+    private static func appendMarkdownInline(
+        _ text: String,
+        to result: NSMutableAttributedString,
+        base: [NSAttributedString.Key: Any],
+        boldFont: NSFont,
+        italicFont: NSFont,
+        codeFont: NSFont
+    ) {
+        var i = text.startIndex
+        var plainStart = i
+        while i < text.endIndex {
+            if text[i] == "`" {
+                let after = text.index(after: i)
+                if after < text.endIndex, let close = text[after...].firstIndex(of: "`"), close > after {
+                    if i > plainStart {
+                        result.append(NSAttributedString(string: String(text[plainStart..<i]), attributes: base))
+                    }
+                    var codeAttrs = base
+                    codeAttrs[.font] = codeFont
+                    codeAttrs[.backgroundColor] = codeBg
+                    result.append(NSAttributedString(string: String(text[after..<close]), attributes: codeAttrs))
+                    i = text.index(after: close)
+                    plainStart = i
+                    continue
+                }
+            } else if text[i...].hasPrefix("**") {
+                let contentStart = text.index(i, offsetBy: 2)
+                if contentStart < text.endIndex,
+                   let close = text.range(of: "**", range: contentStart..<text.endIndex),
+                   close.lowerBound > contentStart,
+                   !text[contentStart].isWhitespace,
+                   !text[text.index(before: close.lowerBound)].isWhitespace {
+                    if i > plainStart {
+                        result.append(NSAttributedString(string: String(text[plainStart..<i]), attributes: base))
+                    }
+                    var boldAttrs = base
+                    boldAttrs[.font] = boldFont
+                    result.append(NSAttributedString(string: String(text[contentStart..<close.lowerBound]), attributes: boldAttrs))
+                    i = close.upperBound
+                    plainStart = i
+                    continue
+                }
+                // Unclosed or invalid `**`: skip past both asterisks so the second `*` isn't parsed as italic.
+                i = contentStart
+                continue
+            } else if text[i] == "*" {
+                let contentStart = text.index(after: i)
+                if contentStart < text.endIndex, !text[contentStart].isWhitespace {
+                    var c = contentStart
+                    var foundClose: String.Index?
+                    while c < text.endIndex {
+                        if text[c] == "*" {
+                            let prev = text.index(before: c)
+                            let afterC = text.index(after: c)
+                            let nextIsStar = afterC < text.endIndex && text[afterC] == "*"
+                            if c > contentStart && !text[prev].isWhitespace && text[prev] != "*" && !nextIsStar {
+                                foundClose = c
+                                break
+                            }
+                        }
+                        c = text.index(after: c)
+                    }
+                    if let close = foundClose {
+                        if i > plainStart {
+                            result.append(NSAttributedString(string: String(text[plainStart..<i]), attributes: base))
+                        }
+                        var italicAttrs = base
+                        italicAttrs[.font] = italicFont
+                        result.append(NSAttributedString(string: String(text[contentStart..<close]), attributes: italicAttrs))
+                        i = text.index(after: close)
+                        plainStart = i
+                        continue
+                    }
+                }
+            }
+            i = text.index(after: i)
+        }
+        if plainStart < text.endIndex {
+            result.append(NSAttributedString(string: String(text[plainStart..<text.endIndex]), attributes: base))
+        }
+    }
+
+    static func attributedHTMLNotes(_ data: Data) -> NSAttributedString? {
+        guard let attr = try? NSMutableAttributedString(
             data: data,
             options: [.documentType: NSAttributedString.DocumentType.html,
                       .characterEncoding: String.Encoding.utf8.rawValue],
             documentAttributes: nil
-        ) {
-            let full = NSRange(location: 0, length: attr.length)
-            attr.addAttribute(.foregroundColor, value: textCol, range: full)
-            attr.enumerateAttribute(.font, in: full) { val, r, _ in
-                if let f = val as? NSFont {
-                    let isBold = f.fontDescriptor.symbolicTraits.contains(.bold)
-                    let sz = max(11.5, min(14, f.pointSize))
-                    attr.addAttribute(.font, value: NSFont.systemFont(ofSize: sz, weight: isBold ? .semibold : .regular), range: r)
+        ) else { return nil }
+        let full = NSRange(location: 0, length: attr.length)
+        attr.addAttribute(.foregroundColor, value: textCol, range: full)
+        attr.enumerateAttribute(.font, in: full) { val, r, _ in
+            if let f = val as? NSFont {
+                let traits = f.fontDescriptor.symbolicTraits
+                let isBold = traits.contains(.bold)
+                let isItalic = traits.contains(.italic)
+                let isMono = traits.contains(.monoSpace)
+                if isMono {
+                    let sz = min(max(11, f.pointSize), 11.5)
+                    attr.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: sz, weight: isBold ? .semibold : .regular), range: r)
+                    attr.addAttribute(.backgroundColor, value: codeBg, range: r)
+                } else {
+                    let sz = max(12, min(14.5, f.pointSize))
+                    var mapped = NSFont.systemFont(ofSize: sz, weight: isBold ? .semibold : .regular)
+                    if isItalic {
+                        mapped = NSFontManager.shared.convert(mapped, toHaveTrait: .italicFontMask)
+                    }
+                    attr.addAttribute(.font, value: mapped, range: r)
                 }
             }
-            notesTextView.textStorage?.setAttributedString(attr)
         }
+        attr.enumerateAttribute(.paragraphStyle, in: full) { val, r, _ in
+            let style = NSMutableParagraphStyle()
+            if let old = val as? NSParagraphStyle {
+                style.alignment = old.alignment
+                style.lineBreakMode = old.lineBreakMode
+                style.firstLineHeadIndent = old.firstLineHeadIndent
+                style.headIndent = old.headIndent
+                style.tailIndent = old.tailIndent
+                style.tabStops = old.tabStops
+                style.defaultTabInterval = old.defaultTabInterval
+                style.textLists = old.textLists
+            }
+            style.lineHeightMultiple = 1.3
+            style.paragraphSpacing = 4
+            attr.addAttribute(.paragraphStyle, value: style, range: r)
+        }
+        return attr
+    }
+
+    private func setNotesPlain(_ text: String) {
+        notesTextView.textStorage?.setAttributedString(Self.attributedPlainNotes(text))
+        notesTextView.scrollToBeginningOfDocument(nil)
+    }
+
+    private func setNotesHTML(_ data: Data) {
+        if let attr = Self.attributedHTMLNotes(data) {
+            notesTextView.textStorage?.setAttributedString(attr)
+            notesTextView.scrollToBeginningOfDocument(nil)
+        }
+    }
+
+    private func renderNotes(_ text: String, format: String?) {
+        notesTextView.textStorage?.setAttributedString(Self.attributedNotes(for: text, format: format))
+        notesTextView.scrollToBeginningOfDocument(nil)
     }
 
     // MARK: Sparkle driver states
@@ -2987,11 +3259,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         progressWrap.isHidden = true
 
         if let desc = item.itemDescription, !desc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let data = desc.data(using: .utf8), desc.contains("<") {
-                setNotesHTML(data)
-            } else {
-                setNotesPlain(desc)
-            }
+            renderNotes(desc, format: item.itemDescriptionFormat)
         } else {
             setNotesPlain("A new version of Pulse is ready to download and install.")
         }
@@ -3000,17 +3268,34 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         secondaryBtn.title = "Later"
         primaryBtn.isHidden = false
         primaryBtn.title = state.stage == .downloaded ? "Install & Relaunch" : "Update & Relaunch"
-        resize(height: 320)
+        resize(height: 380)
         present()
     }
 
     func showReleaseNotes(_ data: SPUDownloadData) {
-        setNotesHTML(data.data)
+        let mime = data.mimeType?.lowercased() ?? ""
+        let format: String?
+        if mime.contains("markdown") {
+            format = "markdown"
+        } else if mime.contains("plain") {
+            format = "plain-text"
+        } else if mime.contains("html") {
+            format = "html"
+        } else {
+            format = nil
+        }
+        if format == "html" {
+            setNotesHTML(data.data)
+        } else if let text = String(data: data.data, encoding: .utf8) {
+            renderNotes(text, format: format)
+        } else {
+            setNotesHTML(data.data)
+        }
     }
 
     // MARK: Dev-only screen preview helpers (PULSE_PREVIEW=1)
 
-    func showPreviewAvailable(version: String, sizeBytes: UInt64, htmlNotes: String) {
+    func showPreviewAvailable(version: String, sizeBytes: UInt64, notes: String) {
         clearCallbacks()
         let curVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.5"
         let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
@@ -3018,13 +3303,13 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         subtitleLabel.stringValue = "You have v\(curVer) · \(sizeStr)"
         notesCard.isHidden = false
         progressWrap.isHidden = true
-        if let data = htmlNotes.data(using: .utf8) { setNotesHTML(data) }
+        renderNotes(notes, format: nil)
         secondaryBtn.isHidden = false
         secondaryBtn.title = "Later"
         primaryBtn.isHidden = false
         primaryBtn.title = "Update & Relaunch"
         updateReply = { [weak self] _ in self?.dismiss() }
-        resize(height: 320)
+        resize(height: 380)
         present()
     }
 
@@ -3073,7 +3358,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
     }
 
     private func updateDownloadProgress() {
-        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 408)
+        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 496)
         if expectedBytes > 0 {
             let frac = min(1.0, Double(receivedBytes) / Double(expectedBytes))
             progressFillWidth.constant = max(8, trackW * frac)
@@ -3097,7 +3382,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
     }
 
     func setExtractionProgress(_ progress: Double) {
-        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 408)
+        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 496)
         progressFillWidth.constant = max(8, trackW * min(1.0, max(0.0, progress)))
         progressLabel.stringValue = "Extracting… \(Int(progress * 100))%"
     }
@@ -3109,7 +3394,7 @@ final class PulseUpdateWindowController: NSObject, NSWindowDelegate {
         subtitleLabel.stringValue = "Pulse will relaunch to finish updating"
         notesCard.isHidden = true
         progressWrap.isHidden = false
-        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 408)
+        let trackW = max(1, progressTrack.bounds.width > 0 ? progressTrack.bounds.width : 496)
         progressFillWidth.constant = trackW
         progressLabel.stringValue = "Download verified ✓"
         secondaryBtn.isHidden = false
@@ -3438,15 +3723,15 @@ final class PulsePreviewController: NSObject {
         updateUI.showChecking { [weak self] in self?.updateUI.dismiss() }
     }
     @objc private func pUpdAvail() {
-        let html = """
-        <p><b>What's New in Pulse 1.6</b></p>
-        <ul>
-          <li>Redesigned macOS squircle icon, DMG installer window, and native launch splash.</li>
-          <li>Pulse-styled dark update dialogs and About window.</li>
-          <li>Live menu-bar capsule preview inside Settings.</li>
-        </ul>
+        let notes = """
+        ### Added
+        - **Energy mode & battery wattage** — live `top` energy scores on Top CPU and real-time wattage in the header.
+        - **Process Blacklist** — automatically quit or force-kill recurring processes with *pause* and safety guards.
+
+        ### Fixed
+        - **Updates dialog** — wider card with proper headings, bullets, **bold**, *italics*, and `code` styling.
         """
-        updateUI.showPreviewAvailable(version: "1.6", sizeBytes: 2_480_000, htmlNotes: html)
+        updateUI.showPreviewAvailable(version: "1.6", sizeBytes: 2_480_000, notes: notes)
     }
     @objc private func pUpdDown() {
         updateUI.showDownloadStarted { [weak self] in self?.updateUI.dismiss() }
@@ -5143,6 +5428,65 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                             ((sk["cpuText"] as? String) ?? "") == ""
                     }
 
+                    // Update dialog release notes rendering (run here after checkFlow finishes so
+                    // NSAttributedString's HTML importer doesn't stall the 200ms checkFlowSample timer).
+                    var updateNotesOk = false
+                    do {
+                        let sampleMd = """
+                        ### Changed
+                        - **Top Processes** sort menu now lists `CPU`, *Name*, and Memory
+                          wrapped continuation line
+
+                        ### Fixed
+                        - Faster startup (<0.5s) and 2 * 3 * 4 math
+                        """
+                        let mdAttr = PulseUpdateWindowController.attributedNotes(for: sampleMd, format: "markdown")
+                        let mdStr = mdAttr.string
+
+                        func traits(in attr: NSAttributedString, substring: String) -> (NSFontDescriptor.SymbolicTraits, CGFloat)? {
+                            let r = (attr.string as NSString).range(of: substring)
+                            guard r.location != NSNotFound,
+                                  let f = attr.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont else {
+                                return nil
+                            }
+                            return (f.fontDescriptor.symbolicTraits, f.pointSize)
+                        }
+
+                        let mdTextOk = !mdStr.contains("###") && !mdStr.contains("**") && !mdStr.contains("`") && !mdStr.contains("*Name*")
+                            && mdStr.contains("Changed") && mdStr.contains("Top Processes") && mdStr.contains("CPU")
+                            && mdStr.contains("Name") && mdStr.contains("wrapped continuation line")
+                            && mdStr.contains("Fixed") && mdStr.contains("<0.5s") && mdStr.contains("2 * 3 * 4")
+                            && mdStr.contains("•\t")
+
+                        let hTraits = traits(in: mdAttr, substring: "Changed")
+                        let bTraits = traits(in: mdAttr, substring: "Top Processes")
+                        let cTraits = traits(in: mdAttr, substring: "CPU")
+                        let iTraits = traits(in: mdAttr, substring: "Name")
+                        let mdFontsOk = (hTraits?.1 ?? 0) >= 13.0 && (hTraits?.0.contains(.bold) ?? false)
+                            && (bTraits?.0.contains(.bold) ?? false)
+                            && (cTraits?.0.contains(.monoSpace) ?? false)
+                            && (iTraits?.0.contains(.italic) ?? false)
+
+                        let sampleHtml = "<h3>Changed</h3><ul><li><b>Bold</b>, <i>italic</i>, and <code>code</code></li></ul>"
+                        let htmlAttr = PulseUpdateWindowController.attributedNotes(for: sampleHtml, format: nil)
+                        let htmlStr = htmlAttr.string
+                        let htmlTextOk = !htmlStr.contains("<") && !htmlStr.contains(">")
+                            && htmlStr.contains("Changed") && htmlStr.contains("Bold")
+                            && htmlStr.contains("italic") && htmlStr.contains("code")
+                        let hbTraits = traits(in: htmlAttr, substring: "Bold")
+                        let hiTraits = traits(in: htmlAttr, substring: "italic")
+                        let hcTraits = traits(in: htmlAttr, substring: "code")
+                        let htmlFontsOk = (hbTraits?.0.contains(.bold) ?? false)
+                            && (hiTraits?.0.contains(.italic) ?? false)
+                            && (hcTraits?.0.contains(.monoSpace) ?? false)
+
+                        let rawPlain = "Keep **raw** `text`"
+                        let plainAttr = PulseUpdateWindowController.attributedNotes(for: rawPlain, format: "plain-text")
+                        let plainOk = plainAttr.string == rawPlain
+
+                        updateNotesOk = mdTextOk && mdFontsOk && htmlTextOk && htmlFontsOk && plainOk
+                    }
+
                     restoreSettings()
                     var merged = (try? JSONSerialization.jsonObject(with: Data(initialJson.utf8)) as? [String: Any]) ?? [:]
                     if let sk = self.selfTestStartingProbe {
@@ -5154,6 +5498,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
                         "settingsRoundTripOk": settingsRoundTripOk,
                         "updateStripOk": updateStripOk,
                         "updateStrip": updateStripInfo,
+                        "updateNotesOk": updateNotesOk,
                         "closedWindowHidden": closedWindowHidden,
                         "closedWebReleased": closedWebReleased,
                         "backendAliveWhileClosed": backendAliveWhileClosed,

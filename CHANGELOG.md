@@ -9,6 +9,9 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+### Fixed
+- Updates: the update dialog is wider and renders release notes with proper headings, bullets, **bold**, *italics*, and `code` formatting instead of raw Markdown
+
 ## [1.7.1] - 2026-11-20
 
 ### Changed
