@@ -9,6 +9,8 @@ Add a bullet under **Unreleased** whenever you ship something user-visible.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-21
+
 ### Fixed
 - Updates: the update dialog is wider and renders release notes with proper headings, bullets, **bold**, *italics*, and `code` formatting instead of raw Markdown
 
